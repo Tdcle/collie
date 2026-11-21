@@ -2,7 +2,9 @@ package collie
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,18 +14,45 @@ import (
 func fakeLark(t *testing.T) string {
 	dir := t.TempDir()
 	sent := filepath.Join(dir, "sent")
-	script := `#!/bin/sh
+	if runtime.GOOS == "windows" {
+		src := filepath.Join(dir, "fake_lark.go")
+		code := `package main
+import ("fmt"; "os")
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		fmt.Println("{\"identities\":{\"bot\":{\"available\":true},\"user\":{\"openId\":\"ou_test\",\"userName\":\"T\"}}}")
+		return
+	}
+	f, err := os.OpenFile(` + fmtSprintfGoString(sent) + `, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil { os.Exit(1) }
+	for _, a := range os.Args[1:] { fmt.Fprintln(f, a) }
+	f.Close()
+}
+`
+		if err := os.WriteFile(src, []byte(code), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "lark-cli.exe"), src).CombinedOutput(); err != nil {
+			t.Fatalf("build fake lark-cli: %v\n%s", err, out)
+		}
+	} else {
+		script := `#!/bin/sh
 if [ "$1" = auth ]; then echo '{"identities":{"bot":{"available":true},"user":{"openId":"ou_test","userName":"T"}}}'; exit 0; fi
 printf '%s\n' "$@" >> "` + sent + `"
 `
-	if err := os.WriteFile(filepath.Join(dir, "lark-cli"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+		if err := os.WriteFile(filepath.Join(dir, "lark-cli"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binCache.Delete("lark-cli")
 	lark.get(true)
 	t.Cleanup(func() { binCache.Delete("lark-cli"); lark.get(true) })
 	return sent
+}
+
+func fmtSprintfGoString(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
 
 func TestLarkNotify(t *testing.T) {
@@ -47,7 +76,7 @@ func TestLarkNotify(t *testing.T) {
 	if err != nil {
 		t.Fatal("nothing sent")
 	}
-	got := string(b)
+	got := strings.ReplaceAll(string(b), "\r\n", "\n")
 	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "--msg-type\ninteractive", `"schema":"2.0"`, "报告：都好了", `"default_url":"http://hub:7788/#/collie"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)

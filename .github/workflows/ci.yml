@@ -18,5 +18,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
+      - run: go test -v ./...
       - run: go build .
+      - name: Smoke test Windows installer (dry service)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          COLLIE_NO_HERDR: "1"
+          COLLIE_DRY_SERVICE: "1"
+        run: |
+          $binDir = Join-Path $RUNNER_TEMP "collie-bin"
+          $env:COLLIE_BIN_DIR = $binDir
+          powershell -ExecutionPolicy Bypass -File docs\install.ps1 hub --url http://127.0.0.1:7788
+          & (Join-Path $binDir "collie.exe") version
