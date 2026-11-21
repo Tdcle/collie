@@ -119,6 +119,7 @@ type Device struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"` // "browser" | "machine"
 	Name      string    `json:"name"`
+	Renamed   bool      `json:"renamed,omitempty"`
 	OS        string    `json:"os,omitempty"`
 	Hash      string    `json:"hash"`
 	CreatedAt time.Time `json:"created_at"`
@@ -137,6 +138,7 @@ type Auth struct {
 	mu      sync.Mutex
 	devices map[string]*Device // by hash
 	codes   map[string]pairCode
+	hubName string
 	dirty   bool
 }
 
@@ -150,7 +152,38 @@ func newAuth(db *sql.DB, master string) *Auth {
 			a.devices[d.Hash] = d
 		}
 	}
+	_ = db.QueryRow(`SELECT v FROM kv WHERE k='hub_name'`).Scan(&a.hubName)
 	return a
+}
+
+func (a *Auth) HubName() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.hubName
+}
+
+func (a *Auth) setHubName(name string) {
+	a.mu.Lock()
+	a.hubName = name
+	a.mu.Unlock()
+	if _, err := a.db.Exec(`INSERT INTO kv(k,v) VALUES('hub_name',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, name); err != nil {
+		log.Printf("save hub_name: %v", err)
+	}
+}
+
+func (a *Auth) rename(id, name string) *Device {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, d := range a.devices {
+		if d.ID == id {
+			d.Name = name
+			d.Renamed = true
+			a.dirty = true
+			cp := *d
+			return &cp
+		}
+	}
+	return nil
 }
 
 func hashToken(t string) string { h := sha256.Sum256([]byte(t)); return hex.EncodeToString(h[:]) }
@@ -354,6 +387,10 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("GET /api/version", s.getVersion)
 	api("GET /api/history", s.listHistory)
 	api("POST /api/history/{id}/delete", s.deleteHistory)
+	api("POST /api/sessions/rename", s.renameSession)
+	api("POST /api/sessions/archive", s.archiveSession)
+	api("POST /api/sessions/delete", s.deleteSession)
+	api("POST /api/devices/{id}/rename", s.renameDevice)
 	api("POST /api/devices/{id}/delete", s.deleteDevice)
 	api("GET /api/hubs", s.getHubs)
 	api("POST /api/hubs", s.setHubs)
@@ -497,6 +534,40 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) renameDevice(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeJSON(w, 400, map[string]any{"error": "名称不能为空"})
+		return
+	}
+	if len([]rune(name)) > 40 {
+		name = string([]rune(name)[:40])
+	}
+	id := r.PathValue("id")
+	if id == "hub" {
+		s.auths.setHubName(name)
+		s.herdr.RenameMachine("hub", name)
+		writeJSON(w, 200, map[string]any{"ok": true, "name": name})
+		return
+	}
+	d := s.auths.rename(id, name)
+	if d == nil {
+		writeJSON(w, 404, map[string]any{"error": "找不到这台设备"})
+		return
+	}
+	if d.Kind == "machine" {
+		s.herdr.RenameMachine(d.ID, name)
+	}
+	go s.auths.save()
+	writeJSON(w, 200, map[string]any{"ok": true, "name": name})
+}
+
 func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request) {
 	d := s.auths.remove(r.PathValue("id"))
 	if d == nil {
@@ -557,7 +628,7 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 		}},
 		close: func() { sess.Close() },
 	}
-	if n := strings.TrimSpace(r.Header.Get("X-Collie-Name")); n != "" {
+	if n := strings.TrimSpace(r.Header.Get("X-Collie-Name")); n != "" && !d.Renamed {
 		m.Name = n
 	}
 	m.ip, _, _ = net.SplitHostPort(r.RemoteAddr)

@@ -86,6 +86,9 @@ func serve() {
 	}
 	srv.sup = sup
 	srv.auths = newAuth(sup.db, *token)
+	if hn := srv.auths.HubName(); hn != "" {
+		srv.herdr.RenameMachine("hub", hn)
+	}
 	srv.herdr.onChange = sup.changed
 	loadAgentNames(sup.db, srv.herdr)
 	loadAgentRuns(sup.db, srv.herdr)

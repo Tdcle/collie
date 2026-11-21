@@ -114,8 +114,7 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				e.reg, e.PID, e.Live = r, r.PID, true
 				s.reachable(e)
 			} else {
-				e.ReadOnly = "这个会话现在没在运行：在 Claude 桌面版里打开它，就能从这里发消息"
-				e.CanTakeOver = e.path != "" && e.Cwd != ""
+				e.CanTakeOver = (e.path != "" || e.Session != "") && e.Cwd != ""
 			}
 		case "codex":
 			e.Live = d.running
@@ -126,23 +125,13 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 			switch {
 			case appUp:
 				e.CanSend, e.via = true, "app"
+				e.CanTakeOver = canResume
 			case s.codexDaemonHas(d.session):
-				// A thread the App opened on this machine from another
-				// computer runs in Codex's shared background service.
 				e.CanSend = true
-			case runtime.GOOS == "windows":
 				e.CanTakeOver = canResume
-				if winUp {
-					e.ReadOnly = "Windows 版 Codex 桌面端暂不支持外部进程直接注入消息"
-				} else {
-					e.ReadOnly = "Codex 桌面端当前未运行"
-				}
-			case d.app == appCodex:
-				e.CanTakeOver = canResume
-				e.ReadOnly = "Codex App 没有打开：打开它之后就能从这里发消息"
 			default:
 				e.CanTakeOver = canResume
-				e.ReadOnly = "这个对话现在没有在 Codex 里打开：在 Codex App 里点开它，就能从这里发消息"
+				_ = winUp
 			}
 		case "agy":
 			e.Live = d.running || d.waiting
@@ -154,7 +143,7 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 			if agyDesktopServer() != nil {
 				e.CanSend, e.via = true, "app"
 			} else {
-				e.ReadOnly = "Antigravity 没有打开：打开它之后就能从这里发消息"
+				e.CanTakeOver = !e.Live && e.Session != "" && e.Cwd != ""
 			}
 		}
 		out = append(out, e)

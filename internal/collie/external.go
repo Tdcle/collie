@@ -670,45 +670,91 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// takeOverExternal stops an external agent and resumes its conversation in a
-// new herdr pane on the same machine, in the same directory.
+// takeOverExternal stops an external agent (if live) and resumes its
+// conversation in a new herdr workspace on the same machine, optionally
+// sending an initial user prompt right away.
 func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+		Label  string `json:"label"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	}
 	e := s.externalByID(r.PathValue("id"))
 	if e == nil {
 		writeJSON(w, 404, map[string]any{"error": "这个会话已经结束了"})
 		return
 	}
 	if e.Session == "" || e.Cwd == "" {
-		writeJSON(w, 409, map[string]any{"error": "找不到这个会话的记录，没法在 herdr 里续上"})
-		return
-	}
-	if !e.CanTakeOver {
-		writeJSON(w, 409, map[string]any{"error": "这个会话要在 " + e.App + " 里继续"})
+		writeJSON(w, 409, map[string]any{"error": "找不到这个会话的记录或目录，无法继续对话"})
 		return
 	}
 	args := resumeArgs(e.Kind, e.Session)
+	if len(args) == 0 {
+		writeJSON(w, 409, map[string]any{"error": "暂不支持继续这种类型的会话"})
+		return
+	}
+	if e.Live && !e.CanTakeOver {
+		writeJSON(w, 409, map[string]any{"error": "这个会话正在 " + e.App + " 里执行，请等它当前步骤跑完后再发消息"})
+		return
+	}
 	// Two processes writing one conversation would garble it: stop the
 	// original first, the way Ctrl-C would, and give it a moment to save.
 	if e.PID > 0 && !stopProcess(e.PID) {
-		writeJSON(w, 409, map[string]any{"error": "原来的进程没有退出（PID " + strconv.Itoa(e.PID) + "），请先在那个终端里退出它"})
+		writeJSON(w, 409, map[string]any{"error": "原来的进程没有退出（PID " + strconv.Itoa(e.PID) + "），请先关闭原终端里的会话"})
 		return
+	}
+	cwd := s.expand(e.Cwd)
+	if !isDir(cwd) {
+		cwd = s.home
 	}
 	externalCache.Lock()
 	externalCache.at = time.Time{}
 	externalCache.Unlock()
-	name := e.Kind + "-" + strconv.Itoa(e.PID)
-	if e.PID == 0 {
+	forgetDesktopRows()
+	name := s.freeName(r.Context(), e.Kind)
+	if !nameRe.MatchString(name) {
 		name = e.Kind + "-" + strings.SplitN(e.Session, "-", 2)[0]
+	}
+	label := strings.TrimSpace(body.Label)
+	if label == "" {
+		label = strings.TrimSpace(e.Title)
+	}
+	if label == "" {
+		label = name
+	}
+	if len([]rune(label)) > 48 {
+		label = string([]rune(label)[:48])
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	pane, ws, err := s.startAgent(ctx, "", kinds[e.Kind], name, e.Cwd, name, args)
+	pane, ws, err := s.startAgent(ctx, "", kinds[e.Kind], name, cwd, label, args)
 	var he *HerdrError
 	if err != nil && !(errors.As(err, &he) && he.Code == "agent_not_ready") {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"pane_id": pane, "workspace_id": ws, "name": name})
+	var warn string
+	if p := strings.TrimSpace(body.Prompt); p != "" && pane != "" {
+		var perr error
+		for wait := time.Now().Add(25 * time.Second); ; {
+			perr = s.herdr.Prompt(ctx, pane, p)
+			var phe *HerdrError
+			if perr == nil || !errors.As(perr, &phe) || (phe.Code != "agent_not_ready" && phe.Code != "agent_not_found") || time.Now().After(wait) || ctx.Err() != nil {
+				break
+			}
+			time.Sleep(1200 * time.Millisecond)
+		}
+		if perr != nil {
+			warn = "会话已连接，但消息发送失败：" + perr.Error()
+		}
+	}
+	out := map[string]any{"pane_id": pane, "workspace_id": ws, "name": name}
+	if warn != "" {
+		out["warning"] = warn
+	}
+	writeJSON(w, 200, out)
 }
 
 // sortSessions puts running sessions first, then the most recently active.

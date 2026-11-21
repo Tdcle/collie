@@ -57,6 +57,9 @@ func (s *Server) saveHistory() {
 }
 
 func (s *Server) remember(e *Ended) {
+	if s.isSessionDeleted(e.Kind, e.Machine, e.Session) {
+		return
+	}
 	history.Lock()
 	defer history.Unlock()
 	s.loadHistory()

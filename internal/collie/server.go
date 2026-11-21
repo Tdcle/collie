@@ -224,11 +224,12 @@ type AgentView struct {
 }
 
 type PaneState struct {
-	OK       bool        `json:"ok"`
-	Error    string      `json:"error,omitempty"`
-	Agents   []AgentView `json:"agents"`
-	Shells   []AgentView `json:"shells"`
-	Machines []Machine   `json:"machines"`
+	OK          bool                    `json:"ok"`
+	Error       string                  `json:"error,omitempty"`
+	Agents      []AgentView             `json:"agents"`
+	Shells      []AgentView             `json:"shells"`
+	Machines    []Machine               `json:"machines"`
+	SessionMeta map[string]*SessionMeta `json:"session_meta,omitempty"`
 }
 
 func deref(p *string) string {
@@ -244,11 +245,11 @@ func (s *Server) state(ctx context.Context) PaneState {
 	machines := s.herdr.Machines()
 	ws, err := s.herdr.Workspaces(ctx)
 	if err != nil {
-		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines}
+		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot()}
 	}
 	panes, err := s.herdr.Panes(ctx)
 	if err != nil {
-		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines}
+		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot()}
 	}
 	agents, _ := s.herdr.Agents(ctx)
 
@@ -263,7 +264,7 @@ func (s *Server) state(ctx context.Context) PaneState {
 		names[a.PaneID] = deref(a.Name)
 	}
 
-	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines}
+	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot()}
 	topics := map[string]map[string]paneSession{"": s.titlesFor("", ctx)}
 	for _, m := range machines {
 		if !m.Local && m.Online {

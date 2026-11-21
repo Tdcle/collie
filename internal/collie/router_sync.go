@@ -338,32 +338,39 @@ func (sp *Super) resolveRouterTarget(st Settings) (m *Machine, kind string, err 
 		}
 	}
 
-	// 2. If RouterMachine was explicitly set to a remote computer that is offline, report that clearly instead of silently jumping elsewhere unless it has no agents.
+	// 2. Auto-select any online computer that has wantKind first (preferring connected nodes if wantMachine was a remote node), then any online computer with any supported agent.
+	var offlineName string
 	if wantMachine != "" {
 		for _, mc := range ms {
 			if mc.ID == wantMachine && !mc.Online {
-				return nil, wantKind, fmt.Errorf("运行 Collie 的电脑 %s 当前不在线", mc.Name)
+				offlineName = mc.Name
 			}
 		}
 	}
-
-	// 3. Auto-select any online computer that has wantKind first, then any online computer with any supported agent.
 	for pass := 0; pass < 2; pass++ {
-		for _, mc := range ms {
-			ok, have := machineUsable(mc)
-			if !ok {
-				continue
-			}
-			if pass == 0 {
-				if hasKind(have, wantHK) {
-					cp := mc
-					return &cp, wantKind, nil
+		for _, preferRemote := range []bool{wantMachine != "", false} {
+			for _, mc := range ms {
+				if preferRemote && mc.Local {
+					continue
 				}
-			} else if k := pickKindOn(have); k != "" {
-				cp := mc
-				return &cp, k, nil
+				ok, have := machineUsable(mc)
+				if !ok {
+					continue
+				}
+				if pass == 0 {
+					if hasKind(have, wantHK) {
+						cp := mc
+						return &cp, wantKind, nil
+					}
+				} else if k := pickKindOn(have); k != "" {
+					cp := mc
+					return &cp, k, nil
+				}
 			}
 		}
+	}
+	if offlineName != "" {
+		return nil, wantKind, fmt.Errorf("运行 Collie 的电脑 %s 当前不在线，且没有其他可用电脑在线", offlineName)
 	}
 
 	return nil, wantKind, fmt.Errorf("没有找到能运行 Collie 的在线电脑（需要在已连接的电脑上安装 herdr，并至少安装 Claude Code、Codex 或 Antigravity 之一）")

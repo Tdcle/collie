@@ -259,6 +259,24 @@ func (h *Herdr) attach(m *Machine) {
 	}
 }
 
+func (h *Herdr) RenameMachine(id, name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	h.mu.Lock()
+	if id == "" || id == "hub" {
+		h.local.Name = name
+	} else if m := h.remote[id]; m != nil {
+		m.Name = name
+	}
+	cb := h.onChange
+	h.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
 func (h *Herdr) detach(id string, m *Machine) {
 	h.mu.Lock()
 	if cur := h.remote[id]; cur == m || m == nil {

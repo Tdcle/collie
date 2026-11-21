@@ -317,7 +317,10 @@
   function mergedState() {
     const parts = [...remote.values()].map((r) => r.state).filter(Boolean);
     if (!parts.length) return localState;
+    const meta = { ...(localState.session_meta || {}) };
+    for (const p of parts) Object.assign(meta, p.session_meta || {});
     return { ...localState,
+      session_meta: meta,
       agents: [...(localState.agents || []), ...parts.flatMap((p) => p.agents)],
       shells: [...(localState.shells || []), ...parts.flatMap((p) => p.shells)],
       machines: [...(localState.machines && localState.machines.length ? localState.machines : [{ id: "", name: "本机", local: true, online: localState.ok }]),
@@ -453,10 +456,21 @@
     if (m.id === keepId && (!isAgentlessHub(m) || !(state.machines || []).some((x) => !x.local))) return true;
     return m.local ? !isAgentlessHub(m) && m.online !== false : m.online;
   });
+  const normSessKind = (k) => (k === "antigravity" ? "agy" : (k || "").toLowerCase());
+  const canonSessKey = (kind, machine, session) => session ? `s:${normSessKind(kind)}:${machine || ""}:${session}` : "";
+  function getSessMeta(kind, machine, session, fallbackKey) {
+    const map = state.session_meta || {};
+    const ck = canonSessKey(kind, machine, session);
+    return (ck && map[ck]) || (fallbackKey && map[fallbackKey]) || null;
+  }
+  const MORE_ICO = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>';
+
   function title(v) {
     if (!v) return "";
     if (v.name === ROUTER) return "Collie";
-    if (isWorker(v.name)) return v.name; // Collie talks about its agents by name
+    const meta = getSessMeta(v.kind, v.machine, v.session, "p:" + v.pane_id);
+    if (meta?.title) return meta.title;
+    if (isWorker(v.name)) return v.name;
     return v.topic || (v.name && !autoName(v.name) ? v.name : base(tilde(v.cwd))) || v.pane_id;
   }
 
@@ -466,10 +480,11 @@
     const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
     const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
-    return `<li><a class="item ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
+    const more = v.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="p:${esc(v.pane_id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button>` : "";
+    return `<li class="s-li"><a class="item ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
       <span class="glyph">${glyph(v)}</span>
       <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>` : esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}</div><div class="sub">${esc(sub)}</div></span>
-      <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a></li>`;
+      <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a>${more}</li>`;
   }
 
   const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
@@ -495,10 +510,11 @@
       if (workMachines.length > 1) {
         const countFor = (id) => {
           const mm = (x) => id === null || (x || "") === id;
-          return state.agents.filter((a) => a.name !== ROUTER && mm(a.machine)).length
-            + ext.filter((e) => mm(e.machine)).length
-            + hist.filter((h) => h.name !== ROUTER && !sup.workers.some((w) => w.name === h.name) && mm(h.machine)).length
-            + state.shells.filter((s) => mm(s.machine)).length;
+          const liveC = state.agents.filter((a) => a.name !== ROUTER && mm(a.machine) && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted).length;
+          const extC = ext.filter((e) => mm(e.machine) && !getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.deleted).length;
+          const extKeys = new Set(ext.map((e) => canonSessKey(e.kind, e.machine, e.session)).filter(Boolean));
+          const histC = hist.filter((h) => h.name !== ROUTER && !sup.workers.some((w) => w.name === h.name) && mm(h.machine) && !extKeys.has(canonSessKey(h.kind, h.machine, h.session)) && !getSessMeta(h.kind, h.machine, h.session, "h:" + h.id)?.deleted).length;
+          return liveC + extC + histC;
         };
         mf.hidden = false;
         mf.innerHTML = `<button type="button" class="${sideMachine === null ? "on" : ""}" data-mf="__all">全部 <span class="mc">${countFor(null)}</span></button>`
@@ -508,15 +524,11 @@
       }
     }
 
-    const blocked = state.agents.filter((a) => a.status === "blocked" && matchSideMachine(a.machine));
+    const blocked = state.agents.filter((a) => a.status === "blocked" && matchSideMachine(a.machine) && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted);
     $("#attention-group").hidden = blocked.length === 0;
     $("#attention").innerHTML = blocked.map(itemHTML).join("");
 
     renderSessions();
-    const shells = state.shells.filter((s) => matchSideMachine(s.machine));
-    $("#shells").innerHTML = shells.map(itemHTML).join("");
-    $("#shell-count").textContent = shells.length || "";
-    $("#shell-group").hidden = shells.length === 0;
 
     const online = countMachines.filter((m) => m.local ? m.online !== false && state.ok : m.online).length;
     $("#conn").className = "conn " + (online ? "on" : "off");
@@ -611,9 +623,7 @@
     if (next === "ext") openExt(id);
     if (next === "pane") {
       $("#gone").hidden = true;
-      $("#log").textContent = "";
       resetChat();
-      term?.reset();
       renderHead();
       openStream();
       if (!narrow()) $("#input").focus();
@@ -1470,7 +1480,7 @@
               </div>
               <div class="tc-acts">
                 ${w.task && w.task.length > 90 ? `<button type="button" class="btn ghost small" data-act="tc-toggle">${exp ? "收起指令" : "展开指令"}</button>` : ""}
-                ${href ? `<a class="btn small" href="${href}">${isLive ? "查看实时终端 →" : "查看会话记录 →"}</a>` : ""}
+                ${href ? `<a class="btn small" href="${href}">${isLive ? "查看实时对话 →" : "查看对话记录 →"}</a>` : ""}
                 ${isLive ? `<button type="button" class="btn ghost small" data-stop-worker="${esc(w.name)}">停止</button>` : ""}
               </div>
             </header>
@@ -1924,7 +1934,7 @@
         store.set(key, on);
       } else {
         const key = prefBtn.closest("[data-pref]").dataset.pref, v = prefBtn.dataset.v;
-        if (key === "mode2") setMode(v); else store.set(key, v);
+        store.set(key, v);
         if (key === "theme" || key === "text" || key === "sendKey") applyLook();
       }
       loadPanel("settings");
@@ -2017,28 +2027,28 @@
     const s = (Date.now() - new Date(t)) / 1000;
     return s < 90 ? "刚刚" : s < 3600 ? Math.round(s / 60) + " 分钟前" : s < 86400 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前";
   };
-  const histName = (h) => h.title || (h.name && !autoName(h.name) ? h.name : base(tilde(h.cwd)));
+  const histName = (h) => getSessMeta(h.kind, h.machine, h.session, "h:" + h.id)?.title || h.title || (h.name && !autoName(h.name) ? h.name : base(tilde(h.cwd)));
   const histOnline = (h) => !h.machine || (state.machines || []).some((m) => m.id === h.machine && m.online);
   const renderHist = () => renderSessions();
   function renderHistHead(hid) {
     const h = hist.find((x) => x.id === hid);
-    const on = h && histOnline(h);
+    const on = !!(h && histOnline(h));
+    const meta = h ? getSessMeta(h.kind, h.machine, h.session, "h:" + h.id) : null;
     $("#x-name").textContent = h ? histName(h) : "已结束的会话";
     $("#x-kind").textContent = h ? KIND_LABEL[h.kind] || h.kind : "";
-    $("#x-tag").textContent = "已结束";
+    $("#x-tag").hidden = !meta?.archived;
+    $("#x-tag").textContent = meta?.archived ? "已归档" : "";
     $("#x-status").className = "status ended";
-    $("#x-status").textContent = h ? "结束于 " + ago(h.ended) : "";
+    $("#x-status").textContent = h ? "上次对话 " + ago(h.ended) : "";
     $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
-    $("#x-note").textContent = !h ? "这条记录已经不在了。"
-      : on ? `继续会${h.machine ? "在 " + machineName(h.machine) + " 上" : ""}用同一个会话重新打开 ${KIND_LABEL[h.kind] || h.kind}，之前的上下文都还在。`
-      : `${machineName(h.machine)} 现在不在线，连上后才能继续。`;
-    const b = $("#x-takeover");
-    b.textContent = "继续这个会话";
-    b.hidden = false;
-    b.disabled = !on;
-    $("#x-forget").hidden = !h;
-    const rev = $("#x-reveal");
-    if (rev) rev.hidden = true;
+    const ab = $("#ext-archive-btn");
+    if (ab) ab.textContent = meta?.archived ? "移出归档" : "归档会话";
+    const canResume = !!(h && on && h.session && RESUME[h.kind]);
+    $("#x-composer").hidden = !h;
+    $("#x-input").disabled = !canResume;
+    $("#x-send").disabled = !canResume;
+    $("#x-input").placeholder = !h ? "会话已不存在" : !on ? `${machineName(h.machine)} 当前离线，上线后可直接发消息继续…` : "输入消息直接继续对话，自动继承上下文…";
+    $("#x-hint").textContent = canResume ? `${KIND_LABEL[h.kind] || h.kind}${h.machine ? " · " + machineName(h.machine) : ""}` : "";
   }
   async function openHist(hid) {
     const el = $("#x-thread");
@@ -2064,41 +2074,27 @@
     }
   }
   const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s] };
-  async function continueHist(hid) {
+  async function sendInHist(hid, text) {
     const h = hist.find((x) => x.id === hid);
-    if (!h || !RESUME[h.kind]) return;
-    const b = $("#x-takeover");
-    b.disabled = true; b.textContent = "正在打开…";
-    try {
-      const r = await api("/api/agents", { body: {
-        kind: h.kind, cwd: h.cwd, machine: h.machine || "", name: "", label: histName(h).slice(0, 40), args: RESUME[h.kind](h.session),
-      } });
-      if (r.warning) toast(r.warning);
-      await api(`/api/history/${encodeURIComponent(h.id)}/delete`, { body: {} }).catch(() => {});
-      hist = hist.filter((x) => x.id !== h.id);
-      renderHist();
-      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
-    } catch (err) {
-      toast(err.message, "attn");
-      renderHistHead(hid);
-    }
-  }
-  $("#x-forget").addEventListener("click", async () => {
-    const hid = extCur?.startsWith("h:") && extCur.slice(2);
-    if (!hid) return;
-    try { await api(`/api/history/${encodeURIComponent(hid)}/delete`, { body: {} }); } catch (err) { toast(err.message, "attn"); return; }
-    hist = hist.filter((x) => x.id !== hid);
+    if (!h || !RESUME[h.kind]) throw new Error("暂不支持继续这个会话");
+    if (!histOnline(h)) throw new Error(`${machineName(h.machine)} 当前不在线`);
+    const label = histName(h).slice(0, 48);
+    toast("正在连接会话并发送…");
+    const r = await api("/api/agents", { body: {
+      kind: h.kind, cwd: h.cwd, machine: h.machine || "", name: "", label, args: RESUME[h.kind](h.session), prompt: text,
+    } });
+    if (r.warning) toast(r.warning, "attn");
+    await api(`/api/history/${encodeURIComponent(h.id)}/delete`, { body: {} }).catch(() => {});
+    await api("/api/sessions/archive", { body: { kind: h.kind, machine: h.machine || "", session: h.session, hist_id: h.id, archived: false } }).catch(() => {});
+    hist = hist.filter((x) => x.id !== h.id);
     renderHist();
-    location.hash = "#/";
-  });
-  const extName = (e) => e.title || (e.cwd ? cleanPath(e.cwd).split(/[\\/]/).filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
-  // The sidebar, by what you need: what is going on now (herdr agents, yours
-  // and Collie's, and other apps' running sessions), then what you did lately
-  // (other apps' resting conversations and ended herdr sessions, merged).
-  // Which computer something is on is a detail on its row.
+    location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+  }
+  const extName = (e) => getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.title || e.title || (e.cwd ? cleanPath(e.cwd).split(/[\\/]/).filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
+  const extOnline = (e) => !e.machine || (state.machines || []).some((m) => m.id === e.machine && m.online);
   const RECENT_N = 8;
   let extAll = store.get("extAll", false);
-  const EXT_STATE = { working: "在干活", waiting: "在等后台任务", idle: "开着，在等你", blocked: "等电脑那边确认" };
+  const EXT_STATE = { working: "工作中", waiting: "在等后台任务", idle: "空闲", blocked: "等待确认" };
   const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
   function renderExt() { renderSessions(); }
   $("#live-list").addEventListener("click", (e) => {
@@ -2111,27 +2107,27 @@
     const many = (state.machines || []).length > 1;
     const extRow = (e) => {
       const open = e.live && e.status === "idle";
-      const where = [e.app || KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
-      const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "正在运行")}"></span>` : "";
-      return `<li><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
+      const where = [KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
+      const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "运行中")}"></span>` : "";
+      return `<li class="s-li"><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a></li>`;
+        <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
+        <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
     const histRow = (h) => {
       const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
-      return `<li><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
+      return `<li class="s-li"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a></li>`;
+        <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a>
+        <button type="button" class="item-more" data-smenu="h:${esc(h.id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
 
-    // 进行中: needs-you rows are already above. Another app's session that is
-    // only open (kept alive in the background, nothing running) stays here,
-    // marked, below the busy ones.
     const matchM = (m) => sideMachine === null || (m || "") === sideMachine;
     const going = (e) => e.live;
-    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked" && matchM(a.machine))
+    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked" && matchM(a.machine) && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted)
       .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a), on: view === "pane" && a.pane_id === current }));
-    const liveExt = ext.filter((e) => going(e) && matchM(e.machine)).map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
+    const liveExt = ext.filter((e) => going(e) && matchM(e.machine) && !getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.deleted)
+      .map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
     const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
     const busy = live.filter((x) => x.rank <= 1).length;
     $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
@@ -2143,25 +2139,52 @@
       const shown = live.filter((x) => !folds(x) || open || x.on);
       const hid = idle.length - (open ? 0 : idle.filter((x) => x.on).length);
       rows = [...shown, { html: `<li><button type="button" class="fold-row ${open ? "open" : ""}" data-fold="idle" aria-expanded="${open}">
-        <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>${open ? "收起空闲的" : `${hid} 个空闲`}</button></li>` }];
+        <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>${open ? "收起空闲会话" : `${hid} 个空闲会话`}</button></li>` }];
     }
     $("#live-list").innerHTML = rows.map((x) => x.html).join("")
-      || `<li class="empty-hint">${sideMachine !== null ? "这台电脑当前没有运行中的会话。" : "暂无运行中的会话。点右上角 + 新建，或直接让 Collie 派活。"}</li>`;
+      || `<li class="empty-hint">${sideMachine !== null ? "这台电脑当前没有进行中的会话。" : "暂无进行中的会话。点右上角 + 新建，或直接让 Collie 派活。"}</li>`;
 
-    // 最近: newest first; Collie's own sessions are reached from its conversation.
+    // 最近会话 & 已归档（按 (kind, machine, session) 去重）
     const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
-    const recent = [
-      ...ext.filter((e) => !going(e) && matchM(e.machine)).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
-      ...hist.filter((h) => !collieRan(h.name) && matchM(h.machine)).map((h) => ({ id: "h:" + h.id, t: new Date(h.ended), html: histRow(h) })),
-    ].sort((x, y) => y.t - x.t);
+    const seenKeys = new Set(state.agents.map((a) => canonSessKey(a.kind, a.machine, a.session)).filter(Boolean));
+    const restPool = [];
+    for (const e of ext) {
+      if (going(e) || !matchM(e.machine)) continue;
+      const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
+      if (meta?.deleted) continue;
+      const ck = canonSessKey(e.kind, e.machine, e.session);
+      if (ck && seenKeys.has(ck)) continue;
+      if (ck) seenKeys.add(ck);
+      restPool.push({ id: e.id, archived: !!meta?.archived, t: new Date(e.updated || e.started), html: extRow(e) });
+    }
+    for (const h of hist) {
+      if (collieRan(h.name) || !matchM(h.machine)) continue;
+      const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
+      if (meta?.deleted) continue;
+      const ck = canonSessKey(h.kind, h.machine, h.session);
+      if (ck && seenKeys.has(ck)) continue;
+      if (ck) seenKeys.add(ck);
+      restPool.push({ id: "h:" + h.id, archived: !!meta?.archived, t: new Date(h.ended), html: histRow(h) });
+    }
+    restPool.sort((x, y) => y.t - x.t);
+    const recent = restPool.filter((x) => !x.archived);
+    const archived = restPool.filter((x) => x.archived);
+
     let shown = extAll ? recent : recent.slice(0, RECENT_N);
     const cur = view === "ext" && extCur && !shown.some((x) => x.id === extCur) && recent.find((x) => x.id === extCur);
     if (cur) shown = [...shown, cur];
     $("#recent-group").hidden = !recent.length;
     $("#recent-list").innerHTML = shown.map((x) => x.html).join("")
-      + (recent.length > RECENT_N ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `还有 ${recent.length - RECENT_N} 个`}</button></li>` : "");
+      + (recent.length > RECENT_N ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `展开其余 ${recent.length - RECENT_N} 个`}</button></li>` : "");
+
+    const archGrp = $("#archived-group"), archList = $("#archived-list"), archCnt = $("#archived-count");
+    if (archGrp && archList) {
+      archGrp.hidden = !archived.length;
+      if (archCnt) archCnt.textContent = archived.length || "";
+      archList.innerHTML = archived.map((x) => x.html).join("");
+      if (view === "ext" && extCur && archived.some((x) => x.id === extCur)) archGrp.open = true;
+    }
   }
-  // Look up the open session again in a moment (a few times at most).
   let extSoonT = null, extSoonN = 0;
   function extSoon() {
     if (extSoonT || extSoonN >= 15) return;
@@ -2172,7 +2195,7 @@
     const box = $("#x-working");
     const e = !gone && !extCur?.startsWith("h:") && ext.find((x) => x.id === extCur);
     const st = e && e.live ? e.status : "";
-    const text = { working: `${e && e.app || "那边"}里还在跑…`, blocked: "在等你在电脑上确认" }[st];
+    const text = { working: "正在生成回复…", blocked: "正在等待确认…" }[st];
     if (!text) { box.hidden = true; return; }
     const was = nearBottom($("#x-thread"));
     box.className = "working-row " + st;
@@ -2183,74 +2206,74 @@
   function renderExtHead(gone) {
     extWorking(gone);
     if (extCur?.startsWith("h:")) return renderHistHead(extCur.slice(2));
-    $("#x-tag").textContent = "只读";
-    $("#x-forget").hidden = true;
-    const rev = $("#x-reveal");
-    if (rev) rev.hidden = true;
-    $("#x-takeover").textContent = "在 herdr 里接管";
-    $("#x-takeover").className = "btn primary small";
-    $("#x-composer").hidden = true;
     const e = ext.find((x) => x.id === extCur);
     if (!e) {
-      $("#x-status").textContent = gone ? "已退出" : "正在连接那台电脑…";
+      $("#x-status").textContent = gone ? "会话已结束" : "正在读取会话…";
       $("#x-status").className = "status " + (gone ? "ended" : "unknown");
-      $("#x-takeover").disabled = true;
+      $("#x-tag").hidden = true;
+      $("#x-input").disabled = true;
+      $("#x-send").disabled = true;
       if (!gone) extSoon();
       return;
     }
+    const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
+    const on = extOnline(e);
     $("#x-name").textContent = extName(e);
     $("#x-kind").textContent = KIND_LABEL[e.kind] || e.kind;
-    $("#x-status").textContent = gone ? "已退出" : `正在运行 · ${e.app || "另一个终端"}`;
-    $("#x-status").className = "status " + (gone ? "ended" : "unknown");
+    $("#x-tag").hidden = !meta?.archived;
+    $("#x-tag").textContent = meta?.archived ? "已归档" : "";
+    const ab = $("#ext-archive-btn");
+    if (ab) ab.textContent = meta?.archived ? "移出归档" : "归档会话";
     $("#x-cwd").textContent = (e.machine ? machineName(e.machine) + " · " : "") + tilde(e.cwd);
-    const app = e.app || "另一个终端";
-    const canReveal = !gone && !!e.session && ((e.kind === "codex" && /Codex/i.test(app)) || (e.kind === "claude" && String(e.id).startsWith("cd-")));
-    if (rev && canReveal) {
-      rev.hidden = false;
-      rev.textContent = e.machine ? `在 ${machineName(e.machine)} 桌面端打开` : `在 ${app} 里打开`;
-    }
-    if (!e.live && !gone) {
-      // A desktop app's conversation that is not running right now.
-      $("#x-tag").textContent = e.can_send ? "可对话" : "只读";
-      $("#x-status").textContent = `上次活动 ${ago(e.updated || e.started)} · ${app}`;
+
+    if (e.live && !gone) {
+      const stLabel = { working: "工作中", waiting: "在等后台任务", idle: "在线空闲", blocked: "等待确认" }[e.status] || "在线";
+      $("#x-status").textContent = stLabel + (e.app ? ` · ${e.app}` : "");
+      $("#x-status").className = "status " + (e.status || "unknown");
+    } else {
+      $("#x-status").textContent = gone ? "已结束" : `上次对话 ${ago(e.updated || e.started)}`;
       $("#x-status").className = "status ended";
-      $("#x-takeover").hidden = !e.can_take_over;
-      $("#x-takeover").disabled = false;
-      $("#x-takeover").textContent = "在 herdr 里继续";
-      $("#x-takeover").className = e.can_send ? "btn small" : "btn primary small";
-      $("#x-composer").hidden = !e.can_send;
-      if (e.can_send) $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : "经 Codex App 送达";
-      const ro = (e.read_only || "").replace(/[。.]$/, "");
-      $("#x-note").textContent = e.can_send ? ""
-        : ro + (e.can_take_over && !/herdr/.test(ro) ? "。可点右侧在 herdr 里继续同一个会话，之后就能直接在这里对话。" : ro ? "。" : "");
-      return;
     }
-    $("#x-takeover").hidden = !e.can_take_over;
-    $("#x-note").textContent = gone ? "这个进程已经退出了。"
-      : !e.session ? `它跑在 ${app} 里，还没有会话记录，所以没法接管。`
-      : `它跑在 ${app} 里，Collie 只能看，不能往里面打字。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续，之后就能在这里和它对话。`;
-    $("#x-takeover").disabled = !!gone || !e.session;
-    if (e.status && !gone) {
-      $("#x-status").textContent = `${{ working: "正在跑", waiting: "在等后台任务", idle: "空闲，等你发话", blocked: "等电脑那边确认" }[e.status] || "正在运行"} · ${app}`;
-      $("#x-status").className = "status " + e.status;
-    }
-    if (e.can_send && !gone) {
-      // It takes messages where it runs: no need to take it over.
-      $("#x-tag").textContent = "可对话";
-      $("#x-composer").hidden = false;
-      $("#x-takeover").className = "btn small";
-      $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : e.app === "Codex 桌面版" ? "经 Codex App 送达" : e.kind === "codex" ? "经 Codex 后台送达" : "经会话收件箱送达";
-      $("#x-note").textContent = "";
-    } else if (!gone && e.read_only && e.session) {
-      const ro = e.read_only.replace(/[。.]$/, "");
-      $("#x-note").textContent = ro + (e.can_take_over ? "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。" : "。");
-    }
+
+    const busyElsewhere = !!(e.live && !e.can_send && e.status === "working");
+    const canChat = !!(on && !busyElsewhere && (e.can_send || e.can_take_over || e.session));
+    $("#x-composer").hidden = false;
+    $("#x-input").disabled = !canChat;
+    $("#x-send").disabled = !canChat;
+    $("#x-input").placeholder = !on ? `${machineName(e.machine)} 当前离线，上线后可直接继续对话…`
+      : busyElsewhere ? `正在 ${e.app || "原窗口"} 中执行，当前步骤完成后即可直接发消息…`
+      : "输入消息继续对话…";
+    $("#x-hint").textContent = canChat ? `${KIND_LABEL[e.kind] || e.kind}${e.machine ? " · " + machineName(e.machine) : ""}` : "";
   }
   bindComposer($("#x-composer"), $("#x-input"), async (text) => {
+    if (!text.trim()) return;
+    if (extCur?.startsWith("h:")) {
+      await sendInHist(extCur.slice(2), text);
+      return;
+    }
     const e = ext.find((x) => x.id === extCur);
-    if (!e) throw new Error("这个会话已经结束了");
-    const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text } });
-    if (r.note) toast(r.note, "attn");
+    if (!e) throw new Error("找不到这个会话");
+    if (e.can_send) {
+      try {
+        const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text } });
+        if (r.note) toast(r.note, "attn");
+        return;
+      } catch (err) {
+        if (e.live || !e.session) throw err;
+        // Desktop IPC wasn't holding this thread: seamlessly resume via CLI below!
+      }
+    }
+    toast("正在连接会话并发送…");
+    const r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: { prompt: text, label: extName(e) } });
+    if (r.warning) toast(r.warning, "attn");
+    await api("/api/sessions/archive", { body: { kind: e.kind, machine: e.machine || "", session: e.session, ext_id: e.id, archived: false } }).catch(() => {});
+    ext = ext.filter((x) => x.id !== e.id);
+    renderExt();
+    location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+  }, () => {
+    if (!extCur) return "";
+    if (extCur.startsWith("h:")) return hist.find((h) => h.id === extCur.slice(2))?.machine || "";
+    return ext.find((e) => e.id === extCur)?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
   $("#recent-list").addEventListener("click", (ev) => {
@@ -2295,36 +2318,6 @@
     };
     connect();
   }
-  $("#x-takeover").addEventListener("click", async () => {
-    if (extCur?.startsWith("h:")) return continueHist(extCur.slice(2));
-    const e = ext.find((x) => x.id === extCur);
-    if (!e) return;
-    const app = e.app || "另一个终端";
-    if (e.live && !confirm(`接管「${extName(e)}」？\n\n会先结束 ${app} 里的这个 ${KIND_LABEL[e.kind] || e.kind} 进程（相当于按 Ctrl-C），然后在 herdr 里用同一个会话继续。${app} 那边会回到命令行。`)) return;
-    const b = $("#x-takeover");
-    b.disabled = true; b.textContent = "接管中…";
-    try {
-      const r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: {} });
-      toast("已在 herdr 里接管");
-      ext = ext.filter((x) => x.id !== e.id);
-      renderExt();
-      location.hash = "#/p/" + encodeURIComponent(r.pane_id);
-    } catch (err) {
-      toast(err.message, "attn");
-      b.disabled = false;
-    } finally { b.textContent = e.live ? "在 herdr 里接管" : "在 herdr 里继续"; }
-  });
-  $("#x-reveal")?.addEventListener("click", async () => {
-    const e = ext.find((x) => x.id === extCur);
-    if (!e) return;
-    const b = $("#x-reveal");
-    b.disabled = true;
-    try {
-      await api(`/api/external/${encodeURIComponent(e.id)}/reveal`, { body: {} });
-      toast(e.machine ? `已在 ${machineName(e.machine)} 上唤起桌面端` : "已在桌面端打开");
-    } catch (err) { toast(err.message, "attn"); }
-    finally { b.disabled = false; }
-  });
 
   // ───────────────────────────── preferences (per device, in localStorage)
   const prefs = {
@@ -2389,7 +2382,6 @@
         ${row("对话文字大小", "", seg("text", prefs.text(), [["small", "紧凑"], ["normal", "标准"], ["large", "大字号"]]))}
       </div>
       <div class="card"><div class="card-h">会话交互习惯</div>
-        ${row("打开 Agent 时默认视图", "对话：结构化消息卡片；屏幕：原生终端；日志：纯文本滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]]))}
         ${row("发送消息快捷键", "另一种按法用来换行；Shift+Enter 始终换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
         ${row("折叠连续的工具步骤", "连续工具调用超过 3 步时自动收起，仅露出最新一步", sw("fold", prefs.fold()))}
       </div>
@@ -2516,7 +2508,7 @@
             <div class="text mono">${esc(tilde(r.hub.home))}</div>
             ${updateRow(r.hub.version, r.latest, hubCmd, "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}
           </div>
-          <div class="dev-acts">${r.hub.herdr ? `<button class="btn small" data-launch-on="">+ 新建会话</button>` : `<span class="right">运行中</span>`}</div></li>
+          <div class="dev-acts"><button class="btn ghost small" data-rename-dev="hub" data-name="${esc(r.hub.name)}">改名</button>${r.hub.herdr ? `<button class="btn small" data-launch-on="">+ 新建会话</button>` : `<span class="right">运行中</span>`}</div></li>
         ${machines.map((d) => { const dCmd = installCmdFor(d.os, "node"); return `<li class="row dev-row">
           <span class="dev-ico">${osGlyph(d.os)}<span class="dot ${d.online ? "online" : "offline"}"></span></span>
           <div>
@@ -2524,7 +2516,7 @@
             <div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>
             ${updateRow(d.version, r.latest, dCmd, "", d.id, d.name)}
           </div>
-          <div class="dev-acts">${d.online ? `<button class="btn small" data-launch-on="${esc(d.id)}">+ 新建会话</button>` : ""}<button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></div></li>`; }).join("")}
+          <div class="dev-acts"><button class="btn ghost small" data-rename-dev="${esc(d.id)}" data-name="${esc(d.name)}">改名</button>${d.online ? `<button class="btn small" data-launch-on="${esc(d.id)}">+ 新建会话</button>` : ""}<button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></div></li>`; }).join("")}
       </ul></div>
 
       <div class="card"><div class="card-h">其他 hub</div>
@@ -2546,7 +2538,7 @@
         ${browsers.length ? browsers.map((d) => `<li class="row dev-row">
           <span class="dot unknown"></span>
           <div><div class="meta"><b>${esc(d.name)}</b>${d.current ? '<span class="tag">当前</span>' : ""}<span>最近 ${when(d.last_seen)}</span></div></div>
-          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")
+          <div class="dev-acts"><button class="btn ghost small" data-rename-dev="${esc(d.id)}" data-name="${esc(d.name)}">改名</button><button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></div></li>`).join("")
         : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}
       </ul></div>`;
     document.querySelectorAll("#add-hub input").forEach((i, n) => { i.value = typed[n] || ""; });
@@ -2611,6 +2603,21 @@
         hubs = (await api("/api/hubs", { body: { hubs: hubs.filter((h) => h.key !== b.dataset.delHub) } })).hubs;
         await loadHubs(); loadExternal(); loadHistory(); loadDevices();
       }
+      else if (b.dataset.renameDev) {
+        const id = b.dataset.renameDev;
+        openRenameDialog({
+          title: "修改设备名称",
+          label: "设备显示名称",
+          hint: "修改后在侧边栏筛选、派活列表和会话归属中同步生效。",
+          value: b.dataset.name || "",
+          onSave: async (newName) => {
+            await api(`/api/devices/${encodeURIComponent(id)}/rename`, { body: { name: newName } });
+            try { setLocalState(await api("/api/state")); renderSide(); renderTarget(true); } catch {}
+            loadDevices();
+            toast(`已改名为「${newName}」`);
+          },
+        });
+      }
       else if (b.dataset.delDev) {
         if (!confirm(`移除「${b.dataset.name}」？它需要重新配对才能再连进来。`)) return;
         await api(`/api/devices/${encodeURIComponent(b.dataset.delDev)}/delete`, { body: {} });
@@ -2632,8 +2639,8 @@
     const v = find(current);
     if (!v) return;
     markSeen(v);
-    $("#d-name").textContent = v.name === ROUTER ? "Collie 的终端" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
-    $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `名字：${v.name}` : "";
+    $("#d-name").textContent = v.name === ROUTER ? "Collie" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
+    $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `会话代号：${v.name}` : "";
     $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";
     const role = isWorker(v.name) ? "Collie 派出" : "";
     $("#d-worker").hidden = !role;
@@ -2641,8 +2648,11 @@
     const st = $("#d-status");
     st.className = "status " + v.status;
     st.innerHTML = `<span class="dot ${esc(v.status)}"></span>${esc(STATUS_LABEL[v.status] || v.status)}`;
-    // With more than one computer, say which one it runs on; its own home
-    // folder shortens to ~ (big Linux boxes keep homes outside /home).
+    const busy = v.status === "working" || v.status === "starting";
+    const stopBtn = $("#d-stop-btn");
+    if (stopBtn) stopBtn.hidden = !busy;
+    const menuInt = $("#menu-interrupt");
+    if (menuInt) menuInt.hidden = !busy;
     const ms = state.machines || [];
     const home = ms.find((m) => m.id === (v.machine || ""))?.home;
     const rawCwd = v.cwd || "";
@@ -2651,10 +2661,7 @@
       : tilde(rawCwd);
     $("#d-cwd").textContent = (ms.length > 1 ? machineName(v.machine) + " · " : "") + cwd;
     renderWorkerModel(v);
-    // The pane may have shown up before the page knew what it is (a fresh
-    // terminal): once it does, switch to the view that fits.
-    if (view === "pane" && $("#viewer").dataset.mode && $("#viewer").dataset.mode !== curMode()) { closeStream(); resetChat(); openStream(); }
-    $("#input").placeholder = v.name === ROUTER ? "直接在 Collie 的终端里输入…" : v.is_agent ? `给 ${KIND_LABEL[v.kind] || v.kind} 发消息…` : "输入命令…";
+    $("#input").placeholder = `给 ${KIND_LABEL[v.kind] || v.kind || "Agent"} 发消息…`;
   }
 
   // What model an agent was started with, recorded when Collie (the launcher
@@ -2686,112 +2693,14 @@
     el.hidden = false;
   }
 
-  // ───────────────────────────── one agent: streams
-  let mode = store.get("mode2", "chat");
+  // ───────────────────────────── one agent: pure chat stream
   let stream = null;
-  let term = null;
-  let size = { cols: 0, rows: 0 };
-
-  // A plain shell has no conversation to show, so it opens on the screen.
-  const isShell = () => { const v = find(current); return !!v && !v.is_agent; };
-  let shellMode = null; // a shell's own pick; never overwrites the agent default
-  const curMode = () => isShell() ? (shellMode || (mode === "chat" ? "screen" : mode)) : mode;
-  function applyMode() {
-    const m = curMode();
-    $("#viewer").dataset.mode = m;
-    $("#detail").classList.toggle("chat-mode", m === "chat");
-    $("#detail").classList.toggle("shell", isShell());
-    $$("#mode-seg button").forEach((b) => {
-      b.classList.toggle("on", b.dataset.mode === m);
-      if (b.dataset.mode === "chat") b.hidden = isShell();
-    });
-  }
-  function setMode(m) {
-    if (view === "pane" && isShell()) shellMode = m; else { mode = m; store.set("mode2", m); }
-    applyMode();
-    if (view === "pane" && current) { closeStream(); resetChat(); openStream(); }
-  }
-  $$("#mode-seg button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
-
-  function ensureTerm() {
-    if (term || !window.Terminal) return;
-    const css = getComputedStyle(document.documentElement);
-    term = new Terminal({
-      cols: 120, rows: 40, fontFamily: css.getPropertyValue("--mono"), fontSize: 13, lineHeight: 1.15,
-      cursorBlink: false, scrollback: 0, allowTransparency: true, theme: termTheme(),
-    });
-    term.open($("#screen"));
-    term.onData(typeIntoPane);
-    // The terminal is the input: tap or click it and type. (A drag that
-    // selected text, or scrolled the screen sideways, isn't a tap.)
-    $("#screen").addEventListener("click", () => { if (!term.hasSelection()) term.focus(); });
-    term.textarea?.setAttribute("enterkeyhint", "enter");
-    term.textarea?.addEventListener("focus", () => $("#viewer").classList.add("typing"));
-    term.textarea?.addEventListener("blur", () => $("#viewer").classList.remove("typing"));
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { term.options.theme = termTheme(); });
-    addEventListener("collie:theme", () => { term.options.theme = termTheme(); });
-  }
-  function termTheme() {
-    const fg = getComputedStyle(document.documentElement).getPropertyValue("--term-fg").trim();
-    return { background: "rgba(0,0,0,0)", foreground: fg, cursor: fg, selectionBackground: "rgba(127,127,127,.3)" };
-  }
-  // The pane keeps its own width (herdr can't resize it for us), so a phone
-  // can't fit 120 columns legibly: there it shows the screen at a readable
-  // size and scrolls sideways, or, with 全览, the whole width at once.
-  const narrowScreen = matchMedia("(max-width: 760px)");
-  function fitTerm() {
-    if (!term || !size.cols) return;
-    const el = $("#screen"), pad = parseFloat(getComputedStyle(el).paddingLeft) * 2;
-    const fitW = Math.floor(((el.clientWidth - pad) / size.cols / 0.602) * 2) / 2;
-    const overview = store.get("term-overview", false);
-    const fs = narrowScreen.matches && !overview ? Math.min(14, Math.max(fitW, 11)) : Math.max(4.5, Math.min(14, fitW));
-    if (term.options.fontSize !== fs) term.options.fontSize = fs;
-    $("#term-fit").textContent = overview ? "放大" : "全览";
-    $("#term-fit").hidden = !narrowScreen.matches || fitW >= 11;
-  }
-  addEventListener("resize", () => fitTerm());
-  $("#term-fit").addEventListener("click", () => { store.set("term-overview", !store.get("term-overview", false)); fitTerm(); });
-  $("#term-kbd").addEventListener("click", () => term?.focus());
-
   function openStream() {
-    const id = current;
-    applyMode();
-    const m = curMode();
-    if (m === "chat") return openChat(id);
-    if (m === "screen") ensureTerm();
-    stream = openES(paneURL(id, "stream") + "?mode=" + m);
-    stream.addEventListener("frame", (e) => {
-      if (id !== current) return;
-      const f = JSON.parse(e.data);
-      if (m === "screen") drawScreen(f); else drawLog(f.text);
-    });
-    stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
+    $("#viewer").dataset.mode = "chat";
+    $("#detail").classList.add("chat-mode");
+    openChat(current);
   }
   function closeStream() { stream?.close(); stream = null; }
-
-  function drawScreen(f) {
-    if (!term) return;
-    if (f.cols && f.rows && (f.cols !== size.cols || f.rows !== size.rows)) {
-      size = { cols: f.cols, rows: f.rows };
-      term.resize(f.cols, f.rows);
-      fitTerm();
-    }
-    term.write("\x1b[?25l\x1b[H\x1b[2J" + f.text.replace(/\r?\n/g, "\r\n"));
-  }
-  function cleanLog(text) {
-    return text.split("\n").map((l) => l.replace(/\s+$/, ""))
-      .map((l) => (/^\s*[─━═\-]{16,}\s*$/.test(l) ? "────────────────" : l))
-      .join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
-  }
-  function drawLog(text) {
-    const el = $("#log");
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    el.textContent = cleanLog(text);
-    if (atBottom) el.scrollTop = el.scrollHeight;
-    $("#jump").hidden = atBottom;
-  }
-  $("#log").addEventListener("scroll", () => { const el = $("#log"); $("#jump").hidden = el.scrollHeight - el.scrollTop - el.clientHeight < 40; });
-  $("#jump").addEventListener("click", () => { const el = $("#log"); el.scrollTop = el.scrollHeight; });
 
   // ───────────────────────────── one agent: conversation
   let showRaw = false;
@@ -2804,7 +2713,7 @@
   }
   function openChat(id) {
     stream = openES(paneURL(id, "chat"));
-    const alive = () => id === current && curMode() === "chat";
+    const alive = () => id === current && view === "pane";
     stream.addEventListener("reset", () => alive() && resetChat());
     const th = $("#thread");
     resetEarlier(th, (c) => paneURL(id, "earlier") + "?before=" + c);
@@ -2812,7 +2721,7 @@
     if (!th._msgs) primeThread(th, "p:" + id);
     const showPane = (msgs) => { keepThread("p:" + id, msgs); drawThread(msgs); };
     stream.addEventListener("patch", (e) => alive() && showPane(applyPatch(th, JSON.parse(e.data))));
-    stream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data))); // an older computer
+    stream.addEventListener("messages", (e) => alive() && drawThread(JSON.parse(e.data)));
     stream.addEventListener("log", (e) => alive() && drawFallback(JSON.parse(e.data).text));
     stream.addEventListener("live", (e) => alive() && drawLive(JSON.parse(e.data)));
     stream.addEventListener("gone", () => { $("#gone").hidden = false; closeStream(); });
@@ -3144,11 +3053,6 @@
     if (b.dataset.k) sendKeys([b.dataset.k]);
   });
 
-  $("#kbd-toggle").addEventListener("click", () => {
-    const on = $("#keys").classList.toggle("open");
-    $("#kbd-toggle").classList.toggle("on", on);
-  });
-
   // A file path in a message: ~/…, /…, or C:\… / C:/…, ending in a name with an extension.
   // It runs on escaped text, so it never meets a raw quote or tag.
   const FILE_RE = /(^|[\s(（：，、；>;])((?:(?:~|\/)[\w.\-+@%~\/\\]*|[A-Za-z]:[\\/][\w.\-+@%~\/\\]*)[\\/][\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/\\])/g;
@@ -3453,13 +3357,6 @@
   const sendKeys = (keys) => sendToPane("keys", { keys });
   const sendText = (text) => sendToPane("text", { text });
 
-  $("#keys").addEventListener("click", (e) => {
-    const b = e.target.closest("button");
-    if (!b || !current) return;
-    if (b.dataset.k) sendKeys([b.dataset.k]); else if (b.dataset.t) sendText(b.dataset.t);
-  });
-  $("#keys").addEventListener("mousedown", (e) => e.preventDefault());
-
   function grow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, innerHeight * 0.4) + "px"; }
   // Files go to the machine where the agent runs, then their paths ride
   // along in the message (agents read images and files by path).
@@ -3584,36 +3481,184 @@
     }
   }, () => (current || "").includes("@") ? current.slice(current.lastIndexOf("@") + 1) : "");
 
-  // ───────────────────────────── menus
+  // ───────────────────────────── rename dialog & session lifecycle actions
+  const renameDlg = $("#rename-dlg");
+  let renameSaveFn = null;
+  function openRenameDialog({ title, label, hint, value, onSave }) {
+    $("#rename-title").textContent = title || "重命名";
+    $("#rename-label").textContent = label || "新名称";
+    $("#rename-hint").textContent = hint || "";
+    const inp = $("#rename-input");
+    inp.value = value || "";
+    renameSaveFn = onSave;
+    renameDlg.showModal();
+    setTimeout(() => { inp.focus(); inp.select(); }, 20);
+  }
+  $("#rename-form")?.addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "ok") return;
+    e.preventDefault();
+    const val = $("#rename-input").value.trim();
+    if (!val || !renameSaveFn) return;
+    try {
+      await renameSaveFn(val);
+      renameDlg.close();
+    } catch (err) { toast(err.message, "attn"); }
+  });
+
+  function resolveSessionTarget(token) {
+    if (!token) {
+      if (view === "pane" && current) token = "p:" + current;
+      else if (view === "ext" && extCur) token = extCur.startsWith("h:") ? extCur : "x:" + extCur;
+    }
+    if (!token) return null;
+    if (token.startsWith("p:")) {
+      const pid = token.slice(2), v = find(pid);
+      if (!v) return null;
+      return {
+        token, type: "pane", pane_id: v.pane_id, workspace_id: v.workspace_id,
+        kind: v.kind, machine: v.machine || "", session: v.session || "", cwd: v.cwd || "",
+        title: title(v), name: v.name || "", archived: false, activeNow: view === "pane" && current === v.pane_id,
+      };
+    }
+    if (token.startsWith("x:")) {
+      const eid = token.slice(2), e = ext.find((x) => x.id === eid);
+      if (!e) return null;
+      const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
+      return {
+        token, type: "ext", ext_id: e.id,
+        kind: e.kind, machine: e.machine || "", session: e.session || "", cwd: e.cwd || "",
+        title: extName(e), name: "", archived: !!meta?.archived, live: !!e.live, activeNow: view === "ext" && extCur === e.id,
+      };
+    }
+    if (token.startsWith("h:")) {
+      const hid = token.slice(2), h = hist.find((x) => x.id === hid);
+      if (!h) return null;
+      const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
+      return {
+        token, type: "hist", hist_id: h.id,
+        kind: h.kind, machine: h.machine || "", session: h.session || "", cwd: h.cwd || "",
+        title: histName(h), name: h.name || "", archived: !!meta?.archived, activeNow: view === "ext" && extCur === "h:" + h.id,
+      };
+    }
+    return null;
+  }
+
+  async function refreshSessionMeta() {
+    try { setLocalState(await api("/api/state")); } catch {}
+    renderSide();
+    if (view === "pane") renderHead();
+    if (view === "ext") renderExtHead();
+  }
+
+  function promptRenameSession(target) {
+    if (!target) return;
+    openRenameDialog({
+      title: "重命名会话",
+      label: "会话标题",
+      hint: "自定义标题在会话运行、归档与后续继续对话时都会保留。",
+      value: target.title || "",
+      onSave: async (newTitle) => {
+        await api("/api/sessions/rename", { body: {
+          pane_id: target.pane_id || "", workspace_id: target.workspace_id || "",
+          ext_id: target.ext_id || "", hist_id: target.hist_id || "",
+          kind: target.kind || "", machine: target.machine || "", session: target.session || "",
+          title: newTitle,
+        } });
+        await refreshSessionMeta();
+        toast("已重命名");
+      },
+    });
+  }
+
+  async function toggleArchiveSession(target) {
+    if (!target) return;
+    const nextArch = !target.archived;
+    if (target.type === "pane" && nextArch && !confirm(`归档「${target.title}」？\n\n如果它正在运行，会先安全结束当前进程并移入侧边栏底部的「已归档」，随时可点击恢复对话。`)) return;
+    await api("/api/sessions/archive", { body: {
+      pane_id: target.pane_id || "", workspace_id: target.workspace_id || "",
+      ext_id: target.ext_id || "", hist_id: target.hist_id || "",
+      kind: target.kind || "", machine: target.machine || "", session: target.session || "",
+      cwd: target.cwd || "", title: target.title || "", name: target.name || "",
+      archived: nextArch,
+    } });
+    if (target.type === "pane" && nextArch) {
+      await loadHistory();
+      if (target.activeNow) location.hash = "#/collie";
+    }
+    await refreshSessionMeta();
+    toast(nextArch ? "已归档到侧边栏底部" : "已移出归档");
+  }
+
+  async function removeSession(target) {
+    if (!target) return;
+    if (!confirm(`删除会话「${target.title}」？${target.type === "pane" ? "\n\n当前正在运行的会话将被关闭并从列表中移除。" : "\n\n该会话将从列表中移除。"}`)) return;
+    await api("/api/sessions/delete", { body: {
+      pane_id: target.pane_id || "", workspace_id: target.workspace_id || "",
+      ext_id: target.ext_id || "", hist_id: target.hist_id || "",
+      kind: target.kind || "", machine: target.machine || "", session: target.session || "",
+    } });
+    if (target.ext_id) ext = ext.filter((x) => x.id !== target.ext_id);
+    if (target.hist_id) hist = hist.filter((x) => x.id !== target.hist_id);
+    await refreshSessionMeta();
+    if (target.activeNow) location.hash = "#/collie";
+    toast("已删除会话");
+  }
+
+  // Floating sidebar session context menu (`⋯` button on session rows)
+  const sessPopMenu = $("#sess-pop-menu");
+  let sessPopToken = null, sessPopBtn = null;
+  function closeSessPop() {
+    if (sessPopMenu) sessPopMenu.hidden = true;
+    sessPopBtn?.classList.remove("open");
+    sessPopBtn = null; sessPopToken = null;
+  }
   document.addEventListener("click", (e) => {
+    const mb = e.target.closest("[data-smenu]");
+    if (mb) {
+      e.preventDefault(); e.stopPropagation();
+      $$(".menu").forEach((m) => { if (m !== sessPopMenu) m.hidden = true; });
+      if (sessPopBtn === mb && !sessPopMenu.hidden) { closeSessPop(); return; }
+      closeSessPop();
+      const target = resolveSessionTarget(mb.dataset.smenu);
+      if (!target) return;
+      sessPopToken = mb.dataset.smenu;
+      sessPopBtn = mb; mb.classList.add("open");
+      $("#spm-archive").textContent = target.archived ? "移出归档" : "归档会话";
+      sessPopMenu.hidden = false;
+      const r = mb.getBoundingClientRect();
+      const left = Math.min(innerWidth - 172, Math.max(8, r.right - 140));
+      const top = r.bottom + 140 > innerHeight ? Math.max(8, r.top - 126) : r.bottom + 4;
+      sessPopMenu.style.left = left + "px";
+      sessPopMenu.style.top = top + "px";
+      return;
+    }
+    const sact = e.target.closest("#sess-pop-menu [data-sact]")?.dataset.sact;
+    if (sact) {
+      const target = resolveSessionTarget(sessPopToken);
+      closeSessPop();
+      if (sact === "rename") promptRenameSession(target);
+      if (sact === "archive") toggleArchiveSession(target).catch((err) => toast(err.message, "attn"));
+      if (sact === "delete") removeSession(target).catch((err) => toast(err.message, "attn"));
+      return;
+    }
+    if (!sessPopMenu?.hidden) closeSessPop();
     const opener = e.target.closest("[data-menu]");
-    $$(".menu").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
+    $$(".menu:not(#sess-pop-menu)").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
     if (opener) { const m = $("#" + opener.dataset.menu); m.hidden = !m.hidden; }
   });
+  $(".side-scroll")?.addEventListener("scroll", closeSessPop, { passive: true });
 
   document.addEventListener("click", async (e) => {
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
-    const v = find(current);
     try {
-      if (act === "interrupt") sendKeys(["ctrl+c"]);
-      if (act === "copy" && v) { await copy(v.pane_id); toast("已复制 " + v.pane_id); }
-      if (act === "shell-here" && v) {
-        const r = await api("/api/agents", { body: { kind: "shell", cwd: v.cwd, machine: v.machine || "" } });
-        location.hash = "#/p/" + encodeURIComponent(r.pane_id);
-      }
-      if (act === "close" && v) {
-        if (!confirm(`关闭工作区「${v.workspace_label || v.workspace_id}」？里面的进程会被结束。`)) return;
-        await api(`/api/workspaces/${encodeURIComponent(v.workspace_id)}/close`, { method: "POST", body: {} });
-        location.hash = "#/";
-      }
+      if (act === "interrupt") { sendKeys(["ctrl+c"]); toast("已发送中断信号"); }
+      if (act === "sess-rename") promptRenameSession(resolveSessionTarget());
+      if (act === "sess-archive") await toggleArchiveSession(resolveSessionTarget());
+      if (act === "sess-delete") await removeSession(resolveSessionTarget());
       if (act === "router-cfg") {
         if (view !== "collie") location.hash = "#/collie";
         toggleRouterPop(true);
-      }
-      if (act === "router-open") {
-        const p = paneOf(ROUTER);
-        if (p) location.hash = "#/p/" + encodeURIComponent(p); else toast("Collie 还在休眠；发一条消息就会唤醒它");
       }
       if (act === "router-restart") {
         if (!confirm("重启 Collie？它会读自己的记忆恢复上下文，排队的消息不会丢。")) return;
@@ -3638,11 +3683,7 @@
 
   function suggestName() {
     if (!nameTouched) nameInput.value = "";
-    // A terminal needs only a computer and a folder.
-    const shell = $("input[name=kind]:checked")?.value === "shell";
-    $$("#launch .agent-only").forEach((f) => f.hidden = shell);
-    $("#launch-go").textContent = shell ? "打开" : "启动";
-    if (!shell) fillLaunchModels();
+    fillLaunchModels();
   }
   // Model and effort for a new agent: "" leaves it to the agent's own settings
   // on that computer (what it would run if started by hand).
@@ -3790,34 +3831,29 @@
     if (e.submitter?.value !== "go") return;
     e.preventDefault();
     const kind = $("input[name=kind]:checked").value;
-    const shell = kind === "shell";
-    const body = shell ? { kind, cwd: cwdInput.value.trim(), machine: pickMachine }
-      : { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine,
-          model: $("#l-model").value, effort: $("#l-effort").value };
+    const body = { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine,
+      model: $("#l-model").value, effort: $("#l-effort").value };
     const go = $("#launch-go");
-    go.disabled = true; go.textContent = shell ? "打开中…" : "启动中…";
+    go.disabled = true; go.textContent = "启动中…";
     $("#launch-error").textContent = "";
     try {
       const r = await api("/api/agents", { body });
       store.set("kind", body.kind);
       store.set("machine", pickMachine);
-      if (!shell) saveLastModel(body.kind, pickMachine, body.model, body.effort);
+      saveLastModel(body.kind, pickMachine, body.model, body.effort);
       store.set(recentKey(), [body.cwd, ...store.get(recentKey(), []).filter((d) => d !== body.cwd)].slice(0, 8));
       sheet.close();
       if (r.warning) toast(r.warning, "attn");
       location.hash = "#/p/" + encodeURIComponent(r.pane_id);
     } catch (err) { $("#launch-error").textContent = err.message; }
-    finally { go.disabled = false; go.textContent = shell ? "打开" : "启动"; }
+    finally { go.disabled = false; go.textContent = "启动"; }
   });
 
   // ───────────────────────────── viewport (mobile keyboard)
-  // The app fills the visible area: its height shrinks above the keyboard, and
-  // it follows the visible area when the browser scrolls the page for it.
   function setVH() {
     const v = window.visualViewport;
     const root = document.documentElement.style;
-    // Chats that were showing their latest lines keep showing them as the keyboard takes space.
-    const pinned = [...document.querySelectorAll(".viewer, #log")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    const pinned = [...document.querySelectorAll(".viewer")].filter((el) => el.offsetParent && el.scrollHeight - el.scrollTop - el.clientHeight < 80);
     root.setProperty("--vh", (v ? v.height : innerHeight) + "px");
     pinned.forEach((el) => { el.scrollTop = el.scrollHeight; });
     root.setProperty("--vtop", (v ? Math.max(0, v.offsetTop) : 0) + "px");
@@ -3842,7 +3878,6 @@
     await loadHubs();
     $("#login").hidden = true;
     $("#app").hidden = false;
-    setMode(mode);
     connect();
     view = undefined;
     route();
@@ -3886,7 +3921,7 @@
 
     const navActs = [
       { ico: GLYPHS.collie, title: "和 Collie 对话", sub: "回到主协调对话界面", meta: "视图", run: () => { location.hash = "#/collie"; } },
-      { ico: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>', title: "新建独立 Agent 或终端", sub: "在指定电脑与目录启动会话", meta: "操作", run: () => openLauncher() },
+      { ico: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>', title: "新建对话会话", sub: "在指定电脑与目录启动独立 Agent 对话", meta: "操作", run: () => openLauncher() },
       ...runnableMachines().map((m) => ({
         ico: osGlyph(m.os), title: `在 ${m.name} 上新建会话`, sub: `${m.os || "本地"} · ${tilde(m.home || "~")}`, meta: "电脑",
         run: () => openLauncher(m.id),
@@ -3902,31 +3937,26 @@
     ].filter((x) => match(x.title, x.sub, x.meta));
 
     const liveItems = [
-      ...state.agents.filter((a) => a.name !== ROUTER).map((a) => ({
+      ...state.agents.filter((a) => a.name !== ROUTER && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted).map((a) => ({
         ico: glyph(a), title: title(a), sub: `${KIND_LABEL[a.kind] || a.kind} · ${machineName(a.machine)} · ${tilde(a.cwd)}`,
         meta: STATUS_LABEL[a.status] || a.status, dot: a.status,
         run: () => { location.hash = "#/p/" + encodeURIComponent(a.pane_id); },
       })),
-      ...ext.filter((e) => e.live).map((e) => ({
-        ico: GLYPHS[e.kind] || GLYPHS.agent, title: extName(e), sub: `${e.app || KIND_LABEL[e.kind] || e.kind} · ${machineName(e.machine)}`,
+      ...ext.filter((e) => e.live && !getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.deleted).map((e) => ({
+        ico: GLYPHS[e.kind] || GLYPHS.agent, title: extName(e), sub: `${KIND_LABEL[e.kind] || e.kind} · ${machineName(e.machine)}`,
         meta: EXT_STATE[e.status] || "运行中", dot: e.status || "unknown",
         run: () => { location.hash = "#/x/" + encodeURIComponent(e.id); },
-      })),
-      ...state.shells.map((s) => ({
-        ico: GLYPHS.shell, title: s.workspace_label || base(tilde(s.cwd)), sub: `终端 · ${machineName(s.machine)} · ${tilde(s.cwd)}`,
-        meta: "终端", dot: "shell",
-        run: () => { location.hash = "#/p/" + encodeURIComponent(s.pane_id); },
       })),
     ].filter((x) => match(x.title, x.sub, x.meta));
 
     const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
     const recentItems = [
-      ...ext.filter((e) => !e.live).map((e) => ({
+      ...ext.filter((e) => !e.live && !getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.deleted).map((e) => ({
         t: new Date(e.updated || e.started), ico: GLYPHS[e.kind] || GLYPHS.agent, title: extName(e),
-        sub: `${e.app || KIND_LABEL[e.kind] || e.kind} · ${machineName(e.machine)} · ${tilde(e.cwd)}`, meta: ago(e.updated || e.started),
+        sub: `${KIND_LABEL[e.kind] || e.kind} · ${machineName(e.machine)} · ${tilde(e.cwd)}`, meta: ago(e.updated || e.started),
         run: () => { location.hash = "#/x/" + encodeURIComponent(e.id); },
       })),
-      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({
+      ...hist.filter((h) => !collieRan(h.name) && !getSessMeta(h.kind, h.machine, h.session, "h:" + h.id)?.deleted).map((h) => ({
         t: new Date(h.ended), ico: GLYPHS[h.kind] || GLYPHS.agent, title: histName(h),
         sub: `${KIND_LABEL[h.kind] || h.kind} · ${machineName(h.machine)} · ${tilde(h.cwd)}`, meta: ago(h.ended),
         run: () => { location.hash = "#/h/" + encodeURIComponent(h.id); },
