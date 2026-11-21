@@ -940,9 +940,48 @@ select.picked { display: none; }
 
 /* Collie's own model in its header; the composer's dispatch target */
 #router-model:empty { display: none; }
+#router-model { cursor: pointer; border-radius: 5px; padding: 1px 4px; margin: -1px -4px; transition: color .12s, background .12s; }
+#router-model:hover { color: var(--fg); background: var(--bg-2); }
 #router-model .pending { all: unset; cursor: pointer; color: var(--warn, #b26b00); margin-left: 4px; }
 #router-model .pending:hover { text-decoration: underline; }
+.router-pill {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px 3px 8px;
+  font: 500 11.5px/1 var(--mono); color: var(--fg-2); background: var(--bg);
+  border: 1px solid var(--line-2); border-radius: 999px; cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.router-pill:hover, .router-pill.open { color: var(--fg); border-color: var(--fg-3); background: var(--bg-2); }
+.router-pill svg { width: 13px; height: 13px; stroke: currentColor; stroke-width: 1.8; fill: none; opacity: .7; transition: transform .15s; }
+.router-pill.open svg { transform: rotate(180deg); }
+.router-pill .rp-sep { opacity: .5; }
+.router-pop {
+  border-bottom: 1px solid var(--line); background: var(--bg-2);
+  padding: 14px max(16px, calc((100% - var(--col)) / 2)) 16px;
+  animation: pick-in .14s ease-out;
+}
+.router-pop[hidden] { display: none; }
+.router-pop .rp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 12px; }
+.router-pop .rp-head b { font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.router-pop .rp-head span { font-size: 12.5px; color: var(--fg-3); }
+.router-pop .rp-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 12px; }
+.router-pop .rp-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.router-pop .rp-grid label { display: grid; gap: 5px; font-size: 12px; font-weight: 600; color: var(--fg-2); min-width: 0; }
+.router-pop .rp-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.router-pop .rp-foot .spacer { flex: 1; }
+.router-pop .rp-sync { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-2); cursor: pointer; }
+@media (max-width: 720px) {
+  .router-pop .rp-grid, .router-pop .rp-grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 440px) {
+  .router-pop .rp-grid, .router-pop .rp-grid.three { grid-template-columns: minmax(0, 1fr); }
+}
 .cbar-label { font-size: 12px; color: var(--fg-3); padding: 0 2px 0 4px; white-space: nowrap; cursor: default; }
+.chip-reset {
+  border: 0; background: none; color: var(--fg-3); font-size: 12px; padding: 4px 7px;
+  border-radius: 999px; cursor: pointer; white-space: nowrap; transition: color .12s, background .12s;
+}
+.chip-reset:hover { color: var(--fg); background: var(--bg-2); }
+.chip-reset[hidden] { display: none; }
 
 /* new timer: choose, don't type */
 .tm-form { gap: 14px; }

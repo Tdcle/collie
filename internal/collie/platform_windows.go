@@ -176,21 +176,13 @@ func isInspectTarget(exe string) bool {
 	return false
 }
 
-// isBackgroundAgentArgs filters non-interactive agent helper/daemon invocations
-// on Windows (where processes have no POSIX controlling tty).
-func isBackgroundAgentArgs(kind string, args []string) bool {
-	for i := 1; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case kind == "codex" && (a == "app-server" || a == "mcp-server" || a == "exec"):
-			return true
-		case kind == "claude" && (a == "-p" || a == "--print" || a == "--output-format" || strings.HasPrefix(a, "--output-format=")):
-			return true
-		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
-			return true
-		}
+func procFullImageWin(h windows.Handle) (string, error) {
+	buf := make([]uint16, 1024)
+	n := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &n); err != nil {
+		return "", err
 	}
-	return false
+	return windows.UTF16ToString(buf[:n]), nil
 }
 
 func listProcs() (map[int]*proc, error) {
@@ -215,15 +207,21 @@ func listProcs() (map[int]*proc, error) {
 		if isInspectTarget(exe) {
 			if h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, e.ProcessID); err == nil {
 				p.age = procCreationAge(h, now)
+				if fullExe, err := procFullImageWin(h); err == nil && fullExe != "" {
+					p.args[0] = fullExe
+				}
 				if cmdline := strings.TrimSpace(procCommandLine(h)); cmdline != "" && !strings.ContainsRune(cmdline, 0) {
 					if argv, err := windows.DecomposeCommandLine(cmdline); err == nil && len(argv) > 0 {
+						if fullExe := p.args[0]; strings.ContainsAny(fullExe, `\/`) && !strings.ContainsAny(argv[0], `\/`) {
+							argv[0] = fullExe
+						}
 						p.args = argv
 						p.name = progName(argv)
 					}
 				}
 				windows.CloseHandle(h)
 			}
-			if kind := externalKinds[p.name]; kind != "" && !isBackgroundAgentArgs(kind, p.args) {
+			if kind := externalKinds[p.name]; kind != "" && !isDesktopOrHelperProc(kind, p.args) {
 				p.tty = "console"
 			}
 		}

@@ -20,6 +20,7 @@ const memoryBudget = 6 << 10 // what a session reads up front from memory/, in b
 type handover struct {
 	at      time.Time
 	kind    string
+	machine string
 	session string
 	pct     int
 	worked  bool // the router picked up the flush prompt
@@ -90,9 +91,12 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 	if kind == "antigravity" {
 		kind = "agy"
 	}
+	localPane, machine := split(a.Pane)
 	var u ctxUsage
 	if a.Session != "" || kind == "agy" {
-		if path, format := sp.s.findTranscript(kind, "id", a.Session, a.Pane, sp.routerDir()); path != "" {
+		if machine != "" {
+			u, _ = sp.pullRouterFromNode(ctx, machine, kind, a.Session, localPane, window)
+		} else if path, format := sp.s.findTranscript(kind, "id", a.Session, a.Pane, sp.routerDir()); path != "" {
 			u = contextUsage(path, format, window)
 		}
 	}
@@ -133,19 +137,29 @@ Don't message the human and don't start agents. Just edit the files, then stop.`
 	if err := sp.writeRouterFiles(); err != nil {
 		log.Printf("router files: %v", err)
 	}
+	if machine != "" {
+		_, _ = sp.pushRouterToNode(ctx, machine)
+	}
 	if err := sp.s.herdr.Prompt(ctx, routerName, prompt); err != nil {
 		log.Printf("handover prompt: %v", err)
 		return
 	}
 	sp.mu.Lock()
-	sp.handover = &handover{at: time.Now(), kind: kind, session: a.Session, pct: u.Pct()}
+	sp.handover = &handover{at: time.Now(), kind: kind, machine: machine, session: a.Session, pct: u.Pct()}
 	sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 的上下文用了 %d%%，正在把要记住的事写进记忆，马上换一个新会话", u.Pct()), "", "info")
 	sp.mu.Unlock()
 }
 
 func (sp *Super) finishHandover(ctx context.Context, h *handover) {
+	cwd := sp.routerDir()
+	if h.machine != "" {
+		_, _ = sp.pullRouterFromNode(ctx, h.machine, "", "", "", 0)
+		if mc, err := sp.s.herdr.machine(h.machine); err == nil {
+			cwd = sp.routerDirOn(mc)
+		}
+	}
 	sp.s.remember(&Ended{
-		Kind: h.kind, Cwd: sp.routerDir(), Name: routerName, Session: h.session, Ended: time.Now(),
+		Kind: h.kind, Machine: h.machine, Cwd: cwd, Name: routerName, Session: h.session, Ended: time.Now(),
 		Title: "Collie · 交接前的会话（" + h.at.Format("01-02 15:04") + "）",
 	})
 	if err := sp.RestartRouter(ctx); err != nil {

@@ -46,7 +46,7 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 		}
 		var body []byte
 		switch {
-		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update":
+		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync":
 			machine = r.URL.Query().Get("machine")
 		case r.URL.Path == "/api/agents" && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -359,17 +359,28 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("POST /api/hubs", s.setHubs)
 }
 
+func isHTTPSReq(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	xfp := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
+	return strings.EqualFold(xfp, "https")
+}
+
 func (s *Server) addresses(r *http.Request) []string {
 	list := lanAddresses(s.port, s.publicURLs)
 	// The address this browser already uses works for it; keep it visible.
 	if r != nil && r.Host != "" {
 		cur := "http://" + r.Host
-		if r.TLS != nil {
+		if isHTTPSReq(r) {
 			cur = "https://" + r.Host
 		}
 		found := false
 		for _, a := range list {
-			if a == cur {
+			if a == cur || (cur == "http://"+r.Host && a == "https://"+r.Host) {
 				found = true
 			}
 		}
@@ -432,7 +443,7 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: token, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 3600, Secure: r.TLS != nil,
+		SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 3600, Secure: isHTTPSReq(r),
 	})
 }
 

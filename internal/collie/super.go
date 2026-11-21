@@ -524,6 +524,12 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 		b.WriteString("\n")
 	}
 	if target == routerName {
+		if pane := sp.s.herdr.paneOfName(ctx, routerName); pane != "" {
+			if _, m := split(pane); m != "" {
+				sp.writeMessages()
+				_, _ = sp.pushRouterToNode(ctx, m)
+			}
+		}
 		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail; add --re <event id> when it answers something other than their latest message). Delegate work with `collie spawn`; never do task work yourself.", words)
 	} else {
 		b.WriteString("\nWork it through on your own: retry, try another approach. If you truly can't go on (a decision only the human can make, access you don't have, the same failure after a few different tries), don't spin or wait silently, and don't ask the human: run `collie report \"BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>\"` and Collie will decide or ask them. When done, run `collie report \"…\"` with the result.")
@@ -742,35 +748,78 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 		return
 	}
 	sp.routerLaunching, sp.routerLaunchAt = true, time.Now()
-	kind := sp.st.Settings.RouterKind
-	args := sp.routerArgsLocked()
-	sp.setRouterRun([2]string{sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort})
+	st := sp.st.Settings
 	sp.mu.Unlock()
 
 	go func() {
 		defer func() { sp.mu.Lock(); sp.routerLaunching = false; sp.mu.Unlock() }()
+		targetMachine, kind, resolveErr := sp.resolveRouterTarget(st)
+		if resolveErr != nil {
+			sp.mu.Lock()
+			sp.recordRouterLaunchErrorLocked(resolveErr)
+			sp.mu.Unlock()
+			return
+		}
+		machineID := targetMachine.ID
+		sp.mu.Lock()
+		model, effort := sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort
+		if kinds[kind] != kinds[sp.st.Settings.RouterKind] {
+			model, effort = "", ""
+		}
+		args := append(append([]string{}, sp.st.Settings.RouterArgs...), modelArgs(kind, model, effort)...)
+		args = withBypass(args, kind, sp.st.Settings.AskPermissions)
+		sp.setRouterRun([2]string{model, effort})
+		sp.mu.Unlock()
+
 		sp.closeStaleRouterWorkspaces(context.Background())
-		if err := sp.writeRouterFiles(); err != nil {
+		if err := sp.writeRouterFilesFor(targetMachine); err != nil {
 			log.Printf("router files: %v", err)
 		}
 		sp.routerReadsFresh()
 		lctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_, _, err := sp.s.startAgent(lctx, "", kinds[kind], routerName, sp.routerDir(), routerLabel, args)
+		rdir := sp.routerDir()
+		if machineID != "" {
+			var syncErr error
+			if rdir, syncErr = sp.pushRouterToNode(lctx, machineID); syncErr != nil {
+				sp.mu.Lock()
+				sp.recordRouterLaunchErrorLocked(syncErr)
+				sp.mu.Unlock()
+				return
+			}
+		}
+		_, _, err := sp.s.startAgent(lctx, machineID, kinds[kind], routerName, rdir, routerLabel, args)
 		sp.mu.Lock()
 		defer sp.mu.Unlock()
 		var he *HerdrError
 		if err != nil && !(errors.As(err, &he) && he.Code == "agent_not_ready") {
-			msg := "Collie 启动失败：" + err.Error()
-			if strings.Contains(err.Error(), "没装") {
-				msg += "。装上它，或在 自动化 → 设置 → Collie 自己 里换一个 agent"
-			}
-			sp.addEntryLocked("event", mainThread, msg, routerName, "error")
+			sp.recordRouterLaunchErrorLocked(err)
 			return
 		}
 		sp.routerFresh = true
-		sp.addEntryLocked("event", mainThread, "Collie 已唤醒（"+kind+"）", routerName, "info")
+		where := kind
+		if !targetMachine.Local && targetMachine.Name != "" {
+			where = kind + " @ " + targetMachine.Name
+		}
+		sp.addEntryLocked("event", mainThread, "Collie 已唤醒（"+where+"）", routerName, "info")
 	}()
+}
+
+func (sp *Super) recordRouterLaunchErrorLocked(err error) {
+	msg := "Collie 启动失败：" + err.Error()
+	if strings.Contains(err.Error(), "没装") {
+		msg += "。装上它，或在页面顶部 / 自动化 → 设置 → Collie 自己 里换一个电脑或 agent"
+	}
+	for i := len(sp.st.Entries) - 1; i >= 0 && i >= len(sp.st.Entries)-6; i-- {
+		e := sp.st.Entries[i]
+		if e.Role == "user" || e.Role == "collie" {
+			break
+		}
+		if e.Text == msg && time.Since(e.At) < 10*time.Minute {
+			return // avoid flooding chat every 45s while waiting on setup/offline machine
+		}
+	}
+	sp.addEntryLocked("event", mainThread, msg, routerName, "error")
 }
 
 func (sp *Super) RestartRouter(ctx context.Context) error {
@@ -826,6 +875,14 @@ func (sp *Super) routerReadsFresh() {
 }
 
 func (sp *Super) writeRouterFiles() error {
+	sp.mu.Lock()
+	st := sp.st.Settings
+	sp.mu.Unlock()
+	m, _, _ := sp.resolveRouterTarget(st)
+	return sp.writeRouterFilesFor(m)
+}
+
+func (sp *Super) writeRouterFilesFor(m *Machine) error {
 	dir := sp.routerDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -833,10 +890,19 @@ func (sp *Super) writeRouterFiles() error {
 	sp.mu.Lock()
 	words := sp.st.Settings.ReplyChars
 	wkind := sp.st.Settings.WorkerKind
-	wcwd := sp.s.tilde(sp.st.Settings.WorkerCwd)
+	wmachine := sp.st.Settings.WorkerMachine
+	wcwdRaw := sp.st.Settings.WorkerCwd
 	sp.mu.Unlock()
+	wcwd := sp.s.tilde(wcwdRaw)
+	if wmachine != "" {
+		if wm, err := sp.s.herdr.machine(wmachine); err == nil && wm.Home != "" {
+			wcwd = tildeIn(wm.Home, wcwdRaw)
+		}
+	}
+	rbin := sp.routerBinOn(m)
+	rdirOn := sp.routerDirOn(m)
 	layout := "   " + strings.ReplaceAll(memoryLayout, "\n", "\n   ")
-	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", shellBin(sp.bin), "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
+	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", shellBin(rbin), "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
 	for _, name := range []string{"ROUTER.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o600); err != nil {
 			return err
@@ -846,7 +912,7 @@ func (sp *Super) writeRouterFiles() error {
 	// Claude Code asks before every shell command; the router's whole job is
 	// running the collie CLI and keeping memory/, so allow exactly that.
 	perms, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{
-		"allow": collieAllow(sp.bin, append(memoryRules(dir),
+		"allow": collieAllow(rbin, append(memoryRules(rdirOn),
 			// Read-only peeks at a worker's terminal.
 			"Bash(herdr agent read:*)", "Bash(herdr agent list:*)", "Bash(herdr agent get:*)", "Bash(herdr pane read:*)")...),
 	}}, "", "  ")
@@ -885,6 +951,17 @@ func (sp *Super) resumeFrom(name string) (*Worker, error) {
 }
 
 func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool, resume string) (*Worker, <-chan error, error) {
+	if machine == "" {
+		if lm := sp.s.herdr.Machines()[0]; len(lm.Agents) == 0 && !lm.Online {
+			// Local hub has neither herdr nor agents: fall back to the first online node.
+			for _, rm := range sp.s.herdr.Machines()[1:] {
+				if rm.Online && (rm.Agents == nil || len(rm.Agents) > 0) {
+					machine = rm.ID
+					break
+				}
+			}
+		}
+	}
 	m, err := sp.s.herdr.machine(machine)
 	if err != nil {
 		return nil, nil, fmt.Errorf("machine %q is not connected", machine)
@@ -1401,8 +1478,14 @@ func (sp *Super) List() string {
 // it, so asking the human adds friction without adding safety. Any other
 // dialog (and any other directory) is left for the human.
 func (sp *Super) trustOwnDir(ctx context.Context, pane string) {
-	if sp.answerTrust(ctx, pane, sp.routerDir()) {
-		log.Printf("router: trusted its own directory %s", sp.routerDir())
+	dir := sp.routerDir()
+	if _, m := split(pane); m != "" {
+		if mc, err := sp.s.herdr.machine(m); err == nil {
+			dir = sp.routerDirOn(mc)
+		}
+	}
+	if sp.answerTrust(ctx, pane, dir) {
+		log.Printf("router: trusted its own directory %s", dir)
 	}
 }
 
@@ -1421,8 +1504,14 @@ func (sp *Super) answerTrust(ctx context.Context, pane, dir string) bool {
 	sp.lastTrust[pane] = time.Now()
 	sp.mu.Unlock()
 
+	tld := sp.s.tilde(dir)
+	if _, m := split(pane); m != "" {
+		if mc, err := sp.s.herdr.machine(m); err == nil && mc.Home != "" {
+			tld = tildeIn(mc.Home, dir)
+		}
+	}
 	rr, err := sp.s.herdr.Read(ctx, pane, "visible", "text", 0)
-	if err != nil || !trustDialogFor(rr.Text, dir, sp.s.tilde(dir)) {
+	if err != nil || !trustDialogFor(rr.Text, dir, tld) {
 		return false
 	}
 	for _, c := range parseApproval(rr.Text).Choices {
@@ -1500,7 +1589,7 @@ func (sp *Super) closeStaleRouterWorkspaces(ctx context.Context) {
 		return
 	}
 	for _, ws := range wss {
-		if _, m := split(ws.ID); ws.Label == routerLabel && m == "" {
+		if ws.Label == routerLabel {
 			sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": ws.ID}, nil)
 		}
 	}
@@ -1523,6 +1612,7 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 		return
 	}
 	sp.routerAskedAt = time.Time{}
+	replied := false
 	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
 		e := sp.st.Entries[i]
 		if e.At.Before(asked) {
@@ -1530,11 +1620,17 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 		}
 		if e.Role == "collie" {
 			sp.routerRetries = 0
-			sp.mu.Unlock()
-			return
+			replied = true
+			break
 		}
 	}
 	sp.mu.Unlock()
+	if _, m := split(pane); m != "" {
+		_, _ = sp.pullRouterFromNode(ctx, m, "", "", "", 0)
+	}
+	if replied {
+		return
+	}
 
 	rr, err := sp.s.herdr.Read(ctx, pane, "recent", "text", 60)
 	if err != nil {

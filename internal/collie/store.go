@@ -102,8 +102,9 @@ type Policy struct {
 }
 
 type Settings struct {
-	RouterKind string   `json:"router_kind"`
-	RouterArgs []string `json:"router_args,omitempty"`
+	RouterKind    string   `json:"router_kind"`
+	RouterMachine string   `json:"router_machine,omitempty"`
+	RouterArgs    []string `json:"router_args,omitempty"`
 	// Model and thinking effort, "" for the agent's own default.
 	RouterModel   string `json:"router_model,omitempty"`
 	RouterEffort  string `json:"router_effort,omitempty"`

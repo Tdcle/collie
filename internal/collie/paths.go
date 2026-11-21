@@ -49,9 +49,35 @@ func isAlpha(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
+// stripExtendedPrefix removes Win32 extended-length path prefixes (`\\?\C:\…`,
+// `\??\C:\…`, `\\?\UNC\server\share`) so paths from Rust/Win32 canonicalize()
+// match ordinary drive and UNC paths everywhere.
+func stripExtendedPrefix(p string) string {
+	p = strings.TrimSpace(p)
+	if len(p) < 4 {
+		return p
+	}
+	s := strings.ReplaceAll(p[:4], "/", `\`)
+	if s != `\\?\` && s != `\??\` && s != `\\.\` {
+		return p
+	}
+	if s == `\\.\` && strings.HasPrefix(strings.ToLower(strings.ReplaceAll(p[4:], "/", `\`)), `pipe\`) {
+		return p // preserve Named Pipe paths (`\\.\pipe\…`)
+	}
+	rest := p[4:]
+	if len(rest) >= 4 && strings.EqualFold(rest[:3], "unc") && (rest[3] == '\\' || rest[3] == '/') {
+		return `\\` + strings.TrimLeft(rest[4:], `\/`)
+	}
+	if len(rest) >= 2 && isAlpha(rest[0]) && rest[1] == ':' {
+		return rest
+	}
+	return p
+}
+
 // isWindowsPath reports whether p looks like a Windows drive or UNC path
 // ("C:\…", "C:/…", "C:", "\\server\share…"), regardless of the host OS.
 func isWindowsPath(p string) bool {
+	p = stripExtendedPrefix(p)
 	if len(p) >= 2 && isAlpha(p[0]) && p[1] == ':' && (len(p) == 2 || p[2] == '\\' || p[2] == '/') {
 		return true
 	}
@@ -74,7 +100,7 @@ func winJoin(parts ...string) string {
 // winClean normalises a Windows path using "\" separators, preserving drive
 // roots ("C:\") and UNC prefixes ("\\server\share") even when run on Unix.
 func winClean(p string) string {
-	p = strings.ReplaceAll(strings.TrimSpace(p), "/", `\`)
+	p = strings.ReplaceAll(stripExtendedPrefix(p), "/", `\`)
 	if strings.HasPrefix(p, `\\`) {
 		rest := strings.TrimLeft(p[2:], `\`)
 		parts := strings.Split(rest, `\`)
@@ -184,7 +210,7 @@ func tildeIn(home, p string) string {
 		if len(pc) > len(prefix) && strings.EqualFold(pc[:len(prefix)], prefix) {
 			return `~\` + pc[len(prefix):]
 		}
-		return p
+		return pc
 	}
 	if p == home {
 		return "~"
@@ -197,7 +223,7 @@ func tildeIn(home, p string) string {
 
 // baseOfPath returns the final path element for either "/" or "\" paths.
 func baseOfPath(p string) string {
-	p = strings.TrimRight(p, `/\`)
+	p = strings.TrimRight(stripExtendedPrefix(p), `/\`)
 	if p == "" {
 		return ""
 	}
@@ -209,7 +235,7 @@ func baseOfPath(p string) string {
 
 // isDriveRoot reports whether p is a Windows drive root such as "C:\" or "C:".
 func isDriveRoot(p string) bool {
-	p = strings.TrimRight(p, `/\`)
+	p = strings.TrimRight(stripExtendedPrefix(p), `/\`)
 	return len(p) == 2 && isAlpha(p[0]) && p[1] == ':'
 }
 
@@ -226,6 +252,9 @@ func samePath(a, b string) bool {
 
 // claudeProjectSlug converts a working directory to Claude Code's ~/.claude/projects/<slug> name.
 func claudeProjectSlug(cwd string) string {
+	if isWindowsPath(cwd) {
+		cwd = winClean(cwd)
+	}
 	return strings.NewReplacer("/", "-", `\`, "-", ":", "-", ".", "-", "_", "-").Replace(cwd)
 }
 
@@ -238,16 +267,19 @@ func uriToPath(u string) string {
 	if len(p) >= 3 && p[0] == '/' && isAlpha(p[1]) && p[2] == ':' {
 		return winClean(p[1:])
 	}
+	if isWindowsPath(p) {
+		return winClean(p)
+	}
 	return strings.TrimSuffix(p, "/")
 }
 
 // sqliteURI builds a SQLite "file:" URI safe on both Unix and Windows.
 func sqliteURI(p, query string) string {
-	s := p
-	if isWindowsPath(p) {
-		s = strings.ReplaceAll(p, `\`, "/")
+	s := stripExtendedPrefix(p)
+	if isWindowsPath(s) {
+		s = strings.ReplaceAll(winClean(s), `\`, "/")
 	} else {
-		s = filepath.ToSlash(p)
+		s = filepath.ToSlash(s)
 	}
 	s = strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(s)
 	uri := "file:" + s

@@ -297,7 +297,11 @@ func (s *Server) claudeDesktopRows() []desktopRow {
 			if local == "" {
 				local = v.CliSessionID
 			}
-			d := desktopRow{id: "cd-" + local, kind: "claude", app: appClaude, session: v.CliSessionID, title: v.Title, cwd: v.Cwd, created: time.UnixMilli(v.Created), updated: last}
+			cwd := v.Cwd
+			if isWindowsPath(cwd) {
+				cwd = winClean(cwd)
+			}
+			d := desktopRow{id: "cd-" + local, kind: "claude", app: appClaude, session: v.CliSessionID, title: v.Title, cwd: cwd, created: time.UnixMilli(v.Created), updated: last}
 			d.path, d.format = s.findTranscript("claude", "id", v.CliSessionID, "", "")
 			rows = append(rows, d)
 		}
@@ -352,6 +356,12 @@ func (s *Server) codexAppRows() []desktopRow {
 		var created, updated int64
 		if res.Scan(&id, &title, &cwd, &rollout, &created, &updated, &originator) != nil {
 			continue
+		}
+		if isWindowsPath(cwd) {
+			cwd = winClean(cwd)
+		}
+		if isWindowsPath(rollout) {
+			rollout = winClean(rollout)
 		}
 		app := codexClient(originator, cwd)
 		d := desktopRow{id: "cx-" + id, kind: "codex", app: app, session: id, title: messageTitle(title), cwd: cwd, created: time.UnixMilli(created), updated: time.UnixMilli(updated)}

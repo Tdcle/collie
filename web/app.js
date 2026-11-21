@@ -11,7 +11,16 @@
   const narrow = () => matchMedia("(max-width: 760px)").matches;
   const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+|^[A-Za-z]:[\\/]Users[\\/][^\\/]+/, "~");
+  const cleanPath = (p) => String(p || "").replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "");
+  const tilde = (p, home) => {
+    const s = cleanPath(p);
+    if (!s) return "";
+    const h = cleanPath(home);
+    if (h && s.length >= h.length && s.slice(0, h.length).replace(/\//g, "\\").toLowerCase() === h.replace(/\//g, "\\").toLowerCase() && (!s[h.length] || s[h.length] === "/" || s[h.length] === "\\")) {
+      return "~" + s.slice(h.length);
+    }
+    return s.replace(/^\/Users\/[^/]+|^\/home\/[^/]+|^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "~");
+  };
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
   // 21:52 today, 昨天 18:30, 11月18日 18:30 before that.
   const sepTime = (t) => {
@@ -428,7 +437,15 @@
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
   const autoName = (n) => /^(claude|codex|agy|antigravity)-\d+$/.test(n || "");
-  const base = (p) => (p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "~";
+  const base = (p) => cleanPath(p).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "~";
+  // A cloud Hub with neither herdr nor agents installed is a pure relay server:
+  // don't count it as a runnable computer or offer it as an agent execution target.
+  const isAgentlessHub = (m) => !!(m?.local && !localState.ok && Array.isArray(m.agents) && m.agents.length === 0);
+  const runnableMachines = (keepId = "") => (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => {
+    if (m.hub) return false;
+    if (m.id === keepId && (!isAgentlessHub(m) || !(state.machines || []).some((x) => !x.local))) return true;
+    return m.local ? !isAgentlessHub(m) && state.ok !== false : m.online;
+  });
   function title(v) {
     if (!v) return "";
     if (v.name === ROUTER) return "Collie";
@@ -456,17 +473,20 @@
     $("#attention-group").hidden = blocked.length === 0;
     $("#attention").innerHTML = blocked.map(itemHTML).join("");
 
-    const machines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
-    const multi = machines.length > 1;
+    const allMachines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
+    const workMachines = allMachines.filter((m) => !isAgentlessHub(m));
+    const countMachines = workMachines.length ? workMachines : allMachines;
+    const multi = countMachines.length > 1 || allMachines.length > 1;
 
     renderSessions();
     $("#shells").innerHTML = state.shells.map(itemHTML).join("");
     $("#shell-count").textContent = state.shells.length || "";
     $("#shell-group").hidden = state.shells.length === 0;
 
-    const online = machines.filter((m) => m.local ? state.ok : m.online).length;
+    const online = countMachines.filter((m) => m.local ? state.ok : m.online).length;
     $("#conn").className = "conn " + (online ? "on" : "off");
-    $("#herdr-status").textContent = !online ? "herdr 不可用" : multi ? `${online}/${machines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
+    $("#herdr-status").textContent = !online ? (allMachines.some((m) => !m.local) ? `0/${countMachines.length} 台电脑在线` : "herdr 不可用")
+      : countMachines.length > 1 || allMachines.some((m) => !m.local) ? `${online}/${countMachines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
     if (!state.ok && state.error) $("#herdr-status").title = state.error;
     document.title = blocked.length ? `(${blocked.length}) Collie` : "Collie";
 
@@ -535,20 +555,27 @@
 
   // ───────────────────────────── Collie (super-agent) view
   let superSig = "";
+  const routerModelMachine = (r) => {
+    if (r?.machine) return r.machine;
+    const ms = runnableMachines();
+    const rk = r?.kind === "antigravity" ? "agy" : r?.kind || "claude";
+    return ms.find((m) => !m.agents || m.agents.includes(rk))?.id || ms[0]?.id || "";
+  };
   // Which model Collie itself runs with, next to its status.
   async function renderRouterModel(r) {
     const el = $("#router-model");
-    const key = [r.kind, r.model, r.effort, r.pending].join("|");
+    const rm = routerModelMachine(r);
+    const key = [r.kind, rm, r.model, r.effort, r.pending].join("|");
     if (el._key === key) return;
     el._key = key;
     let model = r.model;
-    if (!model && r.kind) model = (await modelsFor(r.kind === "antigravity" ? "agy" : r.kind, "")).default || "";
+    if (!model && r.kind) model = (await modelsFor(r.kind === "antigravity" ? "agy" : r.kind, rm)).default || "";
     if (el._key !== key) return;
     const parts = [];
     if (model) parts.push(esc(model.split("/").pop()) + (r.model ? "" : "（默认）"));
     if (r.effort) parts.push("思考 " + esc(EFFORT_LABEL[r.effort] || r.effort));
     el.innerHTML = parts.join(" · ") + (r.pending ? ` <button type="button" class="pending" data-act="router-restart" title="Collie 的模型设置改过了，点这里重启 Collie">重启后生效</button>` : "");
-    el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（自动化 → 设置 → Collie 自己）`;
+    el.title = `Collie 自己用的模型${model ? "：" + model : ""}${r.effort ? "，思考强度 " + r.effort : ""}（点击可直接切换）`;
   }
   // A worker's comings and goings: its spawn line shows where it stands, and
   // a dialog waiting on the human shows as a card below. Reports and errors stay.
@@ -586,7 +613,13 @@
   }
   function renderSuper(force) {
     const r = sup.router || {};
-    $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "";
+    $("#router-kind").textContent = KIND_LABEL[r.kind] || r.kind || "claude";
+    const whereEl = $("#router-where"), whereSep = $("#router-where-sep");
+    const showWhere = r.machine ? machineName(r.machine) : ((state.machines || []).some((m) => !m.local) && !isAgentlessHub((state.machines || [])[0]) ? machineName("") : "");
+    if (whereEl && whereSep) {
+      whereEl.textContent = showWhere;
+      whereEl.hidden = whereSep.hidden = !showWhere;
+    }
     const st = $("#router-status");
     st.className = "status " + collieDot(r.status);
     st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(collieStatus(r.status))}`;
@@ -754,10 +787,114 @@
     }
     return modelInfo[key];
   }
-  // "派到": where this message's work runs. Shows the defaults from
-  // 自动化 → 设置 (read again whenever this view opens); target holds only
-  // what was picked here, so a message never carries a stale default.
-  let target = null, targetDefault = null;
+  // Remember last selected model & effort per agent@machine across reloads.
+  const modelMemKey = (kind, machine) => (kind === "antigravity" ? "agy" : kind || "claude") + "@" + (machine || "");
+  const getSavedModel = (kind, machine) => store.get("lastModel", {})[modelMemKey(kind, machine)] || null;
+  const saveLastModel = (kind, machine, model, effort) => {
+    const map = { ...(store.get("lastModel", {}) || {}) };
+    map[modelMemKey(kind, machine)] = { model: model || "", effort: effort || "" };
+    store.set("lastModel", map);
+  };
+
+  // Inline header quick-switcher for Collie's own computer / agent / model / effort.
+  async function toggleRouterPop(forceOpen) {
+    const pop = $("#router-pop"), btn = $("#router-cfg-btn");
+    if (!pop) return;
+    const open = forceOpen === undefined ? pop.hidden : !!forceOpen;
+    pop.hidden = !open;
+    btn?.classList.toggle("open", open);
+    if (!open) return;
+    const f = $("#router-quick-form");
+    let s;
+    try { s = (await api("/api/super/settings")).settings; }
+    catch (err) { toast(err.message, "attn"); pop.hidden = true; btn?.classList.remove("open"); return; }
+    const ms = runnableMachines(s.router_machine || "");
+    const mWrap = $("#rq-machine-wrap");
+    const showM = ms.length > 1 || (state.machines || []).some((m) => !m.local);
+    mWrap.hidden = !showM;
+    $(".rp-grid", f)?.classList.toggle("three", !showM);
+    f.router_machine.innerHTML = `<option value="" data-sub="优先选装了对应 agent 的在线电脑" ${!(s.router_machine || "") ? "selected" : ""}>自动选择</option>` +
+      ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" data-sub="${esc(m.local ? "hub" : m.os || "")}" ${m.id === (s.router_machine || "") ? "selected" : ""}>${esc(m.name)}</option>`).join("");
+    const fillQuickKinds = () => {
+      const selM = f.router_machine.value;
+      const have = selM ? ms.find((m) => m.id === selM)?.agents
+        : ms.length ? [...new Set(ms.flatMap((m) => Array.isArray(m.agents) ? m.agents : ["claude", "codex", "agy"]))] : null;
+      const curK = f.router_kind.dataset.init ? f.router_kind.value : (s.router_kind || "claude");
+      f.router_kind.dataset.init = "1";
+      f.router_kind.innerHTML = [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => {
+        const missing = Array.isArray(have) && !have.includes(g);
+        return `<option value="${k}" data-glyph="${g}" ${missing ? 'data-sub="所选电脑未安装"' : ""} ${missing && k !== curK ? "disabled" : ""} ${k === curK ? "selected" : ""}>${l}</option>`;
+      }).join("");
+      if (f.router_kind.selectedOptions[0]?.disabled) {
+        const okOpt = [...f.router_kind.options].find((o) => !o.disabled);
+        if (okOpt) f.router_kind.value = okOpt.value;
+      }
+      syncPick(f.router_kind);
+    };
+    delete f.router_kind.dataset.init;
+    fillQuickKinds();
+    f.router_model.dataset.value = s.router_model || "";
+    f.router_effort.dataset.value = s.router_effort || "";
+    enhance(f.router_machine); enhance(f.router_kind); enhance(f.router_model); enhance(f.router_effort);
+    syncPick(f.router_machine); syncPick(f.router_kind);
+    await fillModels(f, "router");
+    syncPick(f.router_model); syncPick(f.router_effort);
+    if (!f._rqBound) {
+      f._rqBound = true;
+      f.router_machine.addEventListener("change", async () => { fillQuickKinds(); await fillModels(f, "router"); syncPick(f.router_model); syncPick(f.router_effort); });
+      f.router_kind.addEventListener("change", async () => {
+        const saved = getSavedModel(f.router_kind.value, f.router_machine.value);
+        f.router_model.dataset.value = saved?.model || "";
+        f.router_effort.dataset.value = saved?.effort || "";
+        await fillModels(f, "router");
+        syncPick(f.router_model); syncPick(f.router_effort);
+      });
+      f.router_model.addEventListener("change", () => setTimeout(() => { syncPick(f.router_model); syncPick(f.router_effort); }, 0));
+    }
+  }
+  $("#router-cfg-btn")?.addEventListener("click", () => toggleRouterPop());
+  $("#router-model")?.addEventListener("click", (e) => { if (!e.target.closest("[data-act]")) toggleRouterPop(); });
+  $("#rq-cancel")?.addEventListener("click", () => toggleRouterPop(false));
+  $("#router-quick-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, btn = $("#rq-save");
+    btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      const cur = (await api("/api/super/settings")).settings;
+      const rModel = f.router_model.value === "__custom" ? "" : f.router_model.value;
+      const rEffort = f.router_effort.value;
+      const next = {
+        ...cur,
+        router_machine: f.router_machine.value,
+        router_kind: f.router_kind.value,
+        router_model: rModel,
+        router_effort: rEffort,
+      };
+      if (f.sync_worker.checked) {
+        next.worker_kind = f.router_kind.value;
+        next.worker_model = rModel;
+        next.worker_effort = rEffort;
+        if (f.router_machine.value) next.worker_machine = f.router_machine.value;
+        target = null;
+        store.set("dispatchTarget", null);
+      }
+      saveLastModel(f.router_kind.value, f.router_machine.value, rModel, rEffort);
+      const shouldRestart = !!(sup.router?.alive || sup.router?.status === "failed");
+      const res = await api("/api/super/settings", { body: { settings: next, restart: shouldRestart } });
+      sup.router = { ...sup.router, kind: next.router_kind, machine: next.router_machine || sup.router?.machine || "", model: next.router_model, effort: next.router_effort, pending: false };
+      $("#router-model")._key = "";
+      renderSuper(true);
+      renderTarget(true);
+      toggleRouterPop(false);
+      toast(res.restarted ? "已切换，Collie 正在用新配置重启" : "已切换 Collie 的模型配置");
+    } catch (err) { toast(err.message, "attn"); }
+    finally { btn.disabled = false; btn.textContent = "保存并生效"; }
+  });
+
+  // "执行任务": where dispatched work runs. Remembers your last chosen computer,
+  // agent, model, and effort across reloads, falling back to 自动化 → 设置 defaults.
+  let target = store.get("dispatchTarget", null), targetDefault = null;
+  const saveTarget = () => store.set("dispatchTarget", target && Object.keys(target).length ? target : null);
   async function renderTarget(fresh) {
     if (!targetDefault || fresh) {
       try {
@@ -765,15 +902,22 @@
         targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
       } catch { targetDefault ||= { machine: "", kind: "claude", model: "", effort: "" }; }
     }
-    // What was picked here over the defaults: picking only an agent leaves the
-    // computer at its default, not unset.
-    const t = targetNow();
-    const ms = (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => !m.hub && (m.local ? state.ok !== false : m.online || m.id === t.machine));
+    let ms = runnableMachines((target && target.machine) ?? targetDefault.machine);
+    if (!ms.length) ms = state.machines || [{ id: "", name: "本机", local: true }];
+    // Ensure target machine and agent are valid on available computers.
+    let t = targetNow();
+    if (!ms.some((m) => m.id === t.machine)) {
+      t.machine = ms[0]?.id || "";
+    }
+    const have = ms.find((m) => m.id === t.machine)?.agents;
+    if (Array.isArray(have) && have.length && !have.includes(t.kind)) {
+      const fallback = ["codex", "claude", "agy"].find((k) => have.includes(k));
+      if (fallback) t.kind = fallback;
+    }
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
-    const have = ms.find((m) => m.id === t.machine)?.agents;
     fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
       const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
@@ -784,15 +928,23 @@
     syncPick(mSel); syncPick(kSel);
     mSel._pick?.classList.toggle("changed", t.machine !== targetDefault.machine);
     kSel._pick?.classList.toggle("changed", t.kind !== targetDefault.kind);
-    renderModelChips();
+    renderModelChips(t);
   }
-  // The default model and effort belong to the default kind of agent; any
-  // other kind starts from that agent's own settings.
+  // Default model/effort for a given target: uses Settings default when on the
+  // default agent, or your last remembered model for that agent@machine.
   const modelDefaults = (t) => t.kind === targetDefault.kind ? { model: targetDefault.model, effort: targetDefault.effort } : { model: "", effort: "" };
-  const modelNow = (t) => { const d = modelDefaults(t); return { model: t.model ?? d.model, effort: t.effort ?? d.effort, d }; };
+  const modelNow = (t) => {
+    const d = modelDefaults(t);
+    const mem = getSavedModel(t.kind, t.machine);
+    return {
+      model: t.model !== undefined ? t.model : (mem?.model ?? d.model),
+      effort: t.effort !== undefined ? t.effort : (mem?.effort ?? d.effort),
+      d,
+    };
+  };
   let chipSeq = 0;
-  async function renderModelChips() {
-    const seq = ++chipSeq, t = targetNow(), { model, effort, d } = modelNow(t);
+  async function renderModelChips(resolvedT) {
+    const seq = ++chipSeq, t = resolvedT || targetNow(), { model, effort, d } = modelNow(t);
     const mSel = $("#t-model"), eSel = $("#t-effort");
     const info = await modelsFor(t.kind, t.machine);
     if (seq !== chipSeq) return;
@@ -800,7 +952,8 @@
     if (model && !list.some((m) => m.id === model)) list.unshift({ id: model });
     const short = (id) => id.split("/").pop();
     const mark = (v, dv) => (v === dv ? " · 默认" : "");
-    let html = d.model ? "" : `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default + " · 默认" : "agent 自己的设置 · 默认")}">默认</option>`;
+    const defShort = info.default ? short(info.default) : "默认模型";
+    let html = `<option value="" data-short="${esc(defShort)}" data-sub="${esc(info.default ? "现在是 " + info.default + (d.model === "" ? " · 默认" : "") : "agent 自己的设置")}">默认${info.default ? "（" + esc(short(info.default)) + "）" : ""}</option>`;
     html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc((m.label && m.label !== m.id ? m.id : "") + mark(m.id, d.model))}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
     if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
     mSel.value = model;
@@ -814,14 +967,51 @@
     eSel.value = eff === d.effort ? "" : eff;
     eSel.hidden = effs.length === 0;
     syncPick(mSel); syncPick(eSel);
-    mSel._pick?.classList.toggle("changed", model !== d.model);
-    eSel._pick?.classList.toggle("changed", eff !== d.effort && eff !== "");
+    const mChanged = model !== d.model;
+    const eChanged = eff !== d.effort && eff !== "";
+    mSel._pick?.classList.toggle("changed", mChanged);
+    eSel._pick?.classList.toggle("changed", eChanged);
+    const anyChanged = t.machine !== targetDefault.machine || t.kind !== targetDefault.kind || mChanged || eChanged;
+    const resetBtn = $("#t-reset");
+    if (resetBtn) resetBtn.hidden = !anyChanged;
   }
-  const pick = (o) => { target = { ...(target || {}), ...o }; };
-  $("#t-machine").addEventListener("change", (e) => { pick({ machine: e.target.value }); renderTarget(); });
-  $("#t-kind").addEventListener("change", (e) => { pick({ kind: e.target.value, model: undefined, effort: undefined }); renderTarget(); });
-  $("#t-model").addEventListener("change", (e) => { pick({ model: e.target.value }); renderModelChips(); });
-  $("#t-effort").addEventListener("change", (e) => { pick({ effort: e.target.value || modelDefaults(targetNow()).effort }); renderModelChips(); });
+  const pick = (o) => { target = { ...(target || {}), ...o }; saveTarget(); };
+  $("#t-machine").addEventListener("change", (e) => {
+    const m = e.target.value, k = $("#t-kind").value;
+    const mem = getSavedModel(k, m);
+    pick({ machine: m, model: mem?.model, effort: mem?.effort });
+    renderTarget();
+  });
+  $("#t-kind").addEventListener("change", (e) => {
+    const k = e.target.value, m = $("#t-machine").value;
+    const mem = getSavedModel(k, m);
+    pick({ kind: k, model: mem?.model, effort: mem?.effort });
+    renderTarget();
+  });
+  $("#t-model").addEventListener("change", (e) => {
+    const t = targetNow();
+    const m = e.target.value;
+    const { effort } = modelNow(t);
+    saveLastModel(t.kind, t.machine, m, effort);
+    pick({ machine: t.machine, kind: t.kind, model: m });
+    renderModelChips();
+  });
+  $("#t-effort").addEventListener("change", (e) => {
+    const t = targetNow();
+    const { model } = modelNow(t);
+    const ef = e.target.value || modelDefaults(t).effort;
+    saveLastModel(t.kind, t.machine, model, ef);
+    pick({ machine: t.machine, kind: t.kind, effort: ef });
+    renderModelChips();
+  });
+  $("#t-reset")?.addEventListener("click", () => {
+    target = null;
+    saveTarget();
+    const map = { ...(store.get("lastModel", {}) || {}) };
+    if (targetDefault) delete map[modelMemKey(targetDefault.kind, targetDefault.machine)];
+    store.set("lastModel", map);
+    renderTarget();
+  });
   const targetNow = () => {
     const d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
     const t = { ...d };
@@ -848,9 +1038,20 @@
   });
 
   bindComposer($("#super-composer"), $("#super-input"), async (text) => {
-    // Only what was picked here goes along; the hub fills in its current defaults.
-    const t = targetNow(), p = target || {};
-    const { model, effort } = modelNow(t);
+    // Send whatever differs from Settings defaults (including remembered model/computer choices).
+    const t = targetNow(), p = target || {}, d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
+    let ms = runnableMachines(t.machine);
+    if (ms.length && !ms.some((m) => m.id === t.machine)) t.machine = ms[0].id;
+    const have = ms.find((m) => m.id === t.machine)?.agents;
+    if (Array.isArray(have) && have.length && !have.includes(t.kind)) {
+      const fb = ["codex", "claude", "agy"].find((k) => have.includes(k));
+      if (fb) t.kind = fb;
+    }
+    const { model, effort, d: md } = modelNow(t);
+    const sendMachine = ("machine" in p || t.machine !== d.machine) ? (t.machine || "local") : "";
+    const sendKind = ("kind" in p || t.kind !== d.kind) ? t.kind : "";
+    const sendModel = ("model" in p || sendKind || model !== md.model) ? model : "";
+    const sendEffort = ("effort" in p || sendKind || effort !== md.effort) ? effort : "";
     const re = replyTo;
     setReply(null);
     // Your message shows at once; the hub's copy takes its place when it arrives.
@@ -860,10 +1061,10 @@
     let r;
     try {
       r = await api("/api/super/say", { body: { text, re: re?.entry || "",
-      machine: "machine" in p ? (t.machine || "local") : "",
-      kind: "kind" in p ? t.kind : "",
-      model: "model" in p || "kind" in p ? model : "",
-      effort: "effort" in p || "kind" in p ? effort : "" } });
+      machine: sendMachine,
+      kind: sendKind,
+      model: sendModel,
+      effort: sendEffort } });
     } catch (err) {
       pendingSays.splice(pendingSays.indexOf(mine), 1);
       if (re && !replyTo) setReply(sup.entries.find((x) => x.id === re.entry));
@@ -1140,14 +1341,25 @@
   // Fills a model picker and its effort picker from what that agent offers.
   async function fillModels(form, who) {
     const kindSel = form[who + "_kind"], modelSel = form[who + "_model"], effSel = form[who + "_effort"];
-    const machine = who === "worker" && form.worker_machine ? form.worker_machine.value : "";
+    const kShort = kindSel.value === "antigravity" ? "agy" : kindSel.value;
+    let machine = "";
+    if (who === "worker" && form.worker_machine) {
+      machine = form.worker_machine.value;
+    } else if (who === "router") {
+      machine = form.router_machine ? form.router_machine.value : "";
+      if (!machine) {
+        const ms = runnableMachines();
+        machine = ms.find((m) => !m.agents || m.agents.includes(kShort))?.id || ms[0]?.id || "";
+      }
+    }
     const want = modelSel.dataset.value ?? modelSel.value, wantEff = effSel.dataset.value ?? effSel.value;
     modelSel.innerHTML = `<option value="">读取中…</option>`;
-    const info = await modelsFor(kindSel.value, machine);
+    syncPick(modelSel);
+    const info = await modelsFor(kShort, machine);
     const list = [...(info.models || [])];
     if (want && !list.some((m) => m.id === want)) list.unshift({ id: want });
     const sub = (m) => [m.label && m.label !== m.id ? m.id : "", m.note && m.note !== m.id && !(m.label && m.note.startsWith(m.label)) ? m.note : ""].filter(Boolean).join(" · ");
-    modelSel.innerHTML = `<option value="" data-sub="${esc(info.default ? "现在是 " + info.default : "用 agent 自己的设置")}">默认</option>`
+    modelSel.innerHTML = `<option value="" data-sub="${esc(info.default ? "现在是 " + info.default : "用 agent 自己的设置")}">默认${info.default ? "（" + esc(info.default.split("/").pop()) + "）" : ""}</option>`
       + list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(sub(m))}" ${m.id === want ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("")
       + `<option value="__custom" data-sub="输入列表里没有的模型名">其他…</option>`;
     delete modelSel.dataset.value;
@@ -1155,12 +1367,14 @@
       const m = list.find((x) => x.id === modelSel.value);
       const effs = m?.efforts?.length ? m.efforts : (info.efforts || []);
       const cur = effSel.dataset.value ?? effSel.value;
-      effSel.innerHTML = `<option value="" data-sub="${esc(info.default_effort ? "现在是 " + (EFFORT_LABEL[info.default_effort] || info.default_effort) : "用 agent 自己的设置")}">默认</option>`
+      effSel.innerHTML = `<option value="" data-sub="${esc(info.default_effort ? "现在是 " + (EFFORT_LABEL[info.default_effort] || info.default_effort) : "用 agent 自己的设置")}">默认${info.default_effort ? "（" + esc(EFFORT_LABEL[info.default_effort] || info.default_effort) + "）" : ""}</option>`
         + effs.map((e) => `<option value="${esc(e)}" data-sub="${esc(e)}" ${e === cur ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
       delete effSel.dataset.value;
       effSel.disabled = effs.length === 0;
+      syncPick(effSel);
     };
     fillEffort();
+    syncPick(modelSel);
     modelSel.onchange = () => {
       if (modelSel.value === "__custom") {
         const v = (prompt("模型名（照 agent 的 --model 参数写）") || "").trim();
@@ -1168,6 +1382,7 @@
         else modelSel.value = "";
       }
       fillEffort();
+      syncPick(modelSel);
     };
   }
   function bindSettings(form) {
@@ -1175,23 +1390,37 @@
     form._bound = true;
     for (const who of ["router", "worker"]) {
       fillModels(form, who);
-      form[who + "_kind"].addEventListener("change", () => { form[who + "_model"].value = ""; form[who + "_effort"].value = ""; fillModels(form, who); });
+      form[who + "_kind"].addEventListener("change", () => {
+        const m = form[who + "_machine"] ? form[who + "_machine"].value : "";
+        const mem = getSavedModel(form[who + "_kind"].value, m);
+        form[who + "_model"].dataset.value = mem?.model || "";
+        form[who + "_effort"].dataset.value = mem?.effort || "";
+        fillModels(form, who);
+      });
     }
+    form.router_machine?.addEventListener("change", () => fillModels(form, "router"));
     form.worker_machine?.addEventListener("change", () => fillModels(form, "worker"));
   }
 
   function settingsHTML(r) {
     const s = r.settings;
-    const kindOpts = (v) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => `<option value="${k}" data-glyph="${g}" ${v === k ? "selected" : ""}>${l}</option>`).join("");
+    const kindOpts = (v, have) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => {
+      const missing = Array.isArray(have) && !have.includes(g);
+      return `<option value="${k}" data-glyph="${g}" ${missing ? 'data-sub="所选电脑未安装"' : ""} ${missing && v !== k ? "disabled" : ""} ${v === k ? "selected" : ""}>${l}</option>`;
+    }).join("");
     const modelPick = (who, model, effort) => `
           <label>模型<select name="${who}_model" data-title="模型" data-value="${esc(model || "")}"><option value="${esc(model || "")}" selected>${esc(model || "默认")}</option></select></label>
           <label>思考强度<select name="${who}_effort" data-title="思考强度" data-value="${esc(effort || "")}"><option value="${esc(effort || "")}" selected>${esc(EFFORT_LABEL[effort] || effort || "默认")}</option></select></label>`;
-    const many = (state.machines || []).length > 1;
+    const rMachines = runnableMachines(s.router_machine || "");
+    const wMachines = runnableMachines(s.worker_machine || "");
+    const showRM = rMachines.length > 1 || (state.machines || []).some((m) => !m.local);
+    const showWM = wMachines.length > 1 || (state.machines || []).some((m) => !m.local);
     setTimeout(() => bindSettings($("#settings-form")));
     return `<form class="settings" id="settings-form">
       <section class="card set-sec">
-        <header><h4>Collie 自己</h4><p>只负责理解、分派和回复，轻量快速的模型就够。它在 <code>${esc(tilde(r.router_dir))}</code> 里工作：ROUTER.md 是操作手册，memory/ 是长期记忆。</p></header>
-        <div class="set-grid three">
+        <header><h4>Collie 自己</h4><p>负责和你对话、理解意图、拆解任务与回报结果。记忆保存在 <code>${esc(tilde(r.router_dir))}</code>（ROUTER.md 是操作手册，memory/ 是长期记忆，运行在其他电脑上时自动同步）。</p></header>
+        <div class="set-grid ${showRM ? "" : "three"}">
+          ${showRM ? `<label>运行电脑<select name="router_machine" data-title="Collie 自己运行在哪台电脑"><option value="" data-sub="优先选装了对应 agent 的在线电脑" ${!(s.router_machine || "") ? "selected" : ""}>自动选择</option>${rMachines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.router_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
           <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${kindOpts(s.router_kind)}</select></label>
           ${modelPick("router", s.router_model, s.router_effort)}
         </div>
@@ -1201,14 +1430,14 @@
       </section>
 
       <section class="card set-sec">
-        <header><h4>派活默认</h4><p>Collie 派 agent 干活时默认这样启动；你说「用 Codex…」「在 Mac 上…」时它会自己换。</p></header>
+        <header><h4>派活默认</h4><p>Collie 派 agent 干活时默认这样启动；在聊天框底部选择，或直接对它说「用 Codex…」「在 Mac 上…」时都会按你指定的来。</p></header>
         <div class="set-grid three">
           <label>Agent<select name="worker_kind" data-title="派活默认用">${kindOpts(s.worker_kind)}</select></label>
           ${modelPick("worker", s.worker_model, s.worker_effort)}
         </div>
         <div class="set-grid three">
-          ${many ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${state.machines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
-          <label class="${many ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}"></label>
+          ${showWM ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${wMachines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
+          <label class="${showWM ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}"></label>
         </div>
       </section>
 
@@ -1262,6 +1491,7 @@
         const cur = (await api("/api/super/settings")).settings;
         const s = {
           ...cur,
+          router_machine: f.router_machine ? f.router_machine.value : (cur.router_machine || ""),
           router_kind: f.router_kind.value, router_args: f.router_args.value.split(/\s+/).filter(Boolean),
           router_model: f.router_model.value === "__custom" ? "" : f.router_model.value, router_effort: f.router_effort.value,
           worker_kind: f.worker_kind.value, worker_cwd: f.worker_cwd.value,
@@ -1272,10 +1502,13 @@
           notify_webhook: f.notify_webhook.value.trim(), notify_lark: f.notify_lark.checked, notify_level: f.notify_level.value, paused: f.paused.checked,
           ask_permissions: !f.bypass.checked,
         };
-        await api("/api/super/settings", { body: { settings: s } });
+        saveLastModel(s.router_kind, s.router_machine, s.router_model, s.router_effort);
+        saveLastModel(s.worker_kind, s.worker_machine, s.worker_model, s.worker_effort);
+        const relaunch = s.router_machine !== (cur.router_machine || "") || s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ") || s.ask_permissions !== !!cur.ask_permissions;
+        const shouldRestart = relaunch && !!(sup.router?.alive || sup.router?.status === "failed");
+        const res = await api("/api/super/settings", { body: { settings: s, restart: shouldRestart } });
         renderTarget(true);
-        const relaunch = s.router_kind !== cur.router_kind || s.router_model !== (cur.router_model || "") || s.router_effort !== (cur.router_effort || "") || s.router_args.join(" ") !== (cur.router_args || []).join(" ") || s.ask_permissions !== !!cur.ask_permissions;
-        toast(relaunch ? "已保存。Collie 自己的启动设置在重启 Collie 后生效" : "已保存");
+        toast(res.restarted ? "已保存，Collie 正在用新配置重启" : "已保存");
       }
     } catch (err) { toast(err.message, "attn"); }
   });
@@ -1436,7 +1669,7 @@
     renderHist();
     location.hash = "#/";
   });
-  const extName = (e) => e.title || (e.cwd ? e.cwd.split(/[\\/]/).filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
+  const extName = (e) => e.title || (e.cwd ? cleanPath(e.cwd).split(/[\\/]/).filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
   // The sidebar, by what you need: what is going on now (herdr agents, yours
   // and Collie's, and other apps' running sessions), then what you did lately
   // (other apps' resting conversations and ended herdr sessions, merged).
@@ -2896,6 +3129,10 @@
         await api(`/api/workspaces/${encodeURIComponent(v.workspace_id)}/close`, { method: "POST", body: {} });
         location.hash = "#/";
       }
+      if (act === "router-cfg") {
+        if (view !== "collie") location.hash = "#/collie";
+        toggleRouterPop(true);
+      }
       if (act === "router-open") {
         const p = paneOf(ROUTER);
         if (p) location.hash = "#/p/" + encodeURIComponent(p); else toast("Collie 还在休眠；发一条消息就会唤醒它");
@@ -2938,13 +3175,17 @@
     const info = await modelsFor(kind, pickMachine);
     if (seq !== launchSeq) return;
     const same = keep.key === kind + "@" + pickMachine;
+    const mem = getSavedModel(kind, pickMachine);
     mSel._key = kind + "@" + pickMachine;
-    const list = info.models || [];
+    const list = [...(info.models || [])];
+    const wantModel = same ? keep.model : (mem?.model || "");
+    const wantEffort = same ? keep.effort : (mem?.effort || "");
+    if (wantModel && !list.some((m) => m.id === wantModel)) list.unshift({ id: wantModel });
     const def = info.default ? info.default.split("/").pop() : "";
     mSel.innerHTML = `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default : "agent 自己的设置")}">默认${def ? "（" + esc(def) + "）" : ""}</option>` +
       list.map((m) => `<option value="${esc(m.id)}" data-sub="${esc(m.label && m.label !== m.id ? m.id : "")}">${esc(m.label || m.id)}</option>`).join("");
-    mSel.value = same && list.some((m) => m.id === keep.model) ? keep.model : "";
-    fillLaunchEfforts(info, same ? keep.effort : "");
+    mSel.value = wantModel && list.some((m) => m.id === wantModel) ? wantModel : "";
+    fillLaunchEfforts(info, wantEffort);
     syncPick(mSel);
   }
   function fillLaunchEfforts(info, want) {
@@ -2959,12 +3200,18 @@
     syncPick(eSel);
   }
   $("#l-model").addEventListener("change", async () => {
-    fillLaunchEfforts(await modelsFor($("input[name=kind]:checked").value, pickMachine), $("#l-effort").value);
+    const kind = $("input[name=kind]:checked").value;
+    await fillLaunchEfforts(await modelsFor(kind, pickMachine), $("#l-effort").value);
+    saveLastModel(kind, pickMachine, $("#l-model").value, $("#l-effort").value);
+  });
+  $("#l-effort").addEventListener("change", () => {
+    const kind = $("input[name=kind]:checked").value;
+    saveLastModel(kind, pickMachine, $("#l-model").value, $("#l-effort").value);
   });
   let pickMachine = "";
   const recentKey = () => "recentDirs" + (pickMachine ? ":" + pickMachine : "");
   function renderMachinePick() {
-    const ms = (state.machines || []).filter((m) => m.local ? state.ok : m.online);
+    const ms = runnableMachines();
     $("#l-machine-field").hidden = ms.length < 2;
     if (!ms.some((m) => m.id === pickMachine)) pickMachine = ms[0]?.id || "";
     $("#l-machines").innerHTML = ms.map((m) => `<button type="button" class="${m.id === pickMachine ? "on" : ""}" data-m="${esc(m.id)}">
@@ -3075,6 +3322,8 @@
     try {
       const r = await api("/api/agents", { body });
       store.set("kind", body.kind);
+      store.set("machine", pickMachine);
+      if (!shell) saveLastModel(body.kind, pickMachine, body.model, body.effort);
       store.set(recentKey(), [body.cwd, ...store.get(recentKey(), []).filter((d) => d !== body.cwd)].slice(0, 8));
       sheet.close();
       if (r.warning) toast(r.warning, "attn");

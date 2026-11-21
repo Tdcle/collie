@@ -30,6 +30,43 @@ func TestProgName(t *testing.T) {
 	}
 }
 
+func TestIsDesktopOrHelperProc(t *testing.T) {
+	desktopOrHelpers := []struct {
+		kind string
+		args []string
+	}{
+		{"codex", []string{`C:\Program Files\WindowsApps\OpenAI.Codex_26.311.21342.0_x64__2p2nqsd0c76g0\app\Codex.exe`}},
+		{"codex", []string{`C:\Program Files\WindowsApps\OpenAI.Codex_26.311.21342.0_x64__2p2nqsd0c76g0\app\resources\codex.exe`, "app-server"}},
+		{"codex", []string{`C:\Users\26422\AppData\Local\Programs\Codex\Codex.exe`, "--type=renderer"}},
+		{"codex", []string{"/Applications/Codex.app/Contents/MacOS/Codex"}},
+		{"claude", []string{"/Applications/Claude.app/Contents/MacOS/Claude"}},
+		{"codex", []string{"codex", "mcp-server"}},
+		{"codex", []string{"codex", "exec", "fix bug"}},
+		{"claude", []string{"claude", "--output-format", "stream-json"}},
+	}
+	for _, tc := range desktopOrHelpers {
+		if !isDesktopOrHelperProc(tc.kind, tc.args) {
+			t.Errorf("expected desktop/helper filter to exclude (%s, %v)", tc.kind, tc.args)
+		}
+	}
+
+	interactiveCLIs := []struct {
+		kind string
+		args []string
+	}{
+		{"codex", []string{`C:\Users\26422\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js`}},
+		{"claude", []string{`C:\Users\26422\.local\bin\claude.exe`, "--resume", "abc"}},
+		{"codex", []string{"/opt/homebrew/bin/codex", "-m", "gpt-5.4"}},
+		{"claude", []string{"/Users/alice/.local/bin/claude"}},
+	}
+	for _, tc := range interactiveCLIs {
+		if isDesktopOrHelperProc(tc.kind, tc.args) {
+			t.Errorf("expected interactive CLI to remain visible: (%s, %v)", tc.kind, tc.args)
+		}
+	}
+}
+
+
 // COLLIE_EXTERNAL=1 go test -run TestExternalLive -v prints what this machine finds.
 func TestExternalLive(t *testing.T) {
 	if os.Getenv("COLLIE_EXTERNAL") == "" {

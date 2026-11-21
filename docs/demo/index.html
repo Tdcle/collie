@@ -110,7 +110,7 @@
       <header class="d-head">
         <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
         <div class="d-title">
-          <div class="d-name">Collie <span class="kind" id="router-kind"></span></div>
+          <div class="d-name">Collie <button type="button" class="router-pill" id="router-cfg-btn" title="点这里切换 Collie 自己运行在哪台电脑、用什么模型"><span id="router-kind"></span><span class="rp-sep" id="router-where-sep" hidden>·</span><span id="router-where" hidden></span><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button></div>
           <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
         </div>
         <div class="menu-wrap">
@@ -118,14 +118,36 @@
             <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
           </button>
           <div class="menu" id="collie-menu" hidden>
+            <button data-act="router-cfg">切换 Collie 的模型与电脑</button>
             <button data-act="router-open">查看 Collie 的终端</button>
             <button data-act="router-restart">重启 Collie</button>
             <button data-act="pause">暂停投递</button>
             <hr>
-            <button data-act="auto">自动化与设置</button>
+            <button data-act="auto">自动化与全部设置</button>
           </div>
         </div>
       </header>
+
+      <div class="router-pop" id="router-pop" hidden>
+        <form id="router-quick-form">
+          <div class="rp-head">
+            <b>Collie 自己（大脑与总管）</b>
+            <span>负责和你对话、理解意图、拆活与汇报；保存后立即生效。</span>
+          </div>
+          <div class="rp-grid">
+            <label id="rq-machine-wrap">运行电脑<select name="router_machine" data-title="Collie 自己运行在哪台电脑"></select></label>
+            <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent"></select></label>
+            <label>模型<select name="router_model" data-title="Collie 自己用的模型"></select></label>
+            <label>思考强度<select name="router_effort" data-title="思考强度"></select></label>
+          </div>
+          <div class="rp-foot">
+            <label class="rp-sync"><input type="checkbox" name="sync_worker"> 顺便同步为「派活默认」</label>
+            <span class="spacer"></span>
+            <button type="button" class="btn small" id="rq-cancel">取消</button>
+            <button type="submit" class="btn primary small" id="rq-save">保存并生效</button>
+          </div>
+        </form>
+      </div>
 
       <div class="crew" id="crew"></div>
 
@@ -141,11 +163,12 @@
           <div class="cbar">
             <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
             <div class="chips">
-            <span class="cbar-label" title="Collie 把这条消息里的活派给谁：哪台电脑、哪个 agent、什么模型。Collie 自己用的模型显示在页面顶部">派活</span>
-            <select id="t-machine" data-pick="chip" data-title="这次在哪台电脑上做" title="这次在哪台电脑上做"></select>
-            <select id="t-kind" data-pick="chip" data-title="这次派哪个 agent" title="这次派哪个 agent"></select>
-            <select id="t-model" data-pick="chip" data-title="这次用哪个模型" title="这次用哪个模型"></select>
+            <span class="cbar-label" id="cbar-label" title="Collie 派出去执行具体任务时使用的电脑、agent 和模型（会自动记住上次选择）。想改 Collie 自己对话用的模型，点顶部标题旁边的按钮">执行任务</span>
+            <select id="t-machine" data-pick="chip" data-title="执行任务的电脑" title="执行任务的电脑"></select>
+            <select id="t-kind" data-pick="chip" data-title="执行任务的 agent" title="执行任务的 agent"></select>
+            <select id="t-model" data-pick="chip" data-title="执行任务的模型" title="执行任务的模型"></select>
             <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
+            <button type="button" class="chip-reset" id="t-reset" hidden title="恢复为默认设置">恢复默认</button>
             </div>
             <span class="spacer"></span>
             <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>

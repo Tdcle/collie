@@ -118,12 +118,62 @@ var shells = map[string]bool{
 	"powershell": true, "pwsh": true, "cmd": true, "conhost": true, "openconsole": true,
 }
 
+var guiHostProcs = map[string]bool{
+	"chatgpt": true, "sihost": true, "svchost": true, "runtimebroker": true, "applicationframehost": true,
+}
+
+// isDesktopOrHelperProc reports whether an executable/command line belongs to a
+// desktop GUI app (Electron/MSIX/Squirrel/.app) or a non-interactive daemon
+// rather than an interactive terminal agent CLI.
+func isDesktopOrHelperProc(kind string, args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	exe := strings.ToLower(strings.ReplaceAll(args[0], `\`, "/"))
+	switch {
+	case strings.Contains(exe, "/windowsapps/openai.codex"),
+		strings.Contains(exe, "/windowsapps/anthropic"),
+		strings.Contains(exe, "/appdata/local/anthropicclaude/"),
+		strings.Contains(exe, "/appdata/local/programs/claude/"),
+		strings.Contains(exe, "/appdata/local/programs/antigravity/antigravity.exe"),
+		strings.Contains(exe, "/programs/antigravity/antigravity.exe"),
+		strings.Contains(exe, ".app/contents/macos/"),
+		strings.Contains(exe, ".app/contents/frameworks/"):
+		return true
+	}
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		al := strings.ToLower(a)
+		switch {
+		case strings.HasPrefix(al, "--type="), // Electron / Chromium helper process
+			strings.HasPrefix(al, "--utility-sub-type="),
+			strings.HasPrefix(al, "--squirrel-"),
+			strings.HasPrefix(al, "-psn_"):
+			return true
+		case kind == "codex" && (a == "app-server" || a == "mcp-server" || a == "exec" || a == "cloud" || a == "completion"):
+			return true
+		case kind == "claude" && (a == "-p" || a == "--print" || a == "--output-format" || strings.HasPrefix(a, "--output-format=") || a == "mcp"):
+			return true
+		case a == "--version" || a == "-v" || a == "-V" || a == "--help" || a == "-h":
+			return true
+		}
+	}
+	return false
+}
+
 // terminalApp names what an agent process runs in, from its ancestors.
 func terminalApp(ps map[int]*proc, p *proc) (app string, inHerdr bool) {
+	sawShell := false
 	for q, n := ps[p.ppid], 0; q != nil && n < 30; q, n = ps[q.ppid], n+1 {
 		name := strings.ToLower(q.name)
 		if strings.HasPrefix(name, "herdr") {
 			return "", true
+		}
+		if shells[name] {
+			sawShell = true
+		}
+		if guiHostProcs[name] && !sawShell {
+			return "", true // desktop app host (e.g. ChatGPT / MSIX), listed by desktopSessions
 		}
 		if app == "" && !shells[name] && externalKinds[name] == "" {
 			app = q.name
@@ -132,6 +182,10 @@ func terminalApp(ps map[int]*proc, p *proc) (app string, inHerdr bool) {
 				app = "SSH"
 			case strings.HasPrefix(name, "tmux"):
 				app = "tmux"
+			case strings.HasPrefix(name, "cursor"):
+				app = "Cursor"
+			case strings.HasPrefix(name, "windsurf"):
+				app = "Windsurf"
 			case strings.HasPrefix(name, "code") || strings.Contains(name, "electron"):
 				app = "VS Code"
 			case name == "iterm2":
@@ -176,11 +230,11 @@ func (s *Server) externalSessions() []*External {
 	var cands []*proc
 	for _, p := range ps {
 		kind := externalKinds[p.name]
-		if kind == "" || p.tty == "" || strings.HasPrefix(p.tty, "?") {
+		if kind == "" || p.tty == "" || strings.HasPrefix(p.tty, "?") || isDesktopOrHelperProc(kind, p.args) {
 			continue
 		}
 		// One agent can be a wrapper plus its real process; keep the outer one.
-		if parent := ps[p.ppid]; parent != nil && externalKinds[parent.name] == kind {
+		if parent := ps[p.ppid]; parent != nil && externalKinds[parent.name] == kind && !isDesktopOrHelperProc(kind, parent.args) {
 			continue
 		}
 		cands = append(cands, p)
@@ -219,9 +273,23 @@ func (s *Server) externalSessions() []*External {
 		if cwd == "" && regOf[p.pid] != nil {
 			cwd = regOf[p.pid].Cwd
 		}
+		if isWindowsPath(cwd) {
+			cwd = winClean(cwd)
+		}
+		if strings.Contains(strings.ToLower(strings.ReplaceAll(cwd, `\`, "/")), "/windowsapps/") {
+			continue // MSIX package working directory: desktop app, not a user terminal
+		}
 		e := &External{ID: fmt.Sprintf("%s-%d", kind, p.pid), Kind: kind, PID: p.pid, Cwd: cwd, App: app, Started: now.Add(-p.age), Live: true}
 		s.locateExternal(e, p)
 		e.reg = regOf[p.pid]
+		// On Windows, Toolhelp32 cannot distinguish a hidden daemon/GUI helper
+		// from a console process by POSIX tty alone. If a process has been up
+		// for over 2 minutes with no transcript, session id, or registration,
+		// and isn't inside a known terminal app, skip the empty ghost entry.
+		if p.tty == "console" && e.path == "" && e.Session == "" && e.reg == nil && p.age > 2*time.Minute &&
+			app != "Windows Terminal" && app != "WezTerm" && app != "Alacritty" && app != "Git Bash" && app != "VS Code" && app != "Cursor" && app != "Windsurf" && app != "SSH" {
+			continue
+		}
 		s.reachable(e)
 		if e.path != "" {
 			if fi, err := os.Stat(e.path); err == nil {

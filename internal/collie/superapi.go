@@ -51,10 +51,11 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 // ---------------------------------------------------------------- snapshot
 
 type routerView struct {
-	Alive  bool   `json:"alive"`
-	Status string `json:"status"`
-	PaneID string `json:"pane_id,omitempty"`
-	Kind   string `json:"kind"`
+	Alive   bool   `json:"alive"`
+	Status  string `json:"status"`
+	PaneID  string `json:"pane_id,omitempty"`
+	Kind    string `json:"kind"`
+	Machine string `json:"machine,omitempty"`
 	// How full its context is (percent), and when it rotates to a fresh session.
 	Context  int  `json:"context,omitempty"`
 	RotateAt int  `json:"rotate_at"`
@@ -83,9 +84,10 @@ func (s *Server) superState(ctx context.Context) superView {
 	live, _ := sp.liveAgents(ctx)
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	v := superView{Router: routerView{Kind: sp.st.Settings.RouterKind, Status: "asleep"}, Paused: sp.st.Settings.Paused}
+	v := superView{Router: routerView{Kind: sp.st.Settings.RouterKind, Machine: sp.st.Settings.RouterMachine, Status: "asleep"}, Paused: sp.st.Settings.Paused}
 	if a, ok := live[routerName]; ok {
-		v.Router = routerView{Alive: true, Status: a.Status, PaneID: a.Pane, Kind: a.Kind}
+		_, rm := split(a.Pane)
+		v.Router = routerView{Alive: true, Status: a.Status, PaneID: a.Pane, Kind: a.Kind, Machine: rm}
 	} else if sp.routerLaunching {
 		v.Router.Status = "starting"
 	}
@@ -95,7 +97,10 @@ func (s *Server) superState(ctx context.Context) superView {
 	v.Router.Model, v.Router.Effort = st.RouterModel, st.RouterEffort
 	if run := sp.routerRunLocked(); run != nil && v.Router.Alive {
 		v.Router.Model, v.Router.Effort = run[0], run[1]
-		v.Router.Pending = *run != [2]string{st.RouterModel, st.RouterEffort} || kinds[v.Router.Kind] != kinds[st.RouterKind]
+		wantM := st.RouterMachine
+		v.Router.Pending = *run != [2]string{st.RouterModel, st.RouterEffort} ||
+			kinds[v.Router.Kind] != kinds[st.RouterKind] ||
+			(wantM != "" && v.Router.Machine != wantM)
 	}
 	if sp.dream != nil {
 		v.Router.Status = "dreaming"
@@ -188,20 +193,71 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
 	}
 	st := sp.st.Settings
-	var hint []string
-	if m := s.machineByName(body.Machine); m != "" || body.Machine == "local" {
-		if m != st.WorkerMachine {
-			name := "hub"
-			if m != "" {
-				name = m
-			}
-			hint = append(hint, "--machine "+name)
-		}
-	}
+	pickedM := s.machineByName(body.Machine)
+	pickedLocal := body.Machine == "local" || body.Machine == "hub"
 	if body.Kind == "agy" { // the composer's name for it
 		body.Kind = "antigravity"
 	}
 	_, known := kinds[body.Kind]
+
+	// First-wake auto-adoption: if Collie itself has never replied yet (or its
+	// currently configured machine/agent cannot run) and the human explicitly
+	// picked a machine/agent/model in the composer, adopt that choice so Collie
+	// wakes with what the human actually picked instead of failing on defaults.
+	neverReplied := true
+	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+		if sp.st.Entries[i].Role == "collie" {
+			neverReplied = false
+			break
+		}
+	}
+	if !sp.routerLaunching && (neverReplied || func() bool { _, _, err := sp.resolveRouterTarget(st); return err != nil }()) {
+		changed := false
+		if pickedM != "" || pickedLocal {
+			if st.RouterMachine != pickedM {
+				st.RouterMachine = pickedM
+				changed = true
+			}
+			if st.WorkerMachine != pickedM {
+				st.WorkerMachine = pickedM
+				if pickedM != "" && (st.WorkerCwd == "" || st.WorkerCwd == s.home) {
+					st.WorkerCwd = "~"
+				}
+				changed = true
+			}
+		}
+		if known && kinds[body.Kind] != kinds[st.RouterKind] {
+			st.RouterKind = body.Kind
+			st.RouterModel = ""
+			st.RouterEffort = ""
+			if m := strings.TrimSpace(body.Model); m != "" && modelNameRe.MatchString(m) {
+				st.RouterModel = m
+			}
+			if ef := strings.TrimSpace(body.Effort); ef != "" && modelNameRe.MatchString(ef) {
+				st.RouterEffort = ef
+			}
+			changed = true
+		}
+		if known && kinds[body.Kind] != kinds[st.WorkerKind] {
+			st.WorkerKind = body.Kind
+			changed = true
+		}
+		if changed {
+			sp.st.Settings = st
+			sp.routerLaunchAt = time.Time{} // retry right away instead of waiting out the 45s backoff
+		}
+	}
+
+	var hint []string
+	if pickedM != "" || pickedLocal {
+		if pickedM != st.WorkerMachine {
+			name := "hub"
+			if pickedM != "" {
+				name = pickedM
+			}
+			hint = append(hint, "--machine "+name)
+		}
+	}
 	if known && kinds[body.Kind] != kinds[st.WorkerKind] {
 		hint = append(hint, "--kind "+body.Kind)
 	}
@@ -666,13 +722,15 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Settings *Settings `json:"settings"`
 		Policies []Policy  `json:"policies"`
+		Restart  bool      `json:"restart"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	sp := s.sup
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
+	old := sp.st.Settings
+	routerChanged := false
 	if body.Settings != nil {
 		ns := *body.Settings
 		if _, ok := kinds[ns.RouterKind]; !ok {
@@ -703,12 +761,22 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 		} else if ns.RotatePct < 0 {
 			ns.RotatePct = -1
 		}
+		ns.RouterMachine = s.machineByName(ns.RouterMachine)
 		ns.WorkerMachine = s.machineByName(ns.WorkerMachine)
 		if ns.WorkerMachine == "" {
 			// Paths on other computers are resolved there, against their home.
 			ns.WorkerCwd = s.expand(ns.WorkerCwd)
-		} else if ns.WorkerCwd == "" {
+		} else if ns.WorkerCwd == "" || ns.WorkerCwd == s.home {
 			ns.WorkerCwd = "~"
+		}
+		routerChanged = kinds[ns.RouterKind] != kinds[old.RouterKind] ||
+			ns.RouterMachine != old.RouterMachine ||
+			ns.RouterModel != old.RouterModel ||
+			ns.RouterEffort != old.RouterEffort ||
+			strings.Join(ns.RouterArgs, " ") != strings.Join(old.RouterArgs, " ") ||
+			ns.AskPermissions != old.AskPermissions
+		if routerChanged {
+			sp.routerLaunchAt = time.Time{}
 		}
 		sp.st.Settings = ns
 	}
@@ -722,14 +790,20 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 		sp.st.Policies = valid
 	}
 	sp.changed()
+	settingsOut := sp.st.Settings
+	policiesOut := sp.st.Policies
+	sp.mu.Unlock()
 	if body.Settings != nil {
-		go func() { // ROUTER.md quotes some settings (reply length, where workers go)
+		go func(doRestart bool) { // ROUTER.md quotes some settings (reply length, where workers go)
 			if err := sp.writeRouterFiles(); err != nil {
 				log.Printf("router files: %v", err)
 			}
-		}()
+			if doRestart {
+				_ = sp.RestartRouter(context.Background())
+			}
+		}(body.Restart && routerChanged)
 	}
-	writeJSON(w, 200, map[string]any{"settings": sp.st.Settings, "policies": sp.st.Policies})
+	writeJSON(w, 200, map[string]any{"settings": settingsOut, "policies": policiesOut, "restarted": body.Restart && routerChanged})
 }
 
 func (s *Server) superRestartRouter(w http.ResponseWriter, r *http.Request) {

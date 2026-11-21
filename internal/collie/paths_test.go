@@ -109,3 +109,22 @@ func TestWindowsHelpers(t *testing.T) {
 		t.Errorf("releaseAssetFor linux = %q", got)
 	}
 }
+
+func TestWindowsExtendedPathPrefixStripping(t *testing.T) {
+	if got := winClean(`\\?\C:\Users\26422\Documents\Code\my-app\`); got != `C:\Users\26422\Documents\Code\my-app` {
+		t.Fatalf("winClean extended drive path = %q", got)
+	}
+	if got := winClean(`\\?\UNC\server\share\folder\`); got != `\\server\share\folder` {
+		t.Fatalf("winClean extended UNC path = %q", got)
+	}
+	if got := tildeIn(`C:\Users\26422`, `\\?\C:\Users\26422\Documents\Code`); got != `~\Documents\Code` {
+		t.Fatalf("tildeIn extended path = %q", got)
+	}
+	if !samePath(`\\?\C:\Users\26422\Documents\Code`, `C:\Users\26422\Documents\Code\`) {
+		t.Fatalf("samePath should match extended and regular Windows paths")
+	}
+	if got := baseOfPath(`\\?\C:\Users\26422\Documents\Code\`); got != "Code" {
+		t.Fatalf("baseOfPath extended = %q", got)
+	}
+}
+

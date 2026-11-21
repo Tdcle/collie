@@ -2,9 +2,11 @@ package collie
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +27,7 @@ const (
 
 type dreamRun struct {
 	at        time.Time
+	machine   string
 	started   bool // the dream session is up and has its prompt
 	worked    bool
 	idleAt    time.Time
@@ -135,8 +138,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 		return errors.New("Collie 正在整理记忆")
 	}
 	sp.dream = &dreamRun{at: time.Now(), reason: reason}
-	kind := sp.st.Settings.RouterKind
-	args := sp.routerArgsLocked()
+	st := sp.st.Settings
 	sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
 	sp.mu.Unlock()
 
@@ -150,6 +152,24 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 			sp.addEntryLocked("event", mainThread, "整理记忆没能开始："+err.Error(), "", "error")
 			sp.mu.Unlock()
 		}
+		targetMachine, kind, resolveErr := sp.resolveRouterTarget(st)
+		if resolveErr != nil {
+			fail(resolveErr)
+			return
+		}
+		machineID := targetMachine.ID
+		sp.mu.Lock()
+		if sp.dream != nil {
+			sp.dream.machine = machineID
+		}
+		model, effort := sp.st.Settings.RouterModel, sp.st.Settings.RouterEffort
+		if kinds[kind] != kinds[sp.st.Settings.RouterKind] {
+			model, effort = "", ""
+		}
+		args := append(append([]string{}, sp.st.Settings.RouterArgs...), modelArgs(kind, model, effort)...)
+		args = withBypass(args, kind, sp.st.Settings.AskPermissions)
+		sp.mu.Unlock()
+
 		// Collie's current session ends here; its log is part of what gets reviewed.
 		if live, ok := sp.liveAgents(bg); ok {
 			if a, ok := live[routerName]; ok && a.Session != "" {
@@ -157,21 +177,37 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 				if k == "antigravity" {
 					k = "agy"
 				}
-				sp.s.remember(&Ended{Kind: k, Cwd: sp.routerDir(), Name: routerName, Session: a.Session, Ended: time.Now(),
+				_, rm := split(a.Pane)
+				cwd := sp.routerDir()
+				if rm != "" {
+					_, _ = sp.pullRouterFromNode(bg, rm, "", "", "", 0)
+					if mc, err := sp.s.herdr.machine(rm); err == nil {
+						cwd = sp.routerDirOn(mc)
+					}
+				}
+				sp.s.remember(&Ended{Kind: k, Machine: rm, Cwd: cwd, Name: routerName, Session: a.Session, Ended: time.Now(),
 					Title: "Collie · 做梦前的会话（" + time.Now().Format("01-02 15:04") + "）"})
 			}
 		}
 		sp.closeWorkspaces(bg, routerLabel)
 		sp.closeWorkspaces(bg, dreamLabel)
-		if err := sp.writeRouterFiles(); err != nil {
+		if err := sp.writeRouterFilesFor(targetMachine); err != nil {
 			log.Printf("router files: %v", err)
 		}
-		if err := sp.writeDreamInput(); err != nil {
+		if err := sp.writeDreamInput(bg); err != nil {
 			fail(err)
 			return
 		}
 		os.MkdirAll(filepath.Join(sp.routerDir(), "dreams"), 0o700)
-		if _, _, err := sp.s.startAgent(bg, "", kinds[kind], dreamName, sp.routerDir(), dreamLabel, args); err != nil {
+		rdir := sp.routerDir()
+		if machineID != "" {
+			var syncErr error
+			if rdir, syncErr = sp.pushRouterToNode(bg, machineID); syncErr != nil {
+				fail(syncErr)
+				return
+			}
+		}
+		if _, _, err := sp.s.startAgent(bg, machineID, kinds[kind], dreamName, rdir, dreamLabel, args); err != nil {
 			var he *HerdrError
 			if !(errors.As(err, &he) && he.Code == "agent_not_ready") {
 				fail(err)
@@ -179,7 +215,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 			}
 		}
 		prompt := strings.ReplaceAll(dreamPrompt, "{{DATE}}", time.Now().Format("2006-01-02"))
-		prompt = strings.ReplaceAll(prompt, "{{BIN}}", shellBin(sp.bin))
+		prompt = strings.ReplaceAll(prompt, "{{BIN}}", shellBin(sp.routerBinOn(targetMachine)))
 		migrate := ""
 		if sp.legacyMemory() {
 			migrate = "\nFirst: " + migrateNote + "\n"
@@ -253,6 +289,9 @@ func (sp *Super) driveDream(ctx context.Context, d *dreamRun, live map[string]li
 }
 
 func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
+	if d.machine != "" {
+		_, _ = sp.pullRouterFromNode(ctx, d.machine, "", "", "", 0)
+	}
 	sp.closeWorkspaces(ctx, dreamLabel)
 	summary, skills := "", ""
 	if ok {
@@ -327,14 +366,14 @@ func (sp *Super) closeWorkspaces(ctx context.Context, label string) {
 		return
 	}
 	for _, ws := range wss {
-		if _, m := split(ws.ID); ws.Label == label && m == "" {
+		if ws.Label == label {
 			sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": ws.ID}, nil)
 		}
 	}
 }
 
 // writeDreamInput condenses what happened since the last dream into dream/input.md.
-func (sp *Super) writeDreamInput() error {
+func (sp *Super) writeDreamInput(ctx context.Context) error {
 	since := sp.lastDream()
 	var b strings.Builder
 	fmt.Fprintf(&b, "# What happened since the last dream (%s)\n\n", func() string {
@@ -377,15 +416,32 @@ func (sp *Super) writeDreamInput() error {
 	const budget = 240 << 10
 	var parts []string
 	for _, h := range sess {
-		path, format := sp.s.findTranscript(h.Kind, "id", h.Session, "", "")
-		if path == "" {
+		var msgs []*Message
+		if h.Machine != "" {
+			if client, err := sp.s.herdr.Client(h.Machine); err == nil {
+				q := "http://node/api/transcript?kind=" + h.Kind + "&session=" + h.Session
+				if req, err := http.NewRequestWithContext(ctx, "GET", q, nil); err == nil {
+					if resp, err := client.Do(req); err == nil {
+						var r struct {
+							Messages []*Message `json:"messages"`
+						}
+						json.NewDecoder(resp.Body).Decode(&r)
+						resp.Body.Close()
+						msgs = r.Messages
+					}
+				}
+			}
+		} else if path, format := sp.s.findTranscript(h.Kind, "id", h.Session, "", ""); path != "" {
+			tr := newTranscript(path, format)
+			tr.update()
+			msgs = tr.msgs
+		}
+		if len(msgs) == 0 {
 			continue
 		}
-		tr := newTranscript(path, format)
-		tr.update()
 		var p strings.Builder
 		fmt.Fprintf(&p, "\n### %s (ended %s)\n\n", h.Title, h.Ended.Format("01-02 15:04"))
-		for _, m := range tr.msgs {
+		for _, m := range msgs {
 			switch m.Kind {
 			case "user":
 				fmt.Fprintf(&p, "IN: %s\n\n", clip(m.Text, 1500))
