@@ -18,7 +18,11 @@ const (
 )
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
-	p := s.expand(r.URL.Query().Get("path"))
+	raw := r.URL.Query().Get("path")
+	if len(raw) >= 3 && raw[0] == '/' && isAlpha(raw[1]) && raw[2] == ':' {
+		raw = raw[1:] // "/C:/foo" from file:///C:/foo
+	}
+	p := s.expand(raw)
 	fi, err := os.Stat(p)
 	switch {
 	case os.IsNotExist(err):

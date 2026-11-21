@@ -26,6 +26,7 @@ var version = "dev"
 // Main runs the collie command with os.Args.
 func Main(v string) {
 	version = v
+	cleanupOldBinary()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "--version", "-v":
@@ -34,6 +35,10 @@ func Main(v string) {
 		}
 		if os.Args[1] == "node" {
 			runNode(os.Args[2:])
+			return
+		}
+		if os.Args[1] == "daemon" {
+			runDaemon(os.Args[2:])
 			return
 		}
 		if _, ok := cliCommands[os.Args[1]]; ok {
@@ -51,7 +56,7 @@ func serve() {
 	home, _ := os.UserHomeDir()
 	dir := collieDir()
 	addr := flag.String("addr", envOr("COLLIE_ADDR", "0.0.0.0:7788"), "listen address")
-	sock := flag.String("socket", envOr("HERDR_SOCKET_PATH", filepath.Join(home, ".config/herdr/herdr.sock")), "herdr API socket")
+	sock := flag.String("socket", defaultHerdrSocket(home), "herdr API socket")
 	token := flag.String("token", os.Getenv("COLLIE_TOKEN"), "access token (default: generated and stored in ~/.collie/token)")
 	publicURL := flag.String("url", os.Getenv("COLLIE_URL"), "address phones and computers should use, e.g. http://10.0.0.5:7788 (default: detected LAN addresses)")
 	flag.Usage = func() {

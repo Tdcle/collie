@@ -111,7 +111,11 @@ func cliPair(args []string) error {
 		return fmt.Errorf("hub has no address")
 	}
 	if *computer {
-		fmt.Printf("\n  在要加入的电脑上运行（10 分钟内有效，只能用一次）：\n\n    collie node --hub %s --code %s\n\n", r.Addresses[0], r.Code)
+		addr := r.Addresses[0]
+		fmt.Printf("\n  在要加入的电脑上运行（10 分钟内有效，只能用一次）：\n\n")
+		fmt.Printf("  macOS / Linux:\n    curl -fsSL https://raw.githubusercontent.com/%s/main/docs/install.sh | sh -s -- node --hub %s --code %s\n\n", releaseRepo(), addr, r.Code)
+		fmt.Printf("  Windows (PowerShell):\n    powershell -ExecutionPolicy Bypass -Command \"& ([scriptblock]::Create((irm https://raw.githubusercontent.com/%s/main/docs/install.ps1))) node --hub %s --code %s\"\n\n", releaseRepo(), addr, r.Code)
+		fmt.Printf("  已安装 collie 时：\n    collie node --hub %s --code %s\n\n", addr, r.Code)
 		if len(r.Addresses) > 1 {
 			fmt.Printf("  连不上的话换一个地址：%s\n\n", strings.Join(r.Addresses[1:], "  "))
 		}

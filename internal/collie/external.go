@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -17,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -66,36 +64,33 @@ type proc struct {
 // externalKinds maps program names to agent kinds.
 var externalKinds = map[string]string{"claude": "claude", "codex": "codex", "agy": "agy", "antigravity": "agy"}
 
-func listProcs() (map[int]*proc, error) {
-	out, err := exec.Command("ps", "-axww", "-o", "pid=,ppid=,tty=,etime=,command=").Output()
-	if err != nil {
-		return nil, err
-	}
-	ps := map[int]*proc{}
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		f := strings.Fields(sc.Text())
-		if len(f) < 5 {
-			continue
+func cleanProgBase(arg string) string {
+	n := strings.TrimPrefix(baseOfPath(arg), "-")
+	low := strings.ToLower(n)
+	for _, ext := range []string{".exe", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs"} {
+		if strings.HasSuffix(low, ext) {
+			return low[:len(low)-len(ext)]
 		}
-		pid, _ := strconv.Atoi(f[0])
-		ppid, _ := strconv.Atoi(f[1])
-		p := &proc{pid: pid, ppid: ppid, tty: f[2], age: parseEtime(f[3]), args: f[4:]}
-		p.name = progName(p.args)
-		ps[pid] = p
 	}
-	return ps, nil
+	return low
 }
 
 // progName is the program a command line runs; for "node …/codex.js" it is
 // the script.
 func progName(args []string) string {
-	n := strings.TrimPrefix(filepath.Base(args[0]), "-")
-	if (n == "node" || n == "bun") && len(args) > 1 && !strings.HasPrefix(args[1], "-") {
-		n = filepath.Base(args[1])
+	if len(args) == 0 {
+		return ""
 	}
-	return strings.TrimSuffix(strings.TrimSuffix(n, ".js"), ".mjs")
+	n := cleanProgBase(args[0])
+	if (n == "node" || n == "bun" || n == "deno") && len(args) > 1 {
+		for _, a := range args[1:] {
+			if strings.HasPrefix(a, "-") {
+				continue
+			}
+			return cleanProgBase(a)
+		}
+	}
+	return n
 }
 
 // parseEtime reads ps's [[dd-]hh:]mm:ss.
@@ -118,7 +113,10 @@ func parseEtime(s string) time.Duration {
 	return time.Duration(((d*24+h)*60+m)*60+sec) * time.Second
 }
 
-var shells = map[string]bool{"zsh": true, "bash": true, "fish": true, "sh": true, "login": true, "sudo": true, "su": true, "nu": true, "env": true, "script": true}
+var shells = map[string]bool{
+	"zsh": true, "bash": true, "fish": true, "sh": true, "login": true, "sudo": true, "su": true, "nu": true, "env": true, "script": true,
+	"powershell": true, "pwsh": true, "cmd": true, "conhost": true, "openconsole": true,
+}
 
 // terminalApp names what an agent process runs in, from its ancestors.
 func terminalApp(ps map[int]*proc, p *proc) (app string, inHerdr bool) {
@@ -138,43 +136,23 @@ func terminalApp(ps map[int]*proc, p *proc) (app string, inHerdr bool) {
 				app = "VS Code"
 			case name == "iterm2":
 				app = "iTerm2"
+			case name == "windowsterminal":
+				app = "Windows Terminal"
+			case strings.HasPrefix(name, "wezterm"):
+				app = "WezTerm"
+			case name == "alacritty":
+				app = "Alacritty"
+			case name == "mintty":
+				app = "Git Bash"
+			case name == "explorer":
+				app = "终端"
 			}
 		}
-		if q.ppid <= 1 {
+		if q.ppid <= 1 || q.ppid == q.pid {
 			break
 		}
 	}
 	return app, false
-}
-
-func cwdOf(pids []int) map[int]string {
-	m := map[int]string{}
-	if runtime.GOOS == "linux" {
-		for _, pid := range pids {
-			if c, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
-				m[pid] = c
-			}
-		}
-		return m
-	}
-	if len(pids) == 0 {
-		return m
-	}
-	ids := make([]string, len(pids))
-	for i, p := range pids {
-		ids[i] = strconv.Itoa(p)
-	}
-	out, _ := exec.Command("lsof", "-a", "-d", "cwd", "-p", strings.Join(ids, ","), "-Fpn").Output()
-	pid := 0
-	for _, l := range strings.Split(string(out), "\n") {
-		switch {
-		case strings.HasPrefix(l, "p"):
-			pid, _ = strconv.Atoi(l[1:])
-		case strings.HasPrefix(l, "n") && pid != 0:
-			m[pid] = l[1:]
-		}
-	}
-	return m
 }
 
 // externalCache keeps discovery cheap when several viewers poll.
@@ -233,8 +211,15 @@ func (s *Server) externalSessions() []*External {
 		if inHerdr {
 			continue
 		}
+		if r := regOf[p.pid]; r != nil && strings.HasPrefix(r.Entrypoint, "claude-desktop") {
+			continue // listed by desktopSessions
+		}
 		kind := externalKinds[p.name]
-		e := &External{ID: fmt.Sprintf("%s-%d", kind, p.pid), Kind: kind, PID: p.pid, Cwd: cwds[p.pid], App: app, Started: now.Add(-p.age), Live: true}
+		cwd := cwds[p.pid]
+		if cwd == "" && regOf[p.pid] != nil {
+			cwd = regOf[p.pid].Cwd
+		}
+		e := &External{ID: fmt.Sprintf("%s-%d", kind, p.pid), Kind: kind, PID: p.pid, Cwd: cwd, App: app, Started: now.Add(-p.age), Live: true}
 		s.locateExternal(e, p)
 		e.reg = regOf[p.pid]
 		s.reachable(e)
@@ -321,7 +306,7 @@ func (s *Server) locateExternal(e *External, p *proc) {
 			}
 		}
 		if e.Cwd != "" {
-			slug := strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace(e.Cwd)
+			slug := claudeProjectSlug(e.Cwd)
 			if f := newestSince(filepath.Join(root, "projects", slug, "*.jsonl"), since); f != "" {
 				e.path, e.format = f, "claude"
 				e.Session = strings.TrimSuffix(filepath.Base(f), ".jsonl")
@@ -338,7 +323,7 @@ func (s *Server) locateExternal(e *External, p *proc) {
 				continue
 			}
 			id, cwd := codexMeta(f)
-			if cwd != e.Cwd || fi.ModTime().Before(bestAt) {
+			if !samePath(cwd, e.Cwd) || fi.ModTime().Before(bestAt) {
 				continue
 			}
 			best, bestAt, e.Session = f, fi.ModTime(), id
@@ -365,7 +350,7 @@ func (s *Server) locateExternal(e *External, p *proc) {
 		for id, wss := range index {
 			match := false
 			for _, w := range wss {
-				match = match || w == strings.TrimSuffix(filepath.Clean(e.Cwd), "/")
+				match = match || samePath(w, e.Cwd)
 			}
 			if !match {
 				continue
@@ -441,8 +426,6 @@ func (s *Server) viewableByID(id string) *External {
 	}
 	return nil
 }
-
-func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
 // ---------------------------------------------------------------- HTTP
 
@@ -638,18 +621,9 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 	args := resumeArgs(e.Kind, e.Session)
 	// Two processes writing one conversation would garble it: stop the
 	// original first, the way Ctrl-C would, and give it a moment to save.
-	if e.PID > 0 && alive(e.PID) {
-		syscall.Kill(e.PID, syscall.SIGINT)
-		for i := 0; i < 30 && alive(e.PID); i++ {
-			if i == 10 {
-				syscall.Kill(e.PID, syscall.SIGTERM)
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-		if alive(e.PID) {
-			writeJSON(w, 409, map[string]any{"error": "原来的进程没有退出（PID " + strconv.Itoa(e.PID) + "），请先在那个终端里退出它"})
-			return
-		}
+	if e.PID > 0 && !stopProcess(e.PID) {
+		writeJSON(w, 409, map[string]any{"error": "原来的进程没有退出（PID " + strconv.Itoa(e.PID) + "），请先在那个终端里退出它"})
+		return
 	}
 	externalCache.Lock()
 	externalCache.at = time.Time{}
@@ -702,8 +676,8 @@ func (s *Server) revealExternal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]any{"error": "这个会话已经结束了"})
 		return
 	}
-	if runtime.GOOS != "darwin" {
-		writeJSON(w, 409, map[string]any{"error": "只能在 Mac 上打开 " + e.App})
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		writeJSON(w, 409, map[string]any{"error": "只能在桌面电脑上打开 " + e.App})
 		return
 	}
 	var link string
@@ -716,7 +690,7 @@ func (s *Server) revealExternal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]any{"error": "这个会话没法从这里在 " + e.App + " 里打开"})
 		return
 	}
-	if err := exec.CommandContext(r.Context(), "open", link).Run(); err != nil {
+	if err := openURL(r.Context(), link); err != nil {
 		fail(w, err)
 		return
 	}

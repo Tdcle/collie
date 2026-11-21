@@ -21,7 +21,10 @@ import (
 // The files live on the agent's machine, so every machine reads its own and
 // the hub collects them from the nodes.
 
-var genericTitles = map[string]bool{"": true, "claude": true, "claude code": true, "codex": true, "agy": true, "antigravity": true, "bash": true, "zsh": true}
+var genericTitles = map[string]bool{
+	"": true, "claude": true, "claude code": true, "codex": true, "agy": true, "antigravity": true,
+	"bash": true, "zsh": true, "powershell": true, "pwsh": true, "cmd": true, "cmd.exe": true, "powershell.exe": true, "pwsh.exe": true,
+}
 
 // cleanTitle drops the spinner/status glyphs claude puts in front of the topic.
 func cleanTitle(t string) string {
@@ -97,7 +100,7 @@ func (s *Server) agyTitle(id string) string {
 		m := map[string]string{}
 		path := filepath.Join(s.agyCLIHome(), "conversation_summaries.db")
 		if isFile(path) {
-			if db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)"); err == nil {
+			if db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)")); err == nil {
 				if rows, err := db.Query(`SELECT conversation_id, title FROM conversation_summaries WHERE last_modified_time > ?`,
 					time.Now().Add(-7*24*time.Hour).UTC().Format("2006-01-02 15:04:05")); err == nil {
 					for rows.Next() {
@@ -143,8 +146,10 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 			continue
 		}
 		sess := ""
-		if a.Session != nil && !strings.ContainsAny(a.Session.Value, "/") {
-			sess = a.Session.Value
+		if a.Session != nil {
+			if s := sessionID(a.Session.Kind, a.Session.Value); !strings.ContainsAny(s, `/\`) {
+				sess = s
+			}
 		}
 		kind := deref(a.Agent)
 		var t string

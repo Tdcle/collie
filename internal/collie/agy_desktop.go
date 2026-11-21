@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,57 +45,6 @@ func forgetAgyServer() {
 	agyServerCache.Lock()
 	agyServerCache.at = time.Time{}
 	agyServerCache.Unlock()
-}
-
-func findAgyServer() *agyServer {
-	out, err := exec.Command("ps", "-axww", "-o", "pid=,command=").Output()
-	if err != nil {
-		return nil
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 || !strings.HasSuffix(f[1], "/language_server") {
-			continue
-		}
-		args := map[string]string{}
-		for i := 2; i+1 < len(f); i++ {
-			if strings.HasPrefix(f[i], "--") {
-				args[f[i]] = f[i+1]
-			}
-		}
-		// The desktop app's server (the CLI keeps its own elsewhere).
-		if args["--app_data_dir"] != "antigravity" || args["--csrf_token"] == "" {
-			continue
-		}
-		pid, err := strconv.Atoi(f[0])
-		if err != nil {
-			continue
-		}
-		for _, port := range listenPorts(pid) {
-			ls := &agyServer{addr: "127.0.0.1:" + port, csrf: args["--csrf_token"]}
-			if ls.probe() {
-				return ls
-			}
-		}
-	}
-	return nil
-}
-
-// listenPorts: the loopback TCP ports a process listens on.
-func listenPorts(pid int) []string {
-	out, err := exec.Command("lsof", "-nP", "-a", "-p", strconv.Itoa(pid), "-iTCP", "-sTCP:LISTEN", "-Fn").Output()
-	if err != nil {
-		return nil
-	}
-	var ports []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(l, "n") {
-			if i := strings.LastIndex(l, ":"); i > 0 {
-				ports = append(ports, l[i+1:])
-			}
-		}
-	}
-	return ports
 }
 
 // probe: this port answers the API in plain HTTP with this token.

@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS timers   (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 `
 
 func openDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqliteURI(path, "_pragma=busy_timeout(5000)"))
 	if err != nil {
 		return nil, err
 	}

@@ -7,9 +7,8 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 <p align="center">
 <a href="https://lihuanyu0w0.github.io/collie/demo/"><b>▶ 在线体验</b></a> ·
-<a href="https://lihuanyu0w0.github.io/collie">主页</a> ·
 <a href="#安装">安装</a> ·
-<a href="https://github.com/lihuanyu0w0/collie/releases">下载</a>
+<a href="https://github.com/Tdcle/collie/releases">下载</a>
 </p>
 
 <p align="center"><img src="docs/img/demo.gif" alt="给 Collie 发一句话：它派出 worker，worker 回报，Collie 汇总；决策卡片一点就回" width="900"></p>
@@ -22,7 +21,7 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 - **一个入口，派一群 agent** — 把事情告诉 Collie，它理解上下文、选 agent 和模型、拆活并行去做，结果回到同一个对话
 - **确认框变成卡片** — agent 停在「允许运行吗？」时，问题和选项变成一张卡片，手机上点一下就回
-- **所有电脑合在一处** — Mac、开发机、云电脑连到一个 hub；电脑主动连出去，不开端口、不配 SSH，在 NAT 后面也行
+- **所有电脑合在一处** — Mac、Windows、Linux 开发机、云电脑连到一个 hub；电脑主动连出去，不开端口、不配 SSH，在 NAT 后面也行
 - **读真正的对话** — 直接读 agent 自己的会话记录，终端变成清晰的对话；也能切到原样的屏幕和日志
 - **自己往前推** — worker 失败了重试、换模型、换思路；只有花钱、删东西、发布这类事才停下来问你
 - **越用越会派活** — 记住你的偏好和每次干活的经验：数据在哪、怎么做的、踩过的坑、哪个 agent 在哪台电脑上好用，下次派活直接带上
@@ -51,33 +50,45 @@ Claude Code · Codex · Antigravity — 一个 hub，多台电脑，一个会自
 
 每台电脑上都要先有 herdr 服务端在跑，并装好 agent 集成（`herdr integration install claude`、`codex`、`antigravity-cli`）。没装集成时，herdr 认不出 agent 在干什么，Collie 也就没法给它发消息。
 
-安装脚本下载对应平台的二进制（校验 SHA-256），装到 `~/.local/bin/collie`，并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`）。以后重跑同一条命令就是升级。
+安装脚本下载对应平台的二进制（校验 SHA-256），装到 `~/.local/bin/collie`（Windows 上是 `%USERPROFILE%\.local\bin\collie.exe`），并装成后台服务（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用 `collie daemon` + 登录自启）。以后重跑同一条命令就是升级。
 
 **1. 开发机：起 hub**
 
 ```bash
-curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- hub
 ```
 
-启动时打印本机内网地址和手机配对二维码；地址认不准时加 `--url http://<开发机 IP>:7788`。日志：`journalctl --user -u collie-hub -f`。要在退出登录后继续跑，运行一次 `loginctl enable-linger`。
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1))) hub"
+```
+
+启动时打印本机内网地址和手机配对二维码；地址认不准时加 `--url http://<开发机 IP>:7788`。日志：Linux `journalctl --user -u collie-hub -f`，Windows `Get-Content -Wait $HOME\.collie\hub.log`。Linux 要在退出登录后继续跑，运行一次 `loginctl enable-linger`。
 
 **2. 手机：扫码**
 
 扫终端里的二维码，或者在「设备 → 连接手机或平板」里扫。二维码里是 `http://<内网 IP>:7788/?pair=<配对码>`，10 分钟内有效、只能用一次；打开后这台手机拿到自己的令牌，之后「添加到主屏幕」即可。也可以在登录页直接输入 8 位配对码。
 
-**3. 其他电脑：加入**
+**3. 其他电脑：加入（macOS / Linux / Windows）**
 
-在 hub 的「设备 → 连接一台电脑」里拿配对码（或在 hub 上运行 `collie pair --computer`），然后在那台电脑上：
+在 hub 的「设备 → 连接一台电脑」里拿连接命令（或在 hub 上运行 `collie pair --computer`），然后在那台电脑上：
 
 ```bash
-curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
 ```
 
-它会配对、把 hub 地址和令牌存进 `~/.collie/node.json`，再装成后台服务。之后重跑不带参数的 `… | sh -s -- node` 就是升级。
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1))) node --hub http://<hub>:7788 --code <配对码>"
+```
 
-**4. 在 Mac 上装成 app（可选）**
+它会配对、把 hub 地址和令牌存进 `~/.collie/node.json`，自动检测/安装 herdr 并启动 `herdr server`，再装成后台常驻服务。之后重跑不带配对码的 `… node` 就是升级。
 
-加入了 hub 的电脑会在本机 `http://127.0.0.1:17788` 提供同一个界面（转发到 hub）。浏览器把 127.0.0.1 当作安全来源，所以用 Chrome 打开它、登录一次（「设备 → 连接手机或平板」里的 8 位配对码），地址栏右侧点「安装 Collie」，就会得到一个能放进 Dock 的独立 app，浏览器通知也能用了。换端口：`collie node --ui 127.0.0.1:端口`；不要：`--ui off`。
+**4. 在桌面装成 app（可选）**
+
+加入了 hub 的电脑会在本机 `http://127.0.0.1:17788` 提供同一个界面（转发到 hub）。浏览器把 127.0.0.1 当作安全来源，所以用 Chrome / Edge 打开它、登录一次（「设备 → 连接手机或平板」里的 8 位配对码），地址栏右侧点「安装 Collie」，就会得到一个独立的桌面 app，浏览器通知也能用了。换端口：`collie node --ui 127.0.0.1:端口`；不要：`--ui off`。
 
 - node 出站连接、长连接复用（yamux），笔记本在 NAT 后面也能用，**不用开端口、不用 SSH**；断线后自动重连
 - hub 把所有电脑的 herdr 合成一个：远端的 pane id 带后缀，例如 `w1:p1@mac`；列表、对话、启动 agent、Collie 派 worker 都可以指定电脑
@@ -90,8 +101,8 @@ curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub
 
 hub 每隔几小时看一次 GitHub 上的最新版本。有电脑落后时，侧栏底部会出现「有新版」，「设备」页会列出是哪台。点「更新到 vX」，那台电脑会自己下载新版、校验后原地重启（里面的 agent 不受影响）；也可以在那台电脑上手动运行：
 
-- 电脑（node）：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node`（不用再配对）
-- hub：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub`，当初加过 `--url` 等参数的话照样带上
+- 电脑（node）：macOS / Linux 运行 `curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- node`；Windows 运行 `powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1))) node"`（不用再配对）
+- hub：把末尾的 `node` 换成 `hub`，当初加过 `--url` 等参数的话照样带上
 
 从源码编译的（版本是 `dev`）和 v0.2.5 以前的电脑不会被提示。
 
@@ -106,14 +117,21 @@ hub 每隔几小时看一次 GitHub 上的最新版本。有电脑落后时，�
 **从源码安装**（需要 Go 1.25+ 和 git）：clone 下来在仓库里运行同一个脚本，它用本地源码编译、不下载，参数和上面一样：
 
 ```bash
-git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
+# macOS / Linux
+git clone https://github.com/Tdcle/collie.git ~/collie && cd ~/collie
 sh docs/install.sh hub                                          # 做 hub
 sh docs/install.sh node --hub http://<hub>:7788 --code <配对码>   # 加入电脑
 ```
 
+```powershell
+# Windows (PowerShell)
+git clone https://github.com/Tdcle/collie.git $HOME\collie; cd $HOME\collie
+powershell -ExecutionPolicy Bypass -File docs\install.ps1 node --hub http://<hub>:7788 --code <配对码>
+```
+
 以后 `git pull` 再跑一次就是升级。
 
-只想装命令、不装服务：`curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh`。指定版本或目录：`COLLIE_VERSION=v0.2.0`、`COLLIE_BIN_DIR=…`。脚本在 [docs/install.sh](docs/install.sh)。
+只想装命令、不装服务：macOS / Linux `curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh`，Windows `powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1)))"`。指定版本或目录：`COLLIE_VERSION=v0.3.0`、`COLLIE_BIN_DIR=…`。脚本在 [docs/install.sh](docs/install.sh) 和 [docs/install.ps1](docs/install.ps1)。
 
 ## 两种用法
 
@@ -168,7 +186,8 @@ collie timer ls | rm <id>
 collie say "…"                                     # 以你的身份发给 Router
 collie hook <source> "…"                           # 模拟一个外部事件
 collie pair [--computer]                           # 打印手机配对二维码 / 电脑加入命令
-collie node [--hub URL --code CODE] [--name mac]   # 把这台电脑接到 hub
+collie node [--hub URL --code CODE] [--name pc]    # 把这台电脑接到 hub
+collie daemon <start|stop|restart|status> <hub|node> # 后台常驻管理（Windows 默认使用）
 ```
 
 ## 接入外部事件

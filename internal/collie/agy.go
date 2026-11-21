@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -41,7 +40,7 @@ func agyWorkspaces(root string) map[string][]string {
 		agyIndex.ws = m
 		return m
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+	db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)"))
 	if err != nil {
 		agyIndex.ws = m
 		return m
@@ -62,7 +61,7 @@ func agyWorkspaces(root string) map[string][]string {
 		var uris []string
 		json.Unmarshal([]byte(raw), &uris)
 		for _, u := range uris {
-			m[id] = append(m[id], strings.TrimSuffix(strings.TrimPrefix(u, "file://"), "/"))
+			m[id] = append(m[id], uriToPath(u))
 		}
 	}
 	agyIndex.ws = m
@@ -80,7 +79,6 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	cwd = strings.TrimSuffix(filepath.Clean(cwd), "/")
 	since, known := s.startedAt(pane)
 	if !known {
 		since = time.Now().Add(-6 * time.Hour)
@@ -100,7 +98,7 @@ func (s *Server) guessAgy(brain, pane, cwd string) string {
 		dir := filepath.Dir(filepath.Dir(filepath.Dir(f)))
 		match := false
 		for _, w := range index[filepath.Base(dir)] {
-			if w == cwd {
+			if samePath(w, cwd) {
 				match = true
 				break
 			}

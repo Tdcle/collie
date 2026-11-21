@@ -60,7 +60,7 @@ func runNode(args []string) {
 	name := fs.String("name", host, "how this computer is shown on the hub")
 	pairOnly := fs.Bool("pair-only", false, "join the hub and exit (a service runs `collie node` afterwards)")
 	ui := fs.String("ui", envOr("COLLIE_UI", defaultLocalUI), "serve the hub's web UI on this computer at this address (off: don't)")
-	sock := fs.String("socket", envOr("HERDR_SOCKET_PATH", filepath.Join(home, ".config/herdr/herdr.sock")), "herdr API socket")
+	sock := fs.String("socket", defaultHerdrSocket(home), "herdr API socket")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: collie node --hub <address> --code <pairing code>   (first time)\n       collie node                                          (afterwards)\n\n")
 		fs.PrintDefaults()
@@ -271,7 +271,14 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 					st.Close()
 					return
 				}
-				go func() { io.Copy(h, st); h.(*net.UnixConn).CloseWrite() }()
+				go func() {
+					io.Copy(h, st)
+					if cw, ok := h.(interface{ CloseWrite() error }); ok {
+						cw.CloseWrite()
+					} else {
+						h.Close()
+					}
+				}()
 				io.Copy(st, h)
 				h.Close()
 				st.Close()

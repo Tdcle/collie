@@ -188,7 +188,7 @@ footer a { color: var(--fg-2); }
       <a class="hide-s" href="#features">功能</a>
       <a class="hide-s" href="#arch">架构</a>
       <a href="#install">安装</a>
-      <a href="https://github.com/lihuanyu0w0/collie">GitHub</a>
+      <a href="https://github.com/Tdcle/collie">GitHub</a>
     </nav>
   </div>
 </header>
@@ -202,7 +202,7 @@ footer a { color: var(--fg-2); }
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>在线体验</a>
       <a class="btn" href="#install">两分钟装好</a>
     </div>
-    <div class="agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>macOS · Linux</span><span>手机 · 平板 · 桌面</span></div>
+    <div class="agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>macOS · Linux · Windows</span><span>手机 · 平板 · 桌面</span></div>
 
     <div class="stage reveal">
       <div class="frame">
@@ -317,34 +317,39 @@ footer a { color: var(--fg-2); }
     <div class="wrap narrow center">
       <p class="kicker reveal">安装</p>
       <h2 class="reveal">两分钟装好</h2>
-      <p class="sub reveal">macOS、Linux（amd64 / arm64）。下载会校验 SHA-256，装成后台服务（launchd 或 systemd --user，没有的话用 nohup）；没有 herdr 的话顺便装上。</p>
+      <p class="sub reveal">macOS、Linux、Windows（amd64 / arm64）。下载会校验 SHA-256，装成后台常驻服务；没有 herdr 的话顺便装上。</p>
       <div class="install reveal">
         <div class="tabs" role="tablist">
           <button role="tab" aria-selected="true" data-tab="hub">做 hub</button>
           <button role="tab" aria-selected="false" data-tab="node">加入电脑</button>
+          <button role="tab" aria-selected="false" data-tab="win">Windows 加入</button>
           <button role="tab" aria-selected="false" data-tab="bin">只装命令</button>
           <button role="tab" aria-selected="false" data-tab="src">从源码</button>
         </div>
         <div class="panel" data-panel="hub">
           <p>在一台常开的开发机上运行。之后用手机扫终端里的二维码就能登录。</p>
-          <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub</pre><button class="copy">复制</button></div>
+          <div class="cmd"><pre>curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- hub</pre><button class="copy">复制</button></div>
         </div>
         <div class="panel" data-panel="node" hidden>
-          <p>在其他电脑上运行。hub 地址和配对码在 hub 的「设备 → 连接一台电脑」里拿；电脑主动连 hub，不用开端口。</p>
-          <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;配对码&gt;</pre><button class="copy">复制</button></div>
+          <p>在 macOS / Linux 电脑上运行。hub 地址和配对码在 hub 的「设备 → 连接一台电脑」里拿；电脑主动连 hub，不用开端口。</p>
+          <div class="cmd"><pre>curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- node --hub http://&lt;hub&gt;:7788 --code &lt;配对码&gt;</pre><button class="copy">复制</button></div>
+        </div>
+        <div class="panel" data-panel="win" hidden>
+          <p>在 Windows PowerShell 里运行。会自动安装或编译 <code>collie.exe</code>、检测/安装 <code>herdr</code>，并注册后台常驻与登录自启。</p>
+          <div class="cmd"><pre class="multi">powershell -ExecutionPolicy Bypass -Command "&amp; ([scriptblock]::Create((irm https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1))) node --hub http://&lt;hub&gt;:7788 --code &lt;配对码&gt;"</pre><button class="copy">复制</button></div>
         </div>
         <div class="panel" data-panel="bin" hidden>
           <p>只把 <code>collie</code> 装到 <code>~/.local/bin</code>，不装服务。</p>
-          <div class="cmd"><pre>curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh</pre><button class="copy">复制</button></div>
+          <div class="cmd"><pre>curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh</pre><button class="copy">复制</button></div>
         </div>
         <div class="panel" data-panel="src" hidden>
-          <p>需要 Go 1.25+。在仓库里运行同一个脚本，会用本地源码编译；后面可以接 <code>hub</code> 或 <code>node --hub … --code …</code>。</p>
-          <div class="cmd"><pre class="multi">git clone https://github.com/lihuanyu0w0/collie.git
+          <p>需要 Go 1.25+。在仓库里运行安装脚本，会用本地源码编译；后面可以接 <code>hub</code> 或 <code>node --hub … --code …</code>。</p>
+          <div class="cmd"><pre class="multi">git clone https://github.com/Tdcle/collie.git
 cd collie
 sh docs/install.sh hub</pre><button class="copy">复制</button></div>
         </div>
       </div>
-      <p class="note reveal"><a href="install.sh">查看安装脚本</a> · <a href="https://github.com/lihuanyu0w0/collie#readme">完整文档</a></p>
+      <p class="note reveal"><a href="install.sh">install.sh</a> · <a href="install.ps1">install.ps1</a> · <a href="https://github.com/Tdcle/collie#readme">完整文档</a></p>
       <ol class="steps">
         <li class="reveal"><b>开发机上起 hub</b><span>跑上面的「做 hub」。装好 herdr 的 agent 集成：<code>herdr integration install claude</code>。</span></li>
         <li class="reveal"><b>手机扫码</b><span>扫终端里的二维码，每台设备一个令牌，添加到主屏幕后就像一个 app。</span></li>
@@ -357,7 +362,7 @@ sh docs/install.sh hub</pre><button class="copy">复制</button></div>
     <div class="final reveal">
       <h2>先看看它长什么样</h2>
       <p class="sub" style="margin: 0 auto 24px">在线体验是真实的界面，数据是虚构的：可以给 Collie 发消息、点决策卡片、新建 agent。</p>
-      <div class="cta" style="margin-top:0"><a class="btn primary" href="demo/"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>打开在线体验</a><a class="btn" href="https://github.com/lihuanyu0w0/collie">GitHub 上看源码</a></div>
+      <div class="cta" style="margin-top:0"><a class="btn primary" href="demo/"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>打开在线体验</a><a class="btn" href="https://github.com/Tdcle/collie">GitHub 上看源码</a></div>
     </div>
   </div>
 </main>
@@ -365,9 +370,9 @@ sh docs/install.sh hub</pre><button class="copy">复制</button></div>
 <footer>
   <div class="wrap">
     <span>Collie · 一只边牧：herdr 管终端，Collie 把 agent 赶到一处干活</span>
-    <a href="https://github.com/lihuanyu0w0/collie">源码</a>
-    <a href="https://github.com/lihuanyu0w0/collie/releases">下载</a>
-    <a href="https://github.com/lihuanyu0w0/collie#readme">文档</a>
+    <a href="https://github.com/Tdcle/collie">源码</a>
+    <a href="https://github.com/Tdcle/collie/releases">下载</a>
+    <a href="https://github.com/Tdcle/collie#readme">文档</a>
     <a href="demo/">在线体验</a>
   </div>
 </footer>

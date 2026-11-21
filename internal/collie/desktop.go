@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -227,13 +226,20 @@ func firstUserLine(path, format string) string {
 // ---------------------------------------------------------------- Claude
 
 // claudeDesktopDirs are the desktop apps' data directories (the build on a
-// third-party provider keeps its own). Only macOS's layout is known.
+// third-party provider keeps its own).
 func (s *Server) claudeDesktopDirs() []string {
-	if runtime.GOOS != "darwin" {
-		return nil
+	switch runtime.GOOS {
+	case "darwin":
+		base := filepath.Join(s.home, "Library", "Application Support")
+		return []string{filepath.Join(base, "Claude"), filepath.Join(base, "Claude-3p")}
+	case "windows":
+		base := os.Getenv("APPDATA")
+		if base == "" {
+			base = filepath.Join(s.home, "AppData", "Roaming")
+		}
+		return []string{filepath.Join(base, "Claude"), filepath.Join(base, "Claude-3p")}
 	}
-	base := filepath.Join(s.home, "Library", "Application Support")
-	return []string{filepath.Join(base, "Claude"), filepath.Join(base, "Claude-3p")}
+	return nil
 }
 
 type claudeDesktopJSON struct {
@@ -327,7 +333,7 @@ func (s *Server) codexAppRows() []desktopRow {
 	if path == "" {
 		return nil
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+	db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)"))
 	if err != nil {
 		return nil
 	}
@@ -402,7 +408,9 @@ func lastTurnOpen(r io.ReaderAt, size int64) bool {
 func (s *Server) codexAppSock() string { return filepath.Join(s.codexHome(), "ipc", "ipc.sock") }
 
 func (s *Server) codexAppUp() bool {
-	c, err := net.DialTimeout("unix", s.codexAppSock(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	c, err := dialLocalSocket(ctx, s.codexAppSock())
 	if err != nil {
 		return false
 	}
@@ -499,8 +507,7 @@ func (c *codexApp) owner(thread string) (string, error) {
 // codexAppSend runs a turn in the App window that owns the thread. A thread
 // the App has not loaded is opened in it first (the App comes forward).
 func (s *Server) codexAppSend(ctx context.Context, thread, text string) error {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", s.codexAppSock())
+	conn, err := dialLocalSocket(ctx, s.codexAppSock())
 	if err != nil {
 		return errors.New("连不上电脑上的 Codex App：它可能没有打开")
 	}
@@ -513,7 +520,7 @@ func (s *Server) codexAppSend(ctx context.Context, thread, text string) error {
 		return err
 	}
 	owner, err := c.owner(thread)
-	if err != nil && exec.Command("open", "codex://threads/"+thread).Run() == nil {
+	if err != nil && openURL(ctx, "codex://threads/"+thread) == nil {
 		for deadline := time.Now().Add(30 * time.Second); err != nil && time.Now().Before(deadline) && ctx.Err() == nil; {
 			time.Sleep(time.Second)
 			owner, err = c.owner(thread)
@@ -542,7 +549,7 @@ func (s *Server) agyDesktopRows() []desktopRow {
 	if !isFile(path) {
 		return nil
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+	db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)"))
 	if err != nil {
 		return nil
 	}
@@ -571,7 +578,7 @@ func (s *Server) agyDesktopRows() []desktopRow {
 		json.Unmarshal([]byte(uris), &ws)
 		cwd := ""
 		if len(ws) > 0 {
-			cwd = strings.TrimSuffix(strings.TrimPrefix(ws[0], "file://"), "/")
+			cwd = uriToPath(ws[0])
 		}
 		d := desktopRow{id: "ag-" + id, kind: "agy", app: appAgy, session: id, title: messageTitle(title), cwd: cwd,
 			created: sqlTime(input), updated: sqlTime(mod), running: status == "CASCADE_RUN_STATUS_RUNNING"}
@@ -636,7 +643,7 @@ func codexClient(originator, cwd string) string {
 	}
 	switch originator {
 	case "", "Codex Desktop", "codex_work_desktop":
-		if runtime.GOOS != "darwin" {
+		if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 			return "Codex App（远程）" // the App on another computer opened it here over SSH
 		}
 		return appCodex

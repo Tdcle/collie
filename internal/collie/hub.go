@@ -19,6 +19,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -479,7 +480,7 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	_, herdrErr := s.herdr.local.conn.call(r.Context(), "workspace.list", nil)
 	writeJSON(w, 200, map[string]any{
 		"devices":   out,
-		"hub":       map[string]any{"name": local.Name, "home": local.Home, "herdr": herdrErr == nil, "version": version, "agents": localAgents(local.Home, true)},
+		"hub":       map[string]any{"name": local.Name, "os": runtime.GOOS + "/" + runtime.GOARCH, "home": local.Home, "herdr": herdrErr == nil, "version": version, "agents": localAgents(local.Home, true)},
 		"addresses": s.addresses(r),
 		"latest":    latestVersion(true),
 	})
@@ -624,8 +625,14 @@ func printQR(w io.Writer, text string) {
 // virtualIf reports container and VM bridges, whose addresses only make sense
 // inside this machine.
 func virtualIf(name string) bool {
-	for _, p := range []string{"docker", "br-", "veth", "virbr", "cni", "flannel", "vmnet", "bridge", "lxc", "podman"} {
-		if strings.HasPrefix(name, p) {
+	low := strings.ToLower(name)
+	for _, p := range []string{"docker", "br-", "veth", "virbr", "cni", "flannel", "vmnet", "bridge", "lxc", "podman", "vethernet", "loopback"} {
+		if strings.HasPrefix(low, p) {
+			return true
+		}
+	}
+	for _, sub := range []string{"wsl", "vmware", "virtualbox", "hyper-v"} {
+		if strings.Contains(low, sub) {
 			return true
 		}
 	}

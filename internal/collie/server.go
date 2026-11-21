@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -601,8 +600,8 @@ func (s *Server) openShell(w http.ResponseWriter, r *http.Request, dir, label st
 		return
 	}
 	if label == "" {
-		label = filepath.Base(cwd)
-		if cwd == s.home {
+		label = baseOfPath(cwd)
+		if samePath(cwd, s.home) {
 			label = "~"
 		}
 	}
@@ -661,7 +660,14 @@ func (s *Server) closeWorkspace(w http.ResponseWriter, r *http.Request) {
 
 // listDirs powers the directory picker in the launcher.
 func (s *Server) listDirs(w http.ResponseWriter, r *http.Request) {
-	dir := s.expand(r.URL.Query().Get("path"))
+	raw := strings.TrimSpace(r.URL.Query().Get("path"))
+	if raw == "/" {
+		if drives := windowsDrives(); len(drives) > 0 {
+			writeJSON(w, 200, map[string]any{"path": "/", "display": "/", "parent": "/", "dirs": drives})
+			return
+		}
+	}
+	dir := s.expand(raw)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
@@ -679,37 +685,18 @@ func (s *Server) listDirs(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeJSON(w, 200, map[string]any{"path": dir, "display": s.tilde(dir), "parent": filepath.Dir(dir), "dirs": out})
+	parent := filepath.Dir(dir)
+	if isDriveRoot(dir) {
+		parent = "/"
+	}
+	writeJSON(w, 200, map[string]any{"path": dir, "display": s.tilde(dir), "parent": parent, "dirs": out})
 }
 
 // ---------------------------------------------------------------- helpers
 
 func (s *Server) expand(p string) string { return expandIn(s.home, p) }
 
-// expandIn resolves "~", "~/x" and relative paths against a home directory.
-// It uses "/" so it works for paths on another (Unix) machine too.
-func expandIn(home, p string) string {
-	p = strings.TrimSpace(p)
-	switch {
-	case p == "" || p == "~":
-		return home
-	case strings.HasPrefix(p, "~/"):
-		return path.Join(home, p[2:])
-	case !strings.HasPrefix(p, "/"):
-		return path.Join(home, p)
-	}
-	return path.Clean(p)
-}
-
-func (s *Server) tilde(p string) string {
-	if p == s.home {
-		return "~"
-	}
-	if strings.HasPrefix(p, s.home+"/") {
-		return "~" + p[len(s.home):]
-	}
-	return p
-}
+func (s *Server) tilde(p string) string { return tildeIn(s.home, p) }
 
 func isDir(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
 

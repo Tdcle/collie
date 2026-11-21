@@ -1,38 +1,40 @@
 #!/bin/sh
-# Collie installer — https://lihuanyu0w0.github.io/collie
+# Collie installer — https://github.com/Tdcle/collie
 #
 #   安装 collie 命令：
-#     curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh
 #
-#   把这台电脑加入 hub，并作为后台服务常驻（macOS: launchd，Linux: systemd --user）：
-#     curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
+#   把这台电脑加入 hub，并作为后台服务常驻（macOS: launchd，Linux: systemd --user，Windows Git Bash: daemon）：
+#     curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- node --hub http://<hub>:7788 --code <配对码>
 #
 #   让这台电脑做 hub，并作为后台服务常驻：
-#     curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- hub [--url http://<本机内网 IP>:7788]
+#     curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s -- hub [--url http://<本机内网 IP>:7788]
 #
 #   从源码安装（需要 Go 1.25+）：在仓库里运行这个脚本，会用本地源码编译，不下载：
-#     git clone https://github.com/lihuanyu0w0/collie.git ~/collie && cd ~/collie
+#     git clone https://github.com/Tdcle/collie.git ~/collie && cd ~/collie
 #     sh docs/install.sh [hub | node …]
 #
-# 环境变量：COLLIE_BIN_DIR（默认 ~/.local/bin）、COLLIE_BINARY（直接安装这个现成的文件）、
-# COLLIE_VERSION（下载时的版本，默认 latest）。
+# 环境变量：COLLIE_REPO（默认 Tdcle/collie）、COLLIE_BIN_DIR（默认 ~/.local/bin）、
+# COLLIE_BINARY（直接安装这个现成的文件）、COLLIE_VERSION（下载时的版本，默认 latest）。
 set -eu
 
-REPO=lihuanyu0w0/collie
+REPO=${COLLIE_REPO:-Tdcle/collie}
 VERSION=${COLLIE_VERSION:-latest}
 BIN_DIR=${COLLIE_BIN_DIR:-$HOME/.local/bin}
-BIN=$BIN_DIR/collie
 
 say() { printf '%s\n' "$*"; }
 step() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31mcollie:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ------------------------------------------------------------------ platform
+ext=""
 case "$(uname -s)" in
   Darwin) os=darwin ;;
   Linux) os=linux ;;
-  *) die "暂时只支持 macOS 和 Linux（这台是 $(uname -s)）" ;;
+  MINGW* | MSYS* | CYGWIN*) os=windows; ext=.exe ;;
+  *) die "不支持的系统：$(uname -s)（Windows 上也可用 PowerShell 运行 docs/install.ps1）" ;;
 esac
+BIN=$BIN_DIR/collie$ext
 case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
   arm64 | aarch64) arch=arm64 ;;
@@ -60,12 +62,12 @@ sha256() {
 checkout() {
   case "$0" in *install.sh) ;; *) return 1 ;; esac
   d=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd) || return 1
-  grep -q '^module github.com/lihuanyu0w0/collie$' "$d/go.mod" 2>/dev/null || return 1
+  grep -Eq '^module github\.com/.+/collie$' "$d/go.mod" 2>/dev/null || return 1
   printf '%s\n' "$d"
 }
 
 install_binary() {
-  asset=collie-$os-$arch
+  asset=collie-$os-$arch$ext
   if [ "$VERSION" = latest ]; then
     base=https://github.com/$REPO/releases/latest/download
   else
@@ -83,17 +85,30 @@ install_binary() {
     (cd "$src" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "$tmp/$asset" .) || die "编译失败"
   else
     step "下载 $asset（$VERSION）"
-    fetch "$base/$asset" "$tmp/$asset" || die "下载失败：$base/$asset"
-    if fetch "$base/checksums.txt" "$tmp/checksums.txt" 2>/dev/null; then
-      want=$(grep " $asset\$" "$tmp/checksums.txt" | cut -d' ' -f1)
-      [ -n "$want" ] && [ "$want" = "$(sha256 "$tmp/$asset")" ] || die "校验和对不上，没有安装"
+    if fetch "$base/$asset" "$tmp/$asset"; then
+      if fetch "$base/checksums.txt" "$tmp/checksums.txt" 2>/dev/null; then
+        want=$(grep " $asset\$" "$tmp/checksums.txt" | cut -d' ' -f1)
+        [ -n "$want" ] && [ "$want" = "$(sha256 "$tmp/$asset")" ] || die "校验和对不上，没有安装"
+      fi
+    elif command -v git >/dev/null 2>&1 && command -v go >/dev/null 2>&1; then
+      step "没有现成的预编译版本，用本机 Go 从 https://github.com/$REPO 编译…"
+      git clone --depth 1 "https://github.com/$REPO.git" "$tmp/src" || die "git clone 失败"
+      v=$(git -C "$tmp/src" describe --tags --always --dirty 2>/dev/null || echo dev)
+      (cd "$tmp/src" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "$tmp/$asset" .) || die "编译失败"
+    else
+      die "下载失败：$base/$asset（也可以装好 git + Go 1.25+ 后重跑自动编译）"
     fi
   fi
 
   mkdir -p "$BIN_DIR"
   chmod 755 "$tmp/$asset"
+  if [ "$os" = windows ] && [ -f "$BIN" ]; then
+    rm -f "$BIN.old" 2>/dev/null || true
+    mv -f "$BIN" "$BIN.old" 2>/dev/null || true
+  fi
   # Replace atomically: a running node or hub keeps its old file until restart.
   mv -f "$tmp/$asset" "$BIN.new" && mv -f "$BIN.new" "$BIN"
+  [ "$os" = windows ] && rm -f "$BIN.old" 2>/dev/null || true
   step "已安装 $("$BIN" version 2>/dev/null || echo collie) → $BIN"
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
@@ -110,6 +125,15 @@ xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/
 service() {
   name=$1; shift
   path="$BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  if [ "$os" = windows ]; then
+    # In Git Bash / MSYS on Windows, `collie daemon` manages the detached background supervisor.
+    sub=$1; shift
+    if [ -n "${COLLIE_DRY_SERVICE:-}" ]; then say "$BIN daemon restart $name -- $*"; return; fi
+    "$BIN" daemon restart "$name" -- "$@"
+    step "已作为后台服务运行（collie daemon: $name）"
+    say "    日志：tail -f ~/.collie/$name.log"
+    return
+  fi
   if [ "$os" = darwin ]; then
     label=com.collie.$name
     plist=$HOME/Library/LaunchAgents/$label.plist
@@ -201,6 +225,19 @@ warn() { printf '\033[33m!\033[0m %s\n' "$*"; }
 # check_herdr: Collie drives agents through herdr, which is installed and
 # set up on its own. Say what is missing on this computer; change nothing.
 check_herdr() {
+  if [ "$os" = windows ]; then
+    hb=$(command -v herdr 2>/dev/null || command -v herdr.exe 2>/dev/null || true)
+    [ -z "$hb" ] && [ -f "$HOME/.local/bin/herdr.exe" ] && hb=$HOME/.local/bin/herdr.exe
+    if [ -z "$hb" ]; then
+      warn "没找到 herdr：在 PowerShell 运行 irm https://herdr.dev/install.ps1 | iex 安装。"
+      return 0
+    fi
+    if ! "$hb" status 2>/dev/null | grep -q "status: running"; then
+      powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Process -FilePath '$hb' -ArgumentList 'server' -WindowStyle Hidden" >/dev/null 2>&1 || true
+      sleep 2
+    fi
+    return 0
+  fi
   hb=$(command -v herdr 2>/dev/null || true)
   [ -z "$hb" ] && [ -x "$HOME/.local/bin/herdr" ] && hb=$HOME/.local/bin/herdr
   # Collie talks to herdr (the CLI at herdr.dev/install.sh), not to the Herdr

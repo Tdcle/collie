@@ -179,7 +179,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 			}
 		}
 		prompt := strings.ReplaceAll(dreamPrompt, "{{DATE}}", time.Now().Format("2006-01-02"))
-		prompt = strings.ReplaceAll(prompt, "{{BIN}}", sp.bin)
+		prompt = strings.ReplaceAll(prompt, "{{BIN}}", shellBin(sp.bin))
 		migrate := ""
 		if sp.legacyMemory() {
 			migrate = "\nFirst: " + migrateNote + "\n"

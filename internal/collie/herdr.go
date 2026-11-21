@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strconv"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -38,8 +37,7 @@ func unixDialer(socket string) func(ctx context.Context) (net.Conn, error) {
 // logout: herdr stopped with the session, Collie's service came back on its
 // own): start herdr's server in the background and try again.
 func dialHerdr(ctx context.Context, socket string) (net.Conn, error) {
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", socket)
+	c, err := dialHerdrRaw(ctx, socket)
 	if err == nil || !startHerdrServer() {
 		return c, err
 	}
@@ -49,7 +47,7 @@ func dialHerdr(ctx context.Context, socket string) (net.Conn, error) {
 			return nil, err
 		case <-time.After(250 * time.Millisecond):
 		}
-		if c, err2 := d.DialContext(ctx, "unix", socket); err2 == nil {
+		if c, err2 := dialHerdrRaw(ctx, socket); err2 == nil {
 			return c, nil
 		}
 	}
@@ -72,7 +70,7 @@ func startHerdrServer() bool {
 	}
 	cmd := exec.Command(bin, "server")
 	cmd.Dir = home
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // outlives us, like the one a terminal starts
+	detachCmd(cmd) // outlives us, like the one a terminal starts
 	if err := cmd.Start(); err != nil {
 		log.Printf("start herdr server: %v", err)
 		return false

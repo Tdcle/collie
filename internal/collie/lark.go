@@ -46,7 +46,9 @@ func larkLookup() (bin, openID, who, problem string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "auth", "status").Output()
+	cmd := exec.CommandContext(ctx, bin, "auth", "status")
+	hideCmd(cmd)
+	out, err := cmd.Output()
 	var st struct {
 		Identities struct {
 			Bot struct {
@@ -81,7 +83,9 @@ func larkSend(ns []notice, link string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		args = append([]string{"im", "+messages-send", "--as", "bot", "--user-id", openID}, args...)
-		if out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput(); err != nil {
+		cmd := exec.CommandContext(ctx, bin, args...)
+		hideCmd(cmd)
+		if out, err := cmd.CombinedOutput(); err != nil {
 			return errors.New(clip(string(out), 300))
 		}
 		return nil

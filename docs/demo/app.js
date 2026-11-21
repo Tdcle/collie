@@ -11,7 +11,7 @@
   const narrow = () => matchMedia("(max-width: 760px)").matches;
   const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
+  const tilde = (p) => (p || "").replace(/^\/Users\/[^/]+|^\/home\/[^/]+|^[A-Za-z]:[\\/]Users[\\/][^\\/]+/, "~");
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
   // 21:52 today, 昨天 18:30, 11月18日 18:30 before that.
   const sepTime = (t) => {
@@ -428,7 +428,7 @@
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
   const autoName = (n) => /^(claude|codex|agy|antigravity)-\d+$/.test(n || "");
-  const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || "~";
+  const base = (p) => (p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "~";
   function title(v) {
     if (!v) return "";
     if (v.name === ROUTER) return "Collie";
@@ -1436,7 +1436,7 @@
     renderHist();
     location.hash = "#/";
   });
-  const extName = (e) => e.title || (e.cwd ? e.cwd.split("/").filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
+  const extName = (e) => e.title || (e.cwd ? e.cwd.split(/[\\/]/).filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
   // The sidebar, by what you need: what is going on now (herdr agents, yours
   // and Collie's, and other apps' running sessions), then what you did lately
   // (other apps' resting conversations and ended herdr sessions, merged).
@@ -1740,7 +1740,10 @@
   const left = (p) => { const s = Math.max(0, Math.round((p.expires - Date.now()) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
   // A newer release: the footer says so, the devices page says where and how.
-  const INSTALL = "curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s --";
+  const INSTALL_SH = "curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s --";
+  const INSTALL_PS1_URL = "https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1";
+  const winCmd = (args) => `powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm ${INSTALL_PS1_URL}))) ${args}"`;
+  const installCmdFor = (os, args) => /^windows\b/i.test(os || "") ? winCmd(args) : `${INSTALL_SH} ${args}`;
   const isOld = (have, latest) => {
     const p = (v) => /^v\d+\.\d+\.\d+$/.test(v || "") ? v.slice(1).split(".").map(Number) : null;
     const a = p(have), b = p(latest);
@@ -1778,8 +1781,11 @@
     const pb = pairing.browser;
     const phoneURL = pb ? `${devAddr}/?pair=${pb.code}` : "";
     const pm = fresh("machine") ? pairing.machine : null;
-    const nodeCmd = pm ? `collie node --hub ${devAddr} --code ${pm.code}` : "";
-    const installCmd = pm ? `curl -fsSL https://lihuanyu0w0.github.io/collie/install.sh | sh -s -- node --hub ${devAddr} --code ${pm.code}` : "";
+    const nodeArgs = pm ? `node --hub ${devAddr} --code ${pm.code}` : "";
+    const nodeCmd = pm ? `collie ${nodeArgs}` : "";
+    const installCmd = pm ? `${INSTALL_SH} ${nodeArgs}` : "";
+    const installWinCmd = pm ? winCmd(nodeArgs) : "";
+    const hubCmd = installCmdFor(r.hub.os, "hub");
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
@@ -1788,7 +1794,7 @@
     const typed = [...document.querySelectorAll("#add-hub input")].map((i) => i.value);
 
     $("#devices-body").innerHTML = `
-      <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac 等电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
+      <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac、Linux 或 Windows 电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
 
       <div class="pair-grid">
         <div class="card pair-card">
@@ -1801,8 +1807,11 @@
 
         <div class="card pair-card">
           <div class="card-h">连接一台电脑</div>
-          <p class="pair-hint">在那台电脑上装好 herdr、git 和 Go 1.25+，然后运行（从源码编译 Collie，并作为后台服务常驻）：</p>
-          ${pm ? `<div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+          <p class="pair-hint">在那台电脑上装好 herdr（编译安装还需 git 和 Go 1.25+），然后运行以作为后台服务常驻：</p>
+          ${pm ? `<p class="pair-hint"><b>macOS / Linux</b>：</p>
+               <div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+               <p class="pair-hint"><b>Windows（PowerShell）</b>：</p>
+               <div class="code big"><span>${esc(installWinCmd)}</span><button class="icon-btn" data-copy="${esc(installWinCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
                <p class="pair-hint">已经装了 collie 的话：</p>
                <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
                <p class="pair-hint"><b>${left(pm)}</b> 内有效，只能用一次。之后它会自动重连。</p>`
@@ -1814,12 +1823,12 @@
       <div class="card"><div class="card-h">电脑</div><ul class="rows">
         <li class="row dev-row">
           <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${verTag(r.hub.version, r.latest, INSTALL + " hub")}${agentsTag(r.hub.agents)}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, INSTALL + " hub", "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
+          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${r.hub.os ? `<span>${esc(r.hub.os)}</span>` : ""}${verTag(r.hub.version, r.latest, hubCmd)}${agentsTag(r.hub.agents)}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, hubCmd, "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
           <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
-        ${machines.map((d) => `<li class="row dev-row">
+        ${machines.map((d) => { const dCmd = installCmdFor(d.os, "node"); return `<li class="row dev-row">
           <span class="dot ${d.online ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, INSTALL + " node")}${d.online ? agentsTag(d.agents) : ""}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, INSTALL + " node", "", d.id, d.name)}</div>
-          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`).join("")}
+          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, dCmd)}${d.online ? agentsTag(d.agents) : ""}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, dCmd, "", d.id, d.name)}</div>
+          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`; }).join("")}
       </ul></div>
 
       <div class="card"><div class="card-h">其他 hub</div>
@@ -1938,7 +1947,10 @@
     // folder shortens to ~ (big Linux boxes keep homes outside /home).
     const ms = state.machines || [];
     const home = ms.find((m) => m.id === (v.machine || ""))?.home;
-    const cwd = home && (v.cwd || "").startsWith(home) ? "~" + v.cwd.slice(home.length) : tilde(v.cwd);
+    const rawCwd = v.cwd || "";
+    const cwd = home && rawCwd.length >= home.length && rawCwd.slice(0, home.length).toLowerCase() === home.toLowerCase() && (!rawCwd[home.length] || rawCwd[home.length] === "/" || rawCwd[home.length] === "\\")
+      ? "~" + rawCwd.slice(home.length)
+      : tilde(rawCwd);
     $("#d-cwd").textContent = (ms.length > 1 ? machineName(v.machine) + " · " : "") + cwd;
     renderWorkerModel(v);
     // The pane may have shown up before the page knew what it is (a fresh
@@ -2439,9 +2451,9 @@
     $("#kbd-toggle").classList.toggle("on", on);
   });
 
-  // A file path in a message: ~/… or /…, ending in a name with an extension.
+  // A file path in a message: ~/…, /…, or C:\… / C:/…, ending in a name with an extension.
   // It runs on escaped text, so it never meets a raw quote or tag.
-  const FILE_RE = /(^|[\s(（：，、；>;])((?:~|\/)[\w.\-+@%~\/]*\/[\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/])/g;
+  const FILE_RE = /(^|[\s(（：，、；>;])((?:(?:~|\/)[\w.\-+@%~\/\\]*|[A-Za-z]:[\\/][\w.\-+@%~\/\\]*)[\\/][\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/\\])/g;
 
   // ───────────────────────────── file viewer
   // A file an agent mentions opens here, read-only, from the computer it is on.
@@ -2476,7 +2488,7 @@
   let fileUrl = "", fileSeq = 0;
   async function openFile(path) {
     const body = $("#fv-body"), seq = ++fileSeq;
-    $("#fv-name").textContent = path.split("/").pop();
+    $("#fv-name").textContent = path.split(/[\\/]/).pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
     showFilePane();
@@ -2642,7 +2654,7 @@
       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
       // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
-      .replace(/\[([^\]\n]+)\]\((?:file:\/\/)?((?:\/|~\/)[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
+      .replace(/\[([^\]\n]+)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
         p = p.replace(/:\d+(?:[-:]\d+)?$/, "");
         try { p = decodeURI(p); } catch {}
         return `<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`;
@@ -2815,7 +2827,7 @@
     if (i < 0) return withImages(esc(t));
     const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
     const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
-    const name = (p) => p.split("/").pop().replace(/^[0-9a-f]{6}-/, "");
+    const name = (p) => p.split(/[\\/]/).pop().replace(/^[0-9a-f]{6}-/, "");
     return withImages(esc(t.slice(0, i).trimEnd()))
       + (imgs.length ? `<span class="thumbs">${imgs.map(thumbBtn).join("")}</span>` : "")
       + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
@@ -3014,23 +3026,38 @@
   nameInput.addEventListener("input", () => { nameTouched = true; });
   $("#recent").addEventListener("click", (e) => { const d = e.target.closest("button")?.dataset.d; if (d) { cwdInput.value = d; browse(d); } });
 
-  let browseTimer;
+  let browseTimer, dirParent = "";
   async function browse(p) {
     try {
       const r = await api("/api/dirs?path=" + encodeURIComponent(p) + (pickMachine ? "&machine=" + encodeURIComponent(pickMachine) : ""));
+      dirParent = r.parent || "";
       $("#dirs").innerHTML = r.dirs.map((d) => `<li data-d="${esc(d)}">${esc(d)}</li>`).join("");
-    } catch { $("#dirs").innerHTML = ""; }
+    } catch { dirParent = ""; $("#dirs").innerHTML = ""; }
   }
   cwdInput.addEventListener("input", () => { clearTimeout(browseTimer); browseTimer = setTimeout(() => browse(cwdInput.value), 250); });
   $("#dirs").addEventListener("click", (e) => {
     const d = e.target.closest("li")?.dataset.d;
     if (!d) return;
-    cwdInput.value = (cwdInput.value.replace(/\/+$/, "") || "~") + "/" + d;
+    if (/^[A-Za-z]:[\\/]?$/.test(d)) {
+      cwdInput.value = d;
+    } else {
+      const cur = cwdInput.value.replace(/[\\/]+$/, "") || "~";
+      const sep = cur.includes("\\") || /^[A-Za-z]:/.test(cur) ? "\\" : "/";
+      cwdInput.value = (cur === "/" ? "" : cur) + sep + d;
+    }
     browse(cwdInput.value);
   });
   $("#dir-up").addEventListener("click", () => {
-    const v = cwdInput.value.replace(/\/+$/, "");
-    const up = v.includes("/") ? v.slice(0, v.lastIndexOf("/")) || "/" : "~";
+    let up = dirParent;
+    if (!up) {
+      const v = cwdInput.value.replace(/[\\/]+$/, "");
+      if (/^[A-Za-z]:$/.test(v)) up = "/";
+      else {
+        const i = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
+        up = i > 0 ? v.slice(0, i) : i === 0 ? "/" : "~";
+        if (/^[A-Za-z]:$/.test(up)) up += "\\";
+      }
+    }
     cwdInput.value = up;
     browse(up);
   });

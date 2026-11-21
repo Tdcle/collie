@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"syscall"
 
 	"net/http"
 	"strconv"
@@ -25,8 +24,9 @@ import (
 // say which computers run an older Collie. The release page's redirect
 // (…/releases/latest → …/tag/vX.Y.Z) needs no API token or rate limit.
 
-const releasesLatest = "https://github.com/" + repo + "/releases/latest"
-const repo = "lihuanyu0w0/collie"
+var repo = "Tdcle/collie"
+
+func releaseRepo() string { return envOr("COLLIE_REPO", repo) }
 
 var latestRel struct {
 	sync.Mutex
@@ -79,7 +79,7 @@ func fetchLatestTag() string {
 		Timeout:       20 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	resp, err := c.Head(releasesLatest)
+	resp, err := c.Head("https://github.com/" + releaseRepo() + "/releases/latest")
 	if err != nil {
 		return ""
 	}
@@ -182,17 +182,15 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() {
 		time.Sleep(800 * time.Millisecond)
-		err := syscall.Exec(exe, os.Args, os.Environ())
-		log.Printf("restart after update: %v", err) // only reached if exec failed
-		os.Exit(1)
+		restartSelf(exe)
 	}()
 }
 
 // downloadRelease puts release tag's binary for this platform at exe,
 // checked against the release's checksums and by running it once.
 func downloadRelease(ctx context.Context, tag, exe string) error {
-	asset := "collie-" + runtime.GOOS + "-" + runtime.GOARCH
-	base := "https://github.com/" + repo + "/releases/download/" + tag + "/"
+	asset := releaseAssetFor(runtime.GOOS, runtime.GOARCH)
+	base := "https://github.com/" + releaseRepo() + "/releases/download/" + tag + "/"
 	c := &http.Client{Timeout: 5 * time.Minute}
 	get := func(name string) (*http.Response, error) {
 		req, _ := http.NewRequestWithContext(ctx, "GET", base+name, nil)
@@ -237,13 +235,15 @@ func downloadRelease(ctx context.Context, tag, exe string) error {
 		err = fmt.Errorf("下载的文件校验不对，再试一次")
 	}
 	if err == nil {
-		out, rerr := exec.CommandContext(ctx, tmp, "version").Output()
+		cmd := exec.CommandContext(ctx, tmp, "version")
+		hideCmd(cmd)
+		out, rerr := cmd.Output()
 		if rerr != nil || !strings.Contains(string(out), tag) {
 			err = fmt.Errorf("新版本在这台电脑上跑不起来：%v %s", rerr, strings.TrimSpace(string(out)))
 		}
 	}
 	if err == nil {
-		err = os.Rename(tmp, exe)
+		err = replaceBinary(tmp, exe)
 	}
 	if err != nil {
 		os.Remove(tmp)

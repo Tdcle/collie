@@ -254,6 +254,7 @@ func (s *Server) codexModels(ctx context.Context, info *ModelInfo) {
 // codexModelList asks a short-lived `codex app-server` (stdio, JSON lines).
 func codexModelList(ctx context.Context, bin string) []ModelOpt {
 	cmd := exec.CommandContext(ctx, bin, "app-server")
+	hideCmd(cmd)
 	in, _ := cmd.StdinPipe()
 	out, _ := cmd.StdoutPipe()
 	if cmd.Start() != nil {
@@ -320,7 +321,9 @@ func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
 	if bin == "" {
 		return
 	}
-	out, err := exec.CommandContext(ctx, bin, "models").Output()
+	cmd := exec.CommandContext(ctx, bin, "models")
+	hideCmd(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return
 	}
@@ -332,7 +335,7 @@ func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
 }
 
 // findBin locates an agent's program: PATH, the usual install places, then
-// the user's login shell (which knows nvm and friends).
+// the user's login shell / registry PATH.
 var binCache sync.Map
 
 func findBin(name, home string) string {
@@ -343,29 +346,8 @@ func findBin(name, home string) string {
 	if p, err := exec.LookPath(name); err == nil {
 		found = p
 	}
-	for _, d := range []string{".local/bin", ".npm-global/bin", ".bun/bin", "bin"} {
-		if found == "" && isFile(filepath.Join(home, d, name)) {
-			found = filepath.Join(home, d, name)
-		}
-	}
-	for _, d := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
-		if found == "" && isFile(filepath.Join(d, name)) {
-			found = filepath.Join(d, name)
-		}
-	}
 	if found == "" {
-		sh := os.Getenv("SHELL")
-		if sh == "" {
-			sh = "/bin/bash"
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		out, _ := exec.CommandContext(ctx, sh, "-lic", "command -v "+name).Output()
-		cancel()
-		for _, l := range strings.Split(string(out), "\n") {
-			if l = strings.TrimSpace(l); filepath.IsAbs(l) && isFile(l) {
-				found = l
-			}
-		}
+		found = findBinPlatform(name, home)
 	}
 	if found != "" {
 		binCache.Store(name, found)

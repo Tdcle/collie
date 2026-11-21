@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -253,7 +252,7 @@ func sessionID(kind, value string) string {
 	if kind != "path" {
 		return value
 	}
-	ids := uuidRe.FindAllString(filepath.Base(value), -1)
+	ids := uuidRe.FindAllString(baseOfPath(value), -1)
 	if len(ids) == 0 {
 		return ""
 	}
@@ -837,7 +836,7 @@ func (sp *Super) writeRouterFiles() error {
 	wcwd := sp.s.tilde(sp.st.Settings.WorkerCwd)
 	sp.mu.Unlock()
 	layout := "   " + strings.ReplaceAll(memoryLayout, "\n", "\n   ")
-	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", sp.bin, "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
+	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", shellBin(sp.bin), "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
 	for _, name := range []string{"ROUTER.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o600); err != nil {
 			return err
@@ -1064,7 +1063,7 @@ Rules:
 - Work autonomously in this directory; you never talk to humans directly.
 - When you finish, or need a decision only a human can make, run:
     %s report "<≤100 words: outcome, what changed, where; or the exact question>"
-- Follow-ups for your thread arrive as messages starting with [collie].`, w.Name, w.Thread, strings.TrimSpace(w.Task), bin)
+- Follow-ups for your thread arrive as messages starting with [collie].`, w.Name, w.Thread, strings.TrimSpace(w.Task), shellBin(bin))
 }
 
 func (sp *Super) Report(name, text string) error {
@@ -1476,13 +1475,21 @@ func pickChoice(a Approval, want string) (Choice, bool) {
 // (as given, with ~, or by its last part: the screen may show the path a
 // symlink resolves to).
 func trustDialogFor(screen, dir, tilde string) bool {
-	if !strings.Contains(strings.ToLower(screen), "trust") || dir == "" {
+	low := strings.ToLower(screen)
+	if !strings.Contains(low, "trust") || dir == "" {
 		return false
 	}
-	if strings.Contains(screen, dir) || strings.Contains(screen, tilde) {
+	if strings.Contains(screen, dir) || (tilde != "" && strings.Contains(screen, tilde)) {
 		return true
 	}
-	return regexp.MustCompile(`(?m)/` + regexp.QuoteMeta(path.Base(dir)) + `/?\s*$`).MatchString(screen)
+	if isWindowsPath(dir) && (strings.Contains(low, strings.ToLower(dir)) || (tilde != "" && strings.Contains(low, strings.ToLower(tilde)))) {
+		return true
+	}
+	base := baseOfPath(dir)
+	if base == "" {
+		return false
+	}
+	return regexp.MustCompile(`(?m)[\\/]` + regexp.QuoteMeta(base) + `[\\/]?\s*$`).MatchString(screen)
 }
 
 // closeStaleRouterWorkspaces removes router workspaces whose agent has exited,
@@ -1630,7 +1637,7 @@ func stableBin(exe, dir string) string {
 	if !strings.Contains(exe, "go-build") {
 		return exe
 	}
-	dst := filepath.Join(dir, "bin", "collie")
+	dst := filepath.Join(dir, "bin", exeName("collie"))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return exe
 	}
@@ -1642,7 +1649,8 @@ func stableBin(exe, dir string) string {
 	if err := os.WriteFile(tmp, b, 0o755); err != nil {
 		return exe
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := replaceBinary(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
 		return exe
 	}
 	return dst
@@ -1657,13 +1665,20 @@ func (sp *Super) settings() Settings {
 // collieAllow is the Claude Code permission rule set for calling the collie
 // CLI, by its absolute path and by name.
 func collieAllow(bin string, extra ...string) []string {
-	rules := []string{"Bash(collie:*)", "Bash(collie *)", "Read(~/.collie/uploads/**)"}
+	rules := []string{"Bash(collie:*)", "Bash(collie *)", "Bash(collie.exe:*)", "Bash(collie.exe *)", "Read(~/.collie/uploads/**)"}
 	// Claude matches the resolved path too; home is often a symlink.
 	if up, err := filepath.EvalSymlinks(filepath.Join(collieDir(), "uploads")); err == nil {
-		rules = append(rules, "Read(/"+up+"/**)")
+		s := filepath.ToSlash(up)
+		if !strings.HasPrefix(s, "/") {
+			s = "/" + s
+		}
+		rules = append(rules, "Read(/"+strings.TrimPrefix(s, "/")+"/**)")
 	}
-	if bin != "" && bin != "collie" {
+	if bin != "" && bin != "collie" && bin != "collie.exe" {
 		rules = append(rules, "Bash("+bin+":*)", "Bash("+bin+" *)")
+		if sb := shellBin(bin); sb != bin {
+			rules = append(rules, "Bash("+sb+":*)", "Bash("+sb+" *)")
+		}
 	}
 	return append(rules, extra...)
 }

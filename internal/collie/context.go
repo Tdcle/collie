@@ -145,7 +145,7 @@ func agyUsage(path string) ctxUsage {
 	if !isFile(db) {
 		return ctxUsage{}
 	}
-	conn, err := sql.Open("sqlite", "file:"+db+"?mode=ro&_pragma=busy_timeout(2000)")
+	conn, err := sql.Open("sqlite", sqliteURI(db, "mode=ro&_pragma=busy_timeout(2000)"))
 	if err != nil {
 		return ctxUsage{}
 	}

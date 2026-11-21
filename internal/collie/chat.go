@@ -667,7 +667,7 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 		}
 		return "", ""
 	}
-	if strings.ContainsAny(value, "/*?[") {
+	if strings.ContainsAny(value, `/\*?[`) {
 		return "", ""
 	}
 	switch kind {

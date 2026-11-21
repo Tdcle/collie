@@ -88,7 +88,7 @@ func (r *claudeReg) canSend() (bool, string) {
 		return false, "这个 Claude Code 版本太旧，没有会话收件箱（2.1.29x 起才有），只能看"
 	case r.Protocol != 1:
 		return false, "这个 Claude Code 的收件箱协议 Collie 还不认识，只能看"
-	case !filepath.IsAbs(r.Socket) || filepath.Ext(r.Socket) != ".sock":
+	case !strings.HasPrefix(r.Socket, `\\.\pipe\`) && (!filepath.IsAbs(r.Socket) || filepath.Ext(r.Socket) != ".sock"):
 		return false, "这台电脑上的收件箱 Collie 连不上，只能看"
 	}
 	return true, ""
@@ -193,8 +193,7 @@ func (r *claudeReg) send(ctx context.Context, text string) error {
 	}
 	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var d net.Dialer
-	conn, err := d.DialContext(dctx, "unix", r.Socket)
+	conn, err := dialLocalSocket(dctx, r.Socket)
 	if err != nil {
 		return fmt.Errorf("连不上这个会话的收件箱：%w", err)
 	}
@@ -285,7 +284,7 @@ type codexReply struct {
 
 func dialCodex(ctx context.Context, sock string) (*codexRPC, error) {
 	hc := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+		return dialLocalSocket(ctx, sock)
 	}}}
 	ws, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{HTTPClient: hc})
 	if err != nil {

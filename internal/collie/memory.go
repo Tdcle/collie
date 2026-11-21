@@ -152,16 +152,20 @@ func (sp *Super) memFiles() []*memFile {
 // memoryRules lets Collie (and its dream session, which nobody watches) keep
 // memory/ without asking: by relative and absolute path, plus read-only looks.
 func memoryRules(dir string) []string {
-	abs := "/" + strings.TrimPrefix(dir, "/") // Claude Code writes absolute paths as //path
+	slashed := filepath.ToSlash(dir)
+	if isWindowsPath(dir) {
+		slashed = strings.ReplaceAll(dir, `\`, "/")
+	}
+	abs := "/" + strings.TrimPrefix(slashed, "/") // Claude Code writes absolute paths as //path
 	var r []string
 	for _, p := range []string{"memory/**", "dreams/**", "memory.md", "memory-archive.md"} {
 		r = append(r, "Read("+p+")", "Edit("+p+")", "Write("+p+")", "Read(/"+abs+"/"+p+")", "Edit(/"+abs+"/"+p+")", "Write(/"+abs+"/"+p+")")
 	}
 	r = append(r, "Read(dream/**)", "Read(/"+abs+"/dream/**)")
-	for _, base := range []string{"", dir + "/"} {
+	for _, base := range []string{"", slashed + "/"} {
 		r = append(r, "Bash(mkdir -p "+base+"memory:*)", "Bash(mv "+base+"memory:*)", "Bash(rm "+base+"memory.md:*)", "Bash(rm "+base+"memory-archive.md:*)")
 	}
-	for _, c := range []string{"ls", "find", "du", "wc", "cat", "head", "tail", "sort", "grep", "stat", "echo", "date"} {
+	for _, c := range []string{"ls", "find", "du", "wc", "cat", "head", "tail", "sort", "grep", "stat", "echo", "date", "dir", "type"} {
 		r = append(r, "Bash("+c+":*)")
 	}
 	return r
