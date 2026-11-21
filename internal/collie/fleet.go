@@ -598,6 +598,20 @@ func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
 	if h.ScreenAsks(ctx, pane) {
 		return &HerdrError{Code: "agent_blocked", Message: "agent is showing a question"}
 	}
+	if vis, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && strings.Contains(vis.Text, "This conversation is open in another app") {
+		// Automatically press 'f' (Codex TUI shortcut for `fork`) to unlock into an
+		// interactive continuation thread before pasting the user's message.
+		_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"f"}}, nil)
+		for i := 0; i < 15; i++ {
+			time.Sleep(400 * time.Millisecond)
+			if err := h.Call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, nil); err == nil {
+				return nil
+			}
+			if v2, e2 := h.Read(ctx, pane, "visible", "text", 0); e2 == nil && !strings.Contains(v2.Text, "This conversation is open in another app") {
+				break
+			}
+		}
+	}
 	// Bracketed paste keeps multi-line text in one message.
 	if e := h.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": "\x1b[200~" + text + "\x1b[201~"}, nil); e != nil {
 		return e

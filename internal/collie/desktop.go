@@ -334,6 +334,32 @@ func (s *Server) codexStateDB() string {
 	return best
 }
 
+func (s *Server) codexRolloutFromStateDB(session string) string {
+	if session == "" {
+		return ""
+	}
+	path := s.codexStateDB()
+	if path == "" {
+		return ""
+	}
+	db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)"))
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	var rollout string
+	if db.QueryRow(`SELECT rollout_path FROM threads WHERE id = ? LIMIT 1`, session).Scan(&rollout) != nil {
+		return ""
+	}
+	if isWindowsPath(rollout) {
+		rollout = winClean(rollout)
+	}
+	if isFile(rollout) {
+		return rollout
+	}
+	return ""
+}
+
 func (s *Server) codexAppRows() []desktopRow {
 	path := s.codexStateDB()
 	if path == "" {

@@ -9,7 +9,7 @@
     set(k, v) { try { localStorage.setItem("collie." + k, JSON.stringify(v)); } catch {} },
   };
   const narrow = () => matchMedia("(max-width: 760px)").matches;
-  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
+  const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", gemini: "Gemini CLI" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const cleanPath = (p) => String(p || "").replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "");
   const tilde = (p, home) => {
@@ -38,9 +38,11 @@
 
   // ───────────────────────────── icons & labels
   const GLYPHS = {
-    claude: '<svg viewBox="0 0 32 32"><path d="M16 5v22M5 16h22M8.2 8.2l15.6 15.6M23.8 8.2L8.2 23.8"/></svg>',
-    codex: '<svg viewBox="0 0 32 32"><path d="M16 4l10.4 6v12L16 28 5.6 22V10z"/><path d="M13 13l-3 3 3 3M19 13l3 3-3 3"/></svg>',
-    agy: '<svg viewBox="0 0 32 32"><ellipse cx="16" cy="16" rx="11" ry="5" transform="rotate(-30 16 16)"/><path d="M16 21V9M12 13l4-4 4 4"/></svg>',
+    claude: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg>',
+    codex: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>',
+    agy: '<svg viewBox="10 14 92 86" fill="currentColor" stroke="none"><path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"/></svg>',
+    antigravity: '<svg viewBox="10 14 92 86" fill="currentColor" stroke="none"><path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"/></svg>',
+    gemini: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M13.55 7.15A10.2 10.2 0 0 1 12 2.5 10.2 10.2 0 0 1 2.5 12a10.2 10.2 0 0 1 8.15 4.55"/><path d="M16.35 9.65A10.2 10.2 0 0 0 21.5 12 10.2 10.2 0 0 0 12 21.5"/></svg>',
     agent: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/><path d="M12 15h.01M20 15h.01M12 20c2.4 1.8 5.6 1.8 8 0"/></svg>',
     shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
     collie: '<img src="/icon.svg" alt="" style="width:20px;height:20px">',
@@ -52,7 +54,7 @@
     relay: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M6.7 7.3l3.1 2.7M17.3 7.3l-3.1 2.7M6.7 16.7l3.1-2.7M17.3 16.7l-3.1-2.7"/></svg>',
   };
   const osGlyph = (os, relay = false) => relay ? OS_GLYPHS.relay : /^darwin/i.test(os || "") ? OS_GLYPHS.mac : /^windows/i.test(os || "") ? OS_GLYPHS.win : OS_GLYPHS.linux;
-  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity" };
+  const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity", gemini: "gemini" };
   const STATUS_LABEL = {
     idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
     asleep: "休眠中", starting: "启动中", gone: "已退出", failed: "启动失败",
@@ -145,6 +147,7 @@
   document.body.append(pickBack, pickPop);
   let pickOpen = null;
   const optIcon = (o) => o.dataset.glyph ? `<span class="pi">${GLYPHS[o.dataset.glyph] || ""}</span>`
+    : o.dataset.os ? `<span class="pi">${OS_GLYPHS[o.dataset.os] || ""}</span>`
     : o.dataset.dot ? `<span class="pi"><span class="dot ${esc(o.dataset.dot)}"></span></span>` : "";
   function syncPick(sel) {
     const b = sel._pick;
@@ -295,7 +298,7 @@
       boot();
     } catch (err) { $("#login-error").textContent = /^[A-Z2-7]{8}$/i.test(v) ? err.message : "令牌不对"; }
   });
-  $("#logout").addEventListener("click", async () => { await fetch("/api/logout", { method: "POST" }); location.reload(); });
+  $("#logout")?.addEventListener("click", async () => { await fetch("/api/logout", { method: "POST" }); location.reload(); });
 
   // ───────────────────────────── live state
   let state = { ok: false, agents: [], shells: [] };
@@ -446,7 +449,7 @@
   const find = (id) => state.agents.find((a) => a.pane_id === id) || state.shells.find((a) => a.pane_id === id);
   // What to call an agent: the session's own title; a handle like "agy-1" says
   // nothing, so until there's a title use the folder it works in.
-  const autoName = (n) => /^(claude|codex|agy|antigravity)-\d+$/.test(n || "");
+  const autoName = (n) => /^(claude|codex|agy|antigravity|gemini)-\d+$/.test(n || "");
   const base = (p) => cleanPath(p).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "~";
   // A cloud Hub with neither herdr nor agents installed is a pure relay server:
   // don't count it as a runnable computer or offer it as an agent execution target.
@@ -490,11 +493,18 @@
   const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
   const isCollieOwned = (v) => v.name === ROUTER || isWorker(v.name);
   let sideMachine = null; // null = 全部; string = filter sidebar sessions to that machine id
+  let sideStatus = null;  // null | "running" | "blocked" (mutually exclusive toggle)
+  const osKey = (os) => /^darwin/i.test(os || "") ? "mac" : /^windows/i.test(os || "") ? "win" : "linux";
 
-  $("#machine-filter")?.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-mf]");
+  $("#side-machine-sel")?.addEventListener("change", (e) => {
+    sideMachine = e.target.value === "__all" ? null : e.target.value;
+    renderSide();
+  });
+  $("#session-filter")?.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-sf]");
     if (!b) return;
-    sideMachine = b.dataset.mf === "__all" ? null : b.dataset.mf;
+    const v = b.dataset.sf;
+    sideStatus = sideStatus === v ? null : v; // click once to select, click again to cancel; mutually exclusive
     renderSide();
   });
 
@@ -505,29 +515,60 @@
     if (sideMachine !== null && !workMachines.some((m) => m.id === sideMachine)) sideMachine = null;
     const matchSideMachine = (m) => sideMachine === null || (m || "") === sideMachine;
 
-    const mf = $("#machine-filter");
-    if (mf) {
+    const wrap = $("#sf-machine-wrap"), mSel = $("#side-machine-sel");
+    if (wrap && mSel) {
       if (workMachines.length > 1) {
         const countFor = (id) => {
           const mm = (x) => id === null || (x || "") === id;
-          const liveC = state.agents.filter((a) => a.name !== ROUTER && mm(a.machine) && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted).length;
-          const extC = ext.filter((e) => mm(e.machine) && !getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.deleted).length;
-          const extKeys = new Set(ext.map((e) => canonSessKey(e.kind, e.machine, e.session)).filter(Boolean));
-          const histC = hist.filter((h) => h.name !== ROUTER && !sup.workers.some((w) => w.name === h.name) && mm(h.machine) && !extKeys.has(canonSessKey(h.kind, h.machine, h.session)) && !getSessMeta(h.kind, h.machine, h.session, "h:" + h.id)?.deleted).length;
-          return liveC + extC + histC;
+          const seen = new Set();
+          let n = 0;
+          for (const a of state.agents) {
+            if (a.name === ROUTER || !mm(a.machine)) continue;
+            const meta = getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id);
+            if (meta?.deleted || meta?.archived) continue;
+            const ck = canonSessKey(a.kind, a.machine, a.session);
+            if (ck) seen.add(ck);
+            n++;
+          }
+          for (const e of ext) {
+            if (!mm(e.machine)) continue;
+            const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
+            if (meta?.deleted || meta?.archived) continue;
+            const ck = canonSessKey(e.kind, e.machine, e.session);
+            if (ck && seen.has(ck)) continue;
+            if (ck) seen.add(ck);
+            n++;
+          }
+          for (const h of hist) {
+            if (h.name === ROUTER || sup.workers.some((w) => w.name === h.name) || !mm(h.machine)) continue;
+            const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
+            if (meta?.deleted || meta?.archived) continue;
+            const ck = canonSessKey(h.kind, h.machine, h.session);
+            if (ck && seen.has(ck)) continue;
+            if (ck) seen.add(ck);
+            n++;
+          }
+          return n;
         };
-        mf.hidden = false;
-        mf.innerHTML = `<button type="button" class="${sideMachine === null ? "on" : ""}" data-mf="__all">全部 <span class="mc">${countFor(null)}</span></button>`
-          + workMachines.map((m) => `<button type="button" class="${sideMachine === m.id ? "on" : ""}" data-mf="${esc(m.id)}">${osGlyph(m.os)}${esc(m.name)} <span class="mc">${countFor(m.id)}</span></button>`).join("");
+        wrap.hidden = false;
+        const val = sideMachine === null ? "__all" : sideMachine;
+        const html = `<option value="__all" data-dot="online" data-short="全部电脑 (${countFor(null)})" ${val === "__all" ? "selected" : ""}>全部电脑 (${countFor(null)})</option>`
+          + workMachines.map((m) => {
+            const c = countFor(m.id);
+            const on = m.local ? m.online !== false : m.online;
+            return `<option value="${esc(m.id)}" data-os="${osKey(m.os)}" data-sub="${on ? "在线" : "离线"}${m.os ? " · " + esc(m.os) : ""}" data-short="${esc(m.name)} (${c})" ${val === m.id ? "selected" : ""}>${esc(m.name)} (${c})</option>`;
+          }).join("");
+        if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
+        mSel.value = val;
+        enhance(mSel);
+        syncPick(mSel);
       } else {
-        mf.hidden = true;
+        wrap.hidden = true;
       }
     }
 
-    const blocked = state.agents.filter((a) => a.status === "blocked" && matchSideMachine(a.machine) && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted);
-    $("#attention-group").hidden = blocked.length === 0;
-    $("#attention").innerHTML = blocked.map(itemHTML).join("");
-
+    const blockedAll = state.agents.filter((a) => a.status === "blocked" && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted);
+    void matchSideMachine;
     renderSessions();
 
     const online = countMachines.filter((m) => m.local ? m.online !== false && state.ok : m.online).length;
@@ -535,7 +576,7 @@
     $("#herdr-status").textContent = !online ? (allMachines.some((m) => !m.local) ? `0/${countMachines.length} 台电脑在线` : "herdr 不可用")
       : countMachines.length > 1 || allMachines.some((m) => !m.local) ? `${online}/${countMachines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
     if (!state.ok && state.error) $("#herdr-status").title = state.error;
-    document.title = blocked.length ? `(${blocked.length}) Collie` : "Collie";
+    document.title = blockedAll.length ? `(${blockedAll.length}) Collie` : "Collie";
 
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
@@ -616,6 +657,9 @@
     $("#v-devices").hidden = next !== "devices";
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
+    const activeViewEl = next === "collie" ? $("#v-collie") : PANEL_VIEWS.has(next) ? $("#v-panel") : next === "devices" ? $("#v-devices") : next === "ext" ? $("#v-ext") : next === "pane" ? $("#detail") : null;
+    const slot = activeViewEl?.querySelector("[data-head-slot]"), topTools = $("#top-tools");
+    if (slot && topTools && topTools.parentNode !== slot) slot.append(topTools);
     renderSide();
     if (next === "collie") { renderSuper(true); renderTarget(true); if (!narrow()) $("#super-input").focus(); }
     if (PANEL_VIEWS.has(next)) openPanel(next);
@@ -937,7 +981,7 @@
         : ms.length ? [...new Set(ms.flatMap((m) => Array.isArray(m.agents) ? m.agents : ["claude", "codex", "agy"]))] : null;
       const curK = f.router_kind.dataset.init ? f.router_kind.value : (s.router_kind || "claude");
       f.router_kind.dataset.init = "1";
-      f.router_kind.innerHTML = [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => {
+      f.router_kind.innerHTML = [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["gemini", "Gemini", "gemini"]].map(([k, l, g]) => {
         const missing = Array.isArray(have) && !have.includes(g);
         return `<option value="${k}" data-glyph="${g}" ${missing ? 'data-sub="所选电脑未安装"' : ""} ${missing && k !== curK ? "disabled" : ""} ${k === curK ? "selected" : ""}>${l}</option>`;
       }).join("");
@@ -1035,14 +1079,14 @@
     }
     const have = ms.find((m) => m.id === t.machine)?.agents;
     if (Array.isArray(have) && have.length && !have.includes(t.kind)) {
-      const fallback = ["codex", "claude", "agy"].find((k) => have.includes(k));
+      const fallback = ["codex", "claude", "agy", "gemini"].find((k) => have.includes(k));
       if (fallback) t.kind = fallback;
     }
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
     fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
-    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"]].map(([k, l]) => {
+    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["gemini", "Gemini"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
       const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
       return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
@@ -1780,7 +1824,7 @@
 
   function settingsHTML(r) {
     const s = r.settings;
-    const kindOpts = (v, have) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"]].map(([k, l, g]) => {
+    const kindOpts = (v, have) => [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["antigravity", "Antigravity", "agy"], ["gemini", "Gemini", "gemini"]].map(([k, l, g]) => {
       const missing = Array.isArray(have) && !have.includes(g);
       return `<option value="${k}" data-glyph="${g}" ${missing ? 'data-sub="所选电脑未安装"' : ""} ${missing && v !== k ? "disabled" : ""} ${v === k ? "selected" : ""}>${l}</option>`;
     }).join("");
@@ -1987,7 +2031,7 @@
     if (document.hidden && ext.length) return;
     try { ext = (await api("/api/external")).sessions || []; } catch { return; }
     ext = ext.concat(...await fromHubs("/api/external", "ext"));
-    renderExt();
+    renderSide();
     if (view === "ext") renderExtHead();
   }
 
@@ -2019,7 +2063,7 @@
   async function loadHistory() {
     try { hist = (await api("/api/history")).sessions || []; } catch { return; }
     hist = hist.concat(...await fromHubs("/api/history", "hist"));
-    renderHist();
+    renderSide();
     if (view === "collie") renderSuper();
     if (view === "ext" && extCur?.startsWith("h:")) renderHistHead(extCur.slice(2));
   }
@@ -2073,7 +2117,7 @@
       if (view === "ext" && extCur === "h:" + hid) el.innerHTML = `<div class="thread-empty">${esc(err.message)}</div>`;
     }
   }
-  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s] };
+  const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], gemini: (s) => ["--resume", s] };
   async function sendInHist(hid, text) {
     const h = hist.find((x) => x.id === hid);
     if (!h || !RESUME[h.kind]) throw new Error("暂不支持继续这个会话");
@@ -2092,15 +2136,15 @@
   }
   const extName = (e) => getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.title || e.title || (e.cwd ? cleanPath(e.cwd).split(/[\\/]/).filter(Boolean).pop() : "") || KIND_LABEL[e.kind] || e.kind;
   const extOnline = (e) => !e.machine || (state.machines || []).some((m) => m.id === e.machine && m.online);
-  const RECENT_N = 8;
+  const RECENT_N = 10;
   let extAll = store.get("extAll", false);
   const EXT_STATE = { working: "工作中", waiting: "在等后台任务", idle: "空闲", blocked: "等待确认" };
-  const RANK = { working: 0, waiting: 0.5, starting: 1, blocked: 2, done: 3, unknown: 4, idle: 4 };
+  const isActivelyRunning = (st) => st === "working" || st === "starting" || st === "waiting";
   function renderExt() { renderSessions(); }
-  $("#live-list").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-fold]");
-    if (!b) return;
-    store.set("idleOpen", !store.get("idleOpen", false));
+  $("#session-list")?.addEventListener("click", (ev) => {
+    if (!ev.target.closest("[data-act=ext-more]")) return;
+    ev.preventDefault();
+    extAll = !extAll; store.set("extAll", extAll);
     renderSessions();
   });
   function renderSessions() {
@@ -2109,7 +2153,8 @@
       const open = e.live && e.status === "idle";
       const where = [KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "运行中")}"></span>` : "";
-      return `<li class="s-li"><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
+      const attnCls = e.live && e.status === "blocked" ? "attn-row" : "";
+      return `<li class="s-li ${attnCls}"><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
         <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button></li>`;
@@ -2121,42 +2166,62 @@
         <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a>
         <button type="button" class="item-more" data-smenu="h:${esc(h.id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
+    const paneRow = (a) => {
+      const html = itemHTML(a);
+      return a.status === "blocked" ? html.replace('<li class="s-li">', '<li class="s-li attn-row">') : html;
+    };
 
     const matchM = (m) => sideMachine === null || (m || "") === sideMachine;
-    const going = (e) => e.live;
-    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked" && matchM(a.machine) && !getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id)?.deleted)
-      .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a), on: view === "pane" && a.pane_id === current }));
-    const liveExt = ext.filter((e) => going(e) && matchM(e.machine) && !getSessMeta(e.kind, e.machine, e.session, "x:" + e.id)?.deleted)
-      .map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
-    const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
-    const busy = live.filter((x) => x.rank <= 1).length;
-    $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
-    const folds = (x) => x.rank >= 3 && !x.done;
-    const idle = live.filter(folds);
-    let rows = live;
-    if (idle.length > 3) {
-      const open = store.get("idleOpen", false);
-      const shown = live.filter((x) => !folds(x) || open || x.on);
-      const hid = idle.length - (open ? 0 : idle.filter((x) => x.on).length);
-      rows = [...shown, { html: `<li><button type="button" class="fold-row ${open ? "open" : ""}" data-fold="idle" aria-expanded="${open}">
-        <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>${open ? "收起空闲会话" : `${hid} 个空闲会话`}</button></li>` }];
-    }
-    $("#live-list").innerHTML = rows.map((x) => x.html).join("")
-      || `<li class="empty-hint">${sideMachine !== null ? "这台电脑当前没有进行中的会话。" : "暂无进行中的会话。点右上角 + 新建，或直接让 Collie 派活。"}</li>`;
-
-    // 最近会话 & 已归档（按 (kind, machine, session) 去重）
     const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
-    const seenKeys = new Set(state.agents.map((a) => canonSessKey(a.kind, a.machine, a.session)).filter(Boolean));
-    const restPool = [];
+    const extTimeMap = new Map();
     for (const e of ext) {
-      if (going(e) || !matchM(e.machine)) continue;
+      const ck = canonSessKey(e.kind, e.machine, e.session);
+      if (ck) extTimeMap.set(ck, +new Date(e.updated || e.started) || 0);
+    }
+
+    const seenKeys = new Set();
+    const pool = []; // unified session entries for selected machine
+
+    for (const a of state.agents) {
+      if (a.name === ROUTER && a.status !== "blocked") continue;
+      if (!matchM(a.machine)) continue;
+      const meta = getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id);
+      if (meta?.deleted) continue;
+      const ck = canonSessKey(a.kind, a.machine, a.session);
+      if (ck) seenKeys.add(ck);
+      const isBlocked = a.status === "blocked";
+      const isRunning = isActivelyRunning(a.status);
+      const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "done" ? 2 : 3;
+      const t = (ck && extTimeMap.get(ck)) || +new Date(meta?.updated_at || 0) || 0;
+      pool.push({
+        key: "p:" + a.pane_id,
+        archived: !!meta?.archived && !isBlocked && !isRunning,
+        isRunning, isBlocked, groupRank, t,
+        active: view === "pane" && current === a.pane_id,
+        html: paneRow(a),
+      });
+    }
+
+    for (const e of ext) {
+      if (!matchM(e.machine)) continue;
       const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
       if (meta?.deleted) continue;
       const ck = canonSessKey(e.kind, e.machine, e.session);
       if (ck && seenKeys.has(ck)) continue;
       if (ck) seenKeys.add(ck);
-      restPool.push({ id: e.id, archived: !!meta?.archived, t: new Date(e.updated || e.started), html: extRow(e) });
+      const isBlocked = !!(e.live && e.status === "blocked");
+      const isRunning = !!(e.live && isActivelyRunning(e.status));
+      const groupRank = isBlocked ? 0 : isRunning ? 1 : 3;
+      pool.push({
+        key: e.id,
+        archived: !!meta?.archived && !isBlocked && !isRunning,
+        isRunning, isBlocked, groupRank,
+        t: +new Date(e.updated || e.started) || 0,
+        active: view === "ext" && extCur === e.id,
+        html: extRow(e),
+      });
     }
+
     for (const h of hist) {
       if (collieRan(h.name) || !matchM(h.machine)) continue;
       const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
@@ -2164,25 +2229,62 @@
       const ck = canonSessKey(h.kind, h.machine, h.session);
       if (ck && seenKeys.has(ck)) continue;
       if (ck) seenKeys.add(ck);
-      restPool.push({ id: "h:" + h.id, archived: !!meta?.archived, t: new Date(h.ended), html: histRow(h) });
+      pool.push({
+        key: "h:" + h.id,
+        archived: !!meta?.archived,
+        isRunning: false, isBlocked: false, groupRank: 3,
+        t: +new Date(h.ended) || 0,
+        active: view === "ext" && extCur === "h:" + h.id,
+        html: histRow(h),
+      });
     }
-    restPool.sort((x, y) => y.t - x.t);
-    const recent = restPool.filter((x) => !x.archived);
-    const archived = restPool.filter((x) => x.archived);
 
-    let shown = extAll ? recent : recent.slice(0, RECENT_N);
-    const cur = view === "ext" && extCur && !shown.some((x) => x.id === extCur) && recent.find((x) => x.id === extCur);
+    pool.sort((x, y) => (x.groupRank - y.groupRank) || (y.t - x.t));
+    const unarchived = pool.filter((x) => !x.archived);
+    const archived = pool.filter((x) => x.archived);
+
+    const runCount = unarchived.filter((x) => x.isRunning).length;
+    const blkCount = unarchived.filter((x) => x.isBlocked).length;
+    const runCntEl = $("#sf-running-cnt"), blkCntEl = $("#sf-blocked-cnt");
+    if (runCntEl) runCntEl.textContent = runCount || "";
+    if (blkCntEl) blkCntEl.textContent = blkCount || "";
+    $$("#session-filter button[data-sf]").forEach((b) => {
+      const on = sideStatus === b.dataset.sf;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+
+    const filtered = sideStatus === "running" ? unarchived.filter((x) => x.isRunning)
+      : sideStatus === "blocked" ? unarchived.filter((x) => x.isBlocked)
+      : unarchived;
+
+    let shown = extAll ? filtered : filtered.slice(0, RECENT_N);
+    const cur = !shown.some((x) => x.active) && filtered.find((x) => x.active);
     if (cur) shown = [...shown, cur];
-    $("#recent-group").hidden = !recent.length;
-    $("#recent-list").innerHTML = shown.map((x) => x.html).join("")
-      + (recent.length > RECENT_N ? `<li><button type="button" class="more-row" data-act="ext-more">${extAll ? "收起" : `展开其余 ${recent.length - RECENT_N} 个`}</button></li>` : "");
+
+    const moreBtn = filtered.length > RECENT_N
+      ? `<li><button type="button" class="more-row ${extAll ? "open" : ""}" data-act="ext-more">
+          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+          <span>${extAll ? "收起" : `展开其余 ${filtered.length - RECENT_N} 个`}</span>
+        </button></li>`
+      : "";
+
+    const emptyMsg = sideStatus === "running" ? "当前没有正在进行中的会话"
+      : sideStatus === "blocked" ? "当前没有待审核的会话"
+      : sideMachine !== null ? "这台电脑暂无会话"
+      : "暂无会话，点击右上角 + 新建或让 Collie 派活";
+
+    const listEl = $("#session-list");
+    if (listEl) {
+      listEl.innerHTML = shown.length ? shown.map((x) => x.html).join("") + moreBtn : `<li class="empty-hint">${emptyMsg}</li>`;
+    }
 
     const archGrp = $("#archived-group"), archList = $("#archived-list"), archCnt = $("#archived-count");
     if (archGrp && archList) {
       archGrp.hidden = !archived.length;
       if (archCnt) archCnt.textContent = archived.length || "";
       archList.innerHTML = archived.map((x) => x.html).join("");
-      if (view === "ext" && extCur && archived.some((x) => x.id === extCur)) archGrp.open = true;
+      if (archived.some((x) => x.active)) archGrp.open = true;
     }
   }
   let extSoonT = null, extSoonN = 0;
@@ -2276,12 +2378,6 @@
     return ext.find((e) => e.id === extCur)?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
-  $("#recent-list").addEventListener("click", (ev) => {
-    if (!ev.target.closest("[data-act=ext-more]")) return;
-    ev.preventDefault();
-    extAll = !extAll; store.set("extAll", extAll);
-    renderExt();
-  });
   async function openExt(id) {
     closeExt();
     extCur = id;
@@ -2370,24 +2466,32 @@
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
     const sw = (key, on) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"></button>`;
-    const row = (title, sub, ctl) => `<div class="pref"><div class="pl"><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</div>${ctl}</div>`;
+    const row = (title, sub, ctl) => `<div class="pref"><div class="pl"><span class="pref-title">${title}</span>${sub ? `<small>${sub}</small>` : ""}</div>${ctl}</div>`;
     const perm = !("Notification" in window) ? "这个浏览器不支持通知（手机上通常要先添加到主屏幕）"
       : Notification.permission === "denied" ? "浏览器已拒绝通知，需要在浏览器的网站设置里打开"
       : "页面在后台时，agent 需要你确认或完成任务会弹通知";
     const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-    return `<div class="prefs">
-      <p class="panel-intro">以下选项仅保存在当前浏览器的本地存储中，不影响其他设备。如需调整 Collie 大脑、默认派活机器或飞书通知，请切到上方的「Collie 全局配置」。</p>
-      <div class="card"><div class="card-h">外观显示</div>
-        ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
-        ${row("对话文字大小", "", seg("text", prefs.text(), [["small", "紧凑"], ["normal", "标准"], ["large", "大字号"]]))}
-      </div>
-      <div class="card"><div class="card-h">会话交互习惯</div>
-        ${row("发送消息快捷键", "另一种按法用来换行；Shift+Enter 始终换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
-        ${row("折叠连续的工具步骤", "连续工具调用超过 3 步时自动收起，仅露出最新一步", sw("fold", prefs.fold()))}
-      </div>
-      <div class="card"><div class="card-h">桌面通知</div>
-        ${row("浏览器通知提醒", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
-      </div>
+    return `<div class="settings prefs">
+      <section class="card set-sec pref-sec">
+        <header><h4>外观显示</h4><p>仅保存在当前浏览器的本地存储中，不影响其他电脑或手机。</p></header>
+        <div class="pref-list">
+          ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
+          ${row("对话文字大小", "调整聊天消息与输入框阅读字号", seg("text", prefs.text(), [["small", "紧凑"], ["normal", "标准"], ["large", "大字号"]]))}
+        </div>
+      </section>
+      <section class="card set-sec pref-sec">
+        <header><h4>会话交互习惯</h4></header>
+        <div class="pref-list">
+          ${row("发送消息快捷键", "另一种按法用来换行；Shift+Enter 始终换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
+          ${row("折叠连续的工具步骤", "连续工具调用超过 3 步时自动收起，仅露出最新一步", sw("fold", prefs.fold()))}
+        </div>
+      </section>
+      <section class="card set-sec pref-sec">
+        <header><h4>桌面通知</h4></header>
+        <div class="pref-list">
+          ${row("浏览器通知提醒", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
+        </div>
+      </section>
     </div>`;
   }
 
@@ -2459,7 +2563,6 @@
     const installWinCmd = pm ? winCmd(nodeArgs) : "";
     const hubCmd = installCmdFor(r.hub.os, "hub");
     const machines = r.devices.filter((d) => d.kind === "machine");
-    const browsers = r.devices.filter((d) => d.kind !== "machine");
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">使用这个接入地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
     const keepOpen = document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
     if (keepOpen) return;
@@ -2532,15 +2635,7 @@
           <button class="btn primary">添加</button>
         </form>
         <p class="pair-hint muted">那个 hub 也要是 v0.2.4 以后的版本。</p>
-      </div>
-
-      <div class="card"><div class="card-h">手机和浏览器</div><ul class="rows">
-        ${browsers.length ? browsers.map((d) => `<li class="row dev-row">
-          <span class="dot unknown"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b>${d.current ? '<span class="tag">当前</span>' : ""}<span>最近 ${when(d.last_seen)}</span></div></div>
-          <div class="dev-acts"><button class="btn ghost small" data-rename-dev="${esc(d.id)}" data-name="${esc(d.name)}">改名</button><button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></div></li>`).join("")
-        : `<li class="empty-row">还没有配对过的手机。用访问令牌登录的浏览器不在这里列出。</li>`}
-      </ul></div>`;
+      </div>`;
     document.querySelectorAll("#add-hub input").forEach((i, n) => { i.value = typed[n] || ""; });
   }
 
@@ -2923,12 +3018,25 @@
     }
   }
 
+  function cleanFallbackLog(s) {
+    return String(s || "")
+      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+      .replace(/\r/g, "")
+      .trim();
+  }
+
   function drawFallback(text) {
     const el = $("#thread");
     const was = nearBottom(el) || !el.childElementCount;
     const v = find(current);
-    const note = v && v.is_agent ? `${esc(KIND_LABEL[v.kind] || v.kind)} 还没有可读取的会话记录，先显示终端输出` : "普通终端，这里显示终端输出";
-    el.innerHTML = `<div class="fallback-note">${note}</div><pre class="termcard">${esc(cleanLog(text))}</pre>`;
+    const cleaned = cleanFallbackLog(text);
+    const locked = /This conversation is open in another app/i.test(cleaned);
+    const note = locked
+      ? "这个对话当前也在电脑上的桌面端窗口里打开着；你直接在这里发消息即可无缝续聊"
+      : v && v.is_agent ? `${esc(KIND_LABEL[v.kind] || v.kind)} 还没有生成结构化记录，以下为最近会话输出` : "会话输出";
+    const body = locked ? cleaned.replace(/\n*■ This conversation is read-only[\s\S]*$/i, "").trim() : cleaned;
+    el.innerHTML = `<div class="fallback-note">${note}</div>${body ? `<pre class="termcard">${esc(body)}</pre>` : ""}`;
     stick(el, was);
   }
 

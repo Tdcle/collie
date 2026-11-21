@@ -242,6 +242,8 @@ func (t *transcript) line(line []byte) bool {
 		return t.codexLine(line)
 	case "agy":
 		return t.agyLine(line)
+	case "gemini":
+		return t.geminiLine(line)
 	}
 	return t.claudeLine(line)
 }
@@ -619,6 +621,86 @@ func agyOutput(s string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
+// geminiLine parses Gemini CLI's ~/.gemini/tmp/*/chats/session-*.jsonl logs.
+func (t *transcript) geminiLine(line []byte) bool {
+	type geminiMsg struct {
+		Type      string          `json:"type"`
+		Content   json.RawMessage `json:"content"`
+		ToolCalls []struct {
+			ID     string          `json:"id"`
+			Name   string          `json:"name"`
+			Args   json.RawMessage `json:"args"`
+			Result json.RawMessage `json:"result"`
+			Status string          `json:"status"`
+		} `json:"toolCalls"`
+	}
+	addOne := func(gm geminiMsg) bool {
+		changed := false
+		txt := strings.TrimSpace(textOf(gm.Content))
+		switch gm.Type {
+		case "user":
+			if txt != "" && !noise(txt) {
+				t.add(&Message{Kind: "user", Text: txt})
+				changed = true
+			}
+		case "gemini", "model", "assistant":
+			if txt != "" {
+				t.add(&Message{Kind: "assistant", Text: txt})
+				changed = true
+			}
+			for _, tc := range gm.ToolCalls {
+				m := &Message{Kind: "tool", Name: tc.Name, Input: toolSummary(tc.Name, tc.Args)}
+				if len(tc.Result) > 0 && string(tc.Result) != "null" {
+					m.Output = clip(textOf(tc.Result), maxOutput)
+				}
+				m.Error = tc.Status == "error"
+				t.add(m)
+				changed = true
+			}
+		}
+		return changed
+	}
+	var env struct {
+		Set *struct {
+			Messages []geminiMsg `json:"messages"`
+		} `json:"$set"`
+		Push *struct {
+			Messages json.RawMessage `json:"messages"`
+		} `json:"$push"`
+		Type    string          `json:"type"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(line, &env) != nil {
+		return false
+	}
+	if env.Set != nil && len(env.Set.Messages) > 0 {
+		t.msgs = nil
+		changed := false
+		for _, gm := range env.Set.Messages {
+			changed = addOne(gm) || changed
+		}
+		return changed
+	}
+	if env.Push != nil && len(env.Push.Messages) > 0 {
+		var many []geminiMsg
+		if json.Unmarshal(env.Push.Messages, &many) == nil {
+			changed := false
+			for _, gm := range many {
+				changed = addOne(gm) || changed
+			}
+			return changed
+		}
+		var one geminiMsg
+		if json.Unmarshal(env.Push.Messages, &one) == nil {
+			return addOne(one)
+		}
+	}
+	if env.Type != "" {
+		return addOne(geminiMsg{Type: env.Type, Content: env.Content})
+	}
+	return false
+}
+
 // ---------------------------------------------------------------- locating
 
 type agentDetail struct {
@@ -656,16 +738,28 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 	return tr
 }
 
+func newestRegularFile(paths []string) string {
+	var best string
+	var bestAt time.Time
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && (best == "" || fi.ModTime().After(bestAt)) {
+			best, bestAt = p, fi.ModTime()
+		}
+	}
+	return best
+}
+
 func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, format string) {
 	format = kind
-	if kind != "codex" && kind != "agy" {
+	if kind != "codex" && kind != "agy" && kind != "gemini" {
 		format = "claude"
 	}
 	if sessKind == "path" {
 		if isFile(value) {
 			return value, format
 		}
-		return "", ""
+		// If the path does not exist directly (or rotated), extract its session UUID and search below.
+		value = sessionID("path", value)
 	}
 	if strings.ContainsAny(value, `/\*?[`) {
 		return "", ""
@@ -677,15 +771,29 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 		}
 		root := envOr("CLAUDE_CONFIG_DIR", filepath.Join(s.home, ".claude"))
 		if m, _ := filepath.Glob(filepath.Join(root, "projects", "*", value+".jsonl")); len(m) > 0 {
-			return m[0], "claude"
+			return newestRegularFile(m), "claude"
 		}
 	case "codex":
 		if value == "" {
 			return "", ""
 		}
 		root := envOr("CODEX_HOME", filepath.Join(s.home, ".codex"))
-		if m, _ := filepath.Glob(filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+".jsonl")); len(m) > 0 {
-			return m[len(m)-1], "codex"
+		// Codex names resumed or desktop-app rollouts either `rollout-*-<session>.jsonl`
+		// or `rollout-*-<session>_<segment>.jsonl`; match both and pick the newest segment.
+		var matches []string
+		for _, pat := range []string{
+			filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+".jsonl"),
+			filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+"_*.jsonl"),
+		} {
+			if m, _ := filepath.Glob(pat); len(m) > 0 {
+				matches = append(matches, m...)
+			}
+		}
+		if best := newestRegularFile(matches); best != "" {
+			return best, "codex"
+		}
+		if dbPath := s.codexRolloutFromStateDB(value); dbPath != "" {
+			return dbPath, "codex"
 		}
 	case "agy":
 		brain := filepath.Join(s.agyCLIHome(), "brain")
@@ -697,6 +805,32 @@ func (s *Server) findTranscript(kind, sessKind, value, pane, cwd string) (path, 
 			}
 		}
 		return s.guessAgy(brain, pane, cwd), "agy"
+	case "gemini":
+		root := filepath.Join(s.home, ".gemini", "tmp")
+		if value != "" {
+			prefix := value
+			if i := strings.IndexByte(prefix, '-'); i > 0 {
+				prefix = prefix[:i]
+			}
+			if m, _ := filepath.Glob(filepath.Join(root, "*", "chats", "session-*"+prefix+"*.jsonl")); len(m) > 0 {
+				return newestRegularFile(m), "gemini"
+			}
+		}
+		if cwd != "" {
+			if dirs, _ := filepath.Glob(filepath.Join(root, "*")); len(dirs) > 0 {
+				var matches []string
+				for _, d := range dirs {
+					if b, err := os.ReadFile(filepath.Join(d, ".project_root")); err == nil && samePath(strings.TrimSpace(string(b)), cwd) {
+						if m, _ := filepath.Glob(filepath.Join(d, "chats", "session-*.jsonl")); len(m) > 0 {
+							matches = append(matches, m...)
+						}
+					}
+				}
+				if best := newestRegularFile(matches); best != "" {
+					return best, "gemini"
+				}
+			}
+		}
 	}
 	return "", ""
 }

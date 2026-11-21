@@ -55,6 +55,10 @@ func modelArgs(kind, model, effort string) []string {
 		if effort != "" {
 			a = append(a, "--effort", effort)
 		}
+	case "gemini":
+		if model != "" {
+			a = append(a, "--model", model)
+		}
 	}
 	return a
 }
@@ -66,6 +70,8 @@ func bypassArgs(kind string) []string {
 		return []string{"--dangerously-skip-permissions"}
 	case "codex":
 		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	case "gemini":
+		return []string{"--yolo", "--skip-trust"}
 	}
 	return nil
 }
@@ -120,6 +126,9 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			s.codexModels(ctx, info)
 		case "agy":
 			s.agyModels(ctx, info)
+		case "gemini":
+			info.Efforts = []string{}
+			s.geminiModels(ctx, info)
 		}
 		if info.Models == nil {
 			info.Models = []ModelOpt{}
@@ -329,6 +338,30 @@ func (s *Server) agyModels(ctx context.Context, info *ModelInfo) {
 	}
 	for _, l := range strings.Split(string(out), "\n") {
 		if m := agyModelRe.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
+			info.Models = append(info.Models, ModelOpt{ID: m[1], Label: m[2]})
+		}
+	}
+}
+
+var geminiModelRe = regexp.MustCompile(`^([a-zA-Z0-9._-]+)\s+\(([^)]+)\)$`)
+
+func (s *Server) geminiModels(ctx context.Context, info *ModelInfo) {
+	bin := findBin("gemini", s.home)
+	if bin == "" {
+		return
+	}
+	cmd := exec.CommandContext(ctx, bin, "--list-models")
+	hideCmd(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if m := geminiModelRe.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
+			if m[1] == "auto" {
+				info.Default = "auto"
+				continue
+			}
 			info.Models = append(info.Models, ModelOpt{ID: m[1], Label: m[2]})
 		}
 	}

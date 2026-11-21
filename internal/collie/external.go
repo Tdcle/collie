@@ -62,7 +62,7 @@ type proc struct {
 }
 
 // externalKinds maps program names to agent kinds.
-var externalKinds = map[string]string{"claude": "claude", "codex": "codex", "agy": "agy", "antigravity": "agy"}
+var externalKinds = map[string]string{"claude": "claude", "codex": "codex", "agy": "agy", "antigravity": "agy", "gemini": "gemini"}
 
 func cleanProgBase(arg string) string {
 	n := strings.TrimPrefix(baseOfPath(arg), "-")
@@ -670,6 +670,17 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) codexThreadWriterLocked(session string) bool {
+	if session == "" || strings.ContainsAny(session, `/\*?[`) {
+		return false
+	}
+	lockPath := filepath.Join(s.codexHome(), "thread-writer-locks", session+".lock")
+	if !isFile(lockPath) {
+		return false
+	}
+	return isFileLockedByOtherProcess(lockPath)
+}
+
 // takeOverExternal stops an external agent (if live) and resumes its
 // conversation in a new herdr workspace on the same machine, optionally
 // sending an initial user prompt right away.
@@ -691,6 +702,15 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := resumeArgs(e.Kind, e.Session)
+	forked := false
+	if e.Kind == "codex" && s.codexThreadWriterLocked(e.Session) {
+		// Another app (e.g. Windows Codex Desktop) holds an exclusive writer lock
+		// on this thread: `codex resume` would stall on "This conversation is open
+		// in another app", whereas `codex fork <id>` clones the full conversation
+		// context into an unlocked interactive session immediately.
+		args = []string{"fork", e.Session}
+		forked = true
+	}
 	if len(args) == 0 {
 		writeJSON(w, 409, map[string]any{"error": "暂不支持继续这种类型的会话"})
 		return
@@ -751,6 +771,9 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out := map[string]any{"pane_id": pane, "workspace_id": ws, "name": name}
+	if forked {
+		out["forked"] = true
+	}
 	if warn != "" {
 		out["warning"] = warn
 	}

@@ -66,6 +66,8 @@ func resumeArgs(agent, session string) []string {
 		return []string{"resume", session}
 	case "agy":
 		return []string{"--conversation", session}
+	case "gemini":
+		return []string{"--resume", session}
 	}
 	return nil
 }
@@ -75,6 +77,7 @@ var kinds = map[string]string{
 	"codex":       "codex",
 	"antigravity": "agy",
 	"agy":         "agy",
+	"gemini":      "gemini",
 }
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)

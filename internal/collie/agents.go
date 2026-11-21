@@ -13,9 +13,9 @@ import (
 // Starting an agent checks again where it runs, so a stale list only greys
 // out the wrong choices in the UI, it never starts a pane for nothing.
 
-var agentKinds = []string{"claude", "codex", "agy"}
+var agentKinds = []string{"claude", "codex", "agy", "gemini"}
 
-var agentNames = map[string]string{"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}
+var agentNames = map[string]string{"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity", "gemini": "Gemini CLI"}
 
 func detectAgents(home string) []string {
 	out := []string{}

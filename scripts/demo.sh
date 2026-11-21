@@ -18,7 +18,7 @@ sed -e 's#href="/#href="#g' -e 's#src="/#src="#g' \
 cat >> "$out/app.css" <<'CSS'
 
 /* demo only */
-.demo-badge { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 999; font: 500 12px/1 var(--sans); padding: 7px 10px; border-radius: 999px; background: var(--fg); color: var(--bg); text-decoration: none; opacity: .85; }
+.demo-badge { position: fixed; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 999; font: 500 12px/1 var(--sans); padding: 7px 10px; border-radius: 999px; background: var(--fg); color: var(--bg); text-decoration: none; opacity: .85; }
 .demo-badge:hover { opacity: 1; }
 CSS
 echo "built $out"

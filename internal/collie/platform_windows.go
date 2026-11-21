@@ -103,6 +103,21 @@ func stopProcess(pid int) bool {
 	return !alive(pid)
 }
 
+// isFileLockedByOtherProcess checks whether a lock file on Windows is held
+// exclusively (or without write sharing) by another running process.
+func isFileLockedByOtherProcess(path string) bool {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return false
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return err == windows.ERROR_SHARING_VIOLATION || err == windows.ERROR_LOCK_VIOLATION
+	}
+	windows.CloseHandle(h)
+	return false
+}
+
 // snapshotWinProcs lists every process via Toolhelp32 (<1 ms, no subprocess).
 func snapshotWinProcs() ([]windows.ProcessEntry32, error) {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)

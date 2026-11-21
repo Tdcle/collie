@@ -9,8 +9,8 @@
 
   // ───────────────────────────── the scene
   const machines = [
-    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.5", agents: ["claude", "codex"] },
+    { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy", "gemini"] },
+    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.5", agents: ["claude", "codex", "gemini"] },
   ];
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
@@ -122,8 +122,13 @@
     { id: "cd-2", kind: "claude", pid: 4310, cwd: "/Users/alex/code/shop-web", app: "Claude 桌面版", started: ago(240), session: "s2", title: "重构购物车状态管理", updated: ago(55), machine: "macbook", status: "idle", can_send: true, live: true },
   ];
   const history = [
-    { id: "h1", kind: "codex", cwd: "/home/alex/code/shop-api", name: "codex-3", session: "s3", ended: ago(60 * 20), topic: "升级 Go 到 1.25" },
-    { id: "h2", kind: "claude", cwd: "/Users/alex/code/shop-web", name: "claude-4", session: "s4", ended: ago(60 * 30), topic: "图片懒加载", machine: "macbook" },
+    { id: "h1", kind: "codex", cwd: "/home/alex/code/shop-api", name: "codex-3", session: "s3", ended: ago(60 * 20), title: "升级 Go 到 1.25" },
+    { id: "h2", kind: "claude", cwd: "/Users/alex/code/shop-web", name: "claude-4", session: "s4", ended: ago(60 * 30), title: "图片懒加载", machine: "macbook" },
+    { id: "h3", kind: "gemini", cwd: "/Users/alex/code/docs", name: "gemini-1", session: "s5", ended: ago(60 * 48), title: "整理多语种 API 文档", machine: "macbook" },
+    { id: "h4", kind: "codex", cwd: "/home/alex/code/shop-api", name: "codex-4", session: "s6", ended: ago(60 * 65), title: "修复订单导出 CSV 编码" },
+    { id: "h5", kind: "claude", cwd: "/Users/alex/code/shop-web", name: "claude-5", session: "s7", ended: ago(60 * 90), title: "优化移动端结账弹层", machine: "macbook" },
+    { id: "h6", kind: "agy", cwd: "/home/alex/code/shop-api", name: "agy-2", session: "s8", ended: ago(60 * 120), title: "压测库存扣减并发锁" },
+    { id: "h7", kind: "gemini", cwd: "/Users/alex/code/shop-web", name: "gemini-2", session: "s9", ended: ago(60 * 150), title: "提炼设计系统 Token", machine: "macbook" },
   ];
   const extChats = {
     x1: [{ kind: "user", text: "根据这周的 commit 帮我写周报，分成已完成、进行中、下周计划。" }, { kind: "assistant", text: "**已完成**\n- 订单列表分页修复\n- 迁移脚本整理（41 → 33）\n\n**进行中**\n- 首页暗色模式\n\n**下周计划**\n- v1.4 发布" }],
@@ -169,6 +174,7 @@
     claude: { models: [{ id: "opus", label: "Opus", efforts: ["low", "medium", "high", "max"] }, { id: "sonnet", label: "Sonnet", efforts: ["low", "medium", "high"] }, { id: "haiku", label: "Haiku" }], default: "sonnet", efforts: ["low", "medium", "high", "max"], default_effort: "" },
     codex: { models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium", "high", "xhigh"] }, { id: "gpt-6.1-mini", label: "GPT-6.1-Mini" }], default: "gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh"], default_effort: "medium" },
     agy: { models: [{ id: "gemini-4-pro", label: "Gemini 4 Pro" }], default: "gemini-4-pro", efforts: [] },
+    gemini: { models: [{ id: "gemini-2.5-pro", label: "gemini-2.5-pro" }, { id: "gemini-3.5-flash", label: "gemini-3.5-flash" }], default: "auto", efforts: [] },
   };
 
   // ───────────────────────────── streams
