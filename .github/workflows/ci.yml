@@ -27,7 +27,7 @@ jobs:
           COLLIE_NO_HERDR: "1"
           COLLIE_DRY_SERVICE: "1"
         run: |
-          $binDir = Join-Path $RUNNER_TEMP "collie-bin"
+          $binDir = Join-Path $env:RUNNER_TEMP "collie-bin"
           $env:COLLIE_BIN_DIR = $binDir
           powershell -ExecutionPolicy Bypass -File docs\install.ps1 hub --url http://127.0.0.1:7788
           & (Join-Path $binDir "collie.exe") version
