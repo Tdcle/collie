@@ -633,12 +633,28 @@ func (s *Server) openShell(w http.ResponseWriter, r *http.Request, dir, label st
 	writeJSON(w, 200, map[string]any{"pane_id": paneID, "workspace_id": wsID})
 }
 
+func ensureNonBlockingAgentArgs(herdrKind string, args []string) []string {
+	if herdrKind != "codex" {
+		return args
+	}
+	for _, a := range args {
+		if strings.Contains(a, "check_for_update_on_startup") {
+			return args
+		}
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, "-c", "check_for_update_on_startup=false")
+	out = append(out, args...)
+	return out
+}
+
 // startAgent creates a workspace in cwd and starts a herdr agent in its pane.
 // An "agent_not_ready" error means the agent is up but sitting on a dialog.
 func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, label string, args []string) (paneID, wsID string, err error) {
 	if err := s.agentMissing(machine, herdrKind); err != nil {
 		return "", "", err
 	}
+	args = ensureNonBlockingAgentArgs(herdrKind, args)
 	s.trustForStart(ctx, machine, herdrKind, cwd, args)
 	wsID, paneID, err = s.herdr.CreateWorkspace(ctx, machine, cwd, label)
 	if err != nil {

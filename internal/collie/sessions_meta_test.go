@@ -286,3 +286,21 @@ func TestHostCodexProjectSyncAndDismiss(t *testing.T) {
 		t.Fatalf("dismissed project should not be re-imported: added2=%d len=%d", added2, len(srv.projectsSnapshot()))
 	}
 }
+
+func TestEnsureNonBlockingAgentArgs(t *testing.T) {
+	got := ensureNonBlockingAgentArgs("codex", []string{"resume", "abc-123"})
+	want := []string{"-c", "check_for_update_on_startup=false", "resume", "abc-123"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("unexpected codex args: %v", got)
+	}
+	// Idempotent if already specified
+	got2 := ensureNonBlockingAgentArgs("codex", got)
+	if len(got2) != len(want) {
+		t.Fatalf("expected idempotent args, got %v", got2)
+	}
+	// Non-codex untouched
+	got3 := ensureNonBlockingAgentArgs("claude", []string{"--resume", "s1"})
+	if len(got3) != 2 || got3[0] != "--resume" {
+		t.Fatalf("expected claude args untouched, got %v", got3)
+	}
+}

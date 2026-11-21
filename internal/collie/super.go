@@ -964,6 +964,25 @@ func (sp *Super) writeRouterFiles() error {
 	st := sp.st.Settings
 	sp.mu.Unlock()
 	m, _, _ := sp.resolveRouterTarget(st)
+	// When RouterMachine points at a remote node that hasn't dialed in yet (e.g.
+	// first milliseconds after Hub restart), don't overwrite ROUTER.md with Hub's
+	// local binary path and trigger a spurious routerDocChanged wake-up.
+	if st.RouterMachine != "" && (m == nil || m.ID != st.RouterMachine) {
+		return nil
+	}
+	// If no live Router session is running, clear stale .router-read.md so
+	// updating ROUTER.md doesn't wake up a sleeping Router out of nowhere;
+	// ensureRouter writes fresh files whenever the next real event arrives.
+	if sp.s != nil && sp.s.herdr != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		live, ok := sp.liveAgents(ctx)
+		cancel()
+		if ok {
+			if _, alive := live[routerName]; !alive {
+				_ = os.Remove(filepath.Join(sp.routerDir(), routerReadFile))
+			}
+		}
+	}
 	return sp.writeRouterFilesFor(m)
 }
 
