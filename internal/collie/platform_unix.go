@@ -178,6 +178,8 @@ func restartSelf(exe string) {
 
 func windowsDrives() []string { return nil }
 
+func codexDesktopProcRunning() bool { return false }
+
 func findBinPlatform(name, home string) string {
 	for _, d := range []string{".local/bin", ".npm-global/bin", ".bun/bin", "bin"} {
 		if p := filepath.Join(home, d, name); isFile(p) {

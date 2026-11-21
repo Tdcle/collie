@@ -752,7 +752,7 @@ func (s *Server) revealExternal(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case e.Kind == "claude" && strings.HasPrefix(e.ID, "cd-"):
 		link = "claude://code/needs-input?source=collie&session=" + url.QueryEscape("local_"+strings.TrimPrefix(e.ID, "cd-"))
-	case e.Kind == "codex" && e.via == "app" && e.Session != "":
+	case e.Kind == "codex" && (e.via == "app" || e.desktop) && e.Session != "":
 		link = "codex://threads/" + url.PathEscape(e.Session)
 	default:
 		writeJSON(w, 409, map[string]any{"error": "这个会话没法从这里在 " + e.App + " 里打开"})

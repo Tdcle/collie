@@ -58,24 +58,27 @@ type desktopRow struct {
 
 var desktopCache struct {
 	sync.Mutex
-	at   time.Time
-	rows []desktopRow
-	app  bool // the Codex App is up
+	at    time.Time
+	rows  []desktopRow
+	app   bool // the Codex App's local IPC socket is reachable
+	winUp bool // Windows Codex desktop process is running (no external IPC bus)
 }
 
 // desktopRows reads the apps' indexes, at most every 10 seconds.
-func (s *Server) desktopRows() ([]desktopRow, bool) {
+func (s *Server) desktopRows() ([]desktopRow, bool, bool) {
 	desktopCache.Lock()
 	defer desktopCache.Unlock()
 	if time.Since(desktopCache.at) < 5*time.Second && desktopCache.rows != nil {
-		return desktopCache.rows, desktopCache.app
+		return desktopCache.rows, desktopCache.app, desktopCache.winUp
 	}
 	var rows []desktopRow
 	rows = append(rows, s.claudeDesktopRows()...)
 	rows = append(rows, s.codexAppRows()...)
 	rows = append(rows, s.agyDesktopRows()...)
-	desktopCache.at, desktopCache.rows, desktopCache.app = time.Now(), rows, s.codexAppUp()
-	return rows, desktopCache.app
+	appUp := s.codexAppUp()
+	winUp := !appUp && runtime.GOOS == "windows" && codexDesktopProcRunning()
+	desktopCache.at, desktopCache.rows, desktopCache.app, desktopCache.winUp = time.Now(), rows, appUp, winUp
+	return rows, desktopCache.app, desktopCache.winUp
 }
 
 func forgetDesktopRows() {
@@ -87,7 +90,7 @@ func forgetDesktopRows() {
 // desktopSessions turns the apps' rows into sessions, joined with what runs
 // now: Claude desktop processes (regs) and terminal agents already listed.
 func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool, now time.Time) []*External {
-	rows, appUp := s.desktopRows()
+	rows, appUp, winUp := s.desktopRows()
 	bySession := map[string]*claudeReg{}
 	for _, r := range regs {
 		if strings.HasPrefix(r.Entrypoint, "claude-desktop") {
@@ -119,6 +122,7 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 			if d.running {
 				e.Status = "working"
 			}
+			canResume := !d.running && e.Session != "" && e.Cwd != ""
 			switch {
 			case appUp:
 				e.CanSend, e.via = true, "app"
@@ -126,9 +130,18 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// A thread the App opened on this machine from another
 				// computer runs in Codex's shared background service.
 				e.CanSend = true
+			case runtime.GOOS == "windows":
+				e.CanTakeOver = canResume
+				if winUp {
+					e.ReadOnly = "Windows 版 Codex 桌面端暂不支持外部进程直接注入消息"
+				} else {
+					e.ReadOnly = "Codex 桌面端当前未运行"
+				}
 			case d.app == appCodex:
+				e.CanTakeOver = canResume
 				e.ReadOnly = "Codex App 没有打开：打开它之后就能从这里发消息"
 			default:
+				e.CanTakeOver = canResume
 				e.ReadOnly = "这个对话现在没有在 Codex 里打开：在 Codex App 里点开它，就能从这里发消息"
 			}
 		case "agy":
@@ -415,7 +428,12 @@ func lastTurnOpen(r io.ReaderAt, size int64) bool {
 // in a thread one of them owns; Collie joins as one more client. Frames are a
 // 4-byte little-endian length and a JSON object; each request carries the
 // version the App expects for its method.
-func (s *Server) codexAppSock() string { return filepath.Join(s.codexHome(), "ipc", "ipc.sock") }
+func (s *Server) codexAppSock() string {
+	if runtime.GOOS == "windows" {
+		return `\\.\pipe\codex-ipc`
+	}
+	return filepath.Join(s.codexHome(), "ipc", "ipc.sock")
+}
 
 func (s *Server) codexAppUp() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

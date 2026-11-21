@@ -441,6 +441,36 @@ func windowsDrives() []string {
 	return out
 }
 
+// codexDesktopProcRunning detects the Windows Store / desktop Codex app
+// (OpenAI.Codex_* running ChatGPT.exe / bundled codex.exe), which runs its own
+// stdio app-server rather than exposing ~/.codex/ipc/ipc.sock.
+func codexDesktopProcRunning() bool {
+	entries, err := snapshotWinProcs()
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		exe := strings.ToLower(windows.UTF16ToString(e.ExeFile[:]))
+		if exe != "chatgpt.exe" && exe != "codex.exe" {
+			continue
+		}
+		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, e.ProcessID)
+		if err != nil {
+			continue
+		}
+		full, ferr := procFullImageWin(h)
+		windows.CloseHandle(h)
+		if ferr != nil || full == "" {
+			continue
+		}
+		norm := strings.ToLower(strings.ReplaceAll(full, `\`, "/"))
+		if strings.Contains(norm, "/windowsapps/openai.codex") || strings.Contains(norm, "/programs/codex/") {
+			return true
+		}
+	}
+	return false
+}
+
 func findBinPlatform(name, home string) string {
 	exts := []string{".exe", ".cmd", ".bat", ""}
 	if strings.ContainsRune(filepath.Base(name), '.') {

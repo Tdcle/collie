@@ -532,49 +532,82 @@
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;
+    const tmrCount = $("#nav-timer-count");
+    if (tmrCount) {
+      tmrCount.hidden = !sup.timers;
+      tmrCount.textContent = sup.timers || "";
+    }
     $("#nav-collie").classList.toggle("active", view === "collie");
-    $("#nav-auto").classList.toggle("active", view === "auto");
+    $("#nav-trace")?.classList.toggle("active", view === "trace");
+    $("#nav-memory")?.classList.toggle("active", view === "memory");
+    $("#nav-timers")?.classList.toggle("active", view === "timers");
+    $("#nav-hooks")?.classList.toggle("active", view === "hooks");
     $("#nav-devices").classList.toggle("active", view === "devices");
-    $("#nav-prefs").classList.toggle("active", view === "prefs");
+    $("#nav-settings")?.classList.toggle("active", view === "settings");
   }
 
+  // Instant 0ms selection feedback on pointerdown before hashchange / async fetches run.
+  $(".side")?.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest("a.nav-item, a.nav-tile, a.item");
+    if (!a || !a.getAttribute("href")?.startsWith("#/")) return;
+    $$(".side .nav-item.active, .side .nav-tile.active, .side .item.active").forEach((el) => el.classList.remove("active"));
+    a.classList.add("active");
+    $("#nav-devices").classList.remove("active");
+    $("#nav-settings")?.classList.remove("active");
+  });
+
   // ───────────────────────────── routing
+  const PANEL_VIEWS = new Set(["trace", "memory", "timers", "hooks", "settings"]);
   function route() {
     const h = location.hash;
+    if (h === "#/auto") {
+      const legacyMap = { inbox: "#/trace", threads: "#/trace", memory: "#/memory", timers: "#/timers", hooks: "#/hooks", settings: "#/settings" };
+      location.replace(legacyMap[store.get("autoTab", "inbox")] || "#/trace");
+      return;
+    }
+    if (h === "#/prefs") {
+      settingsTab = "local"; store.set("settingsTab", "local");
+      location.replace("#/settings");
+      return;
+    }
     let next = null, id = null;
     if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
     else if (h.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(h.slice(4)); }
     else if (h === "#/collie") next = "collie";
-    else if (h === "#/auto") next = "auto";
+    else if (h === "#/trace") next = "trace";
+    else if (h === "#/memory") next = "memory";
+    else if (h === "#/timers") next = "timers";
+    else if (h === "#/hooks") next = "hooks";
+    else if (h === "#/settings") next = "settings";
     else if (h === "#/devices") next = "devices";
-    else if (h === "#/prefs") next = "prefs";
     else if (!narrow()) {
       // Desktop has no empty home: reopen where you were, else Collie.
       const last = store.get("last", "#/collie");
-      const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|auto|devices|prefs)$/.test(last);
+      const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|trace|memory|timers|hooks|settings|devices)$/.test(last);
       location.replace(ok ? last : "#/collie");
       return;
     }
     if (next) store.set("last", h);
     if (next === view && id === (next === "ext" ? extCur : current)) return;
-    if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); extCur = null; }
+    if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
-    if (view === "auto" && next !== "auto") clearInterval(autoTimer);
+    if (PANEL_VIEWS.has(view) && next !== view) clearInterval(autoTimer);
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
-    view = next; current = next === "ext" ? null : id;
+    view = next;
+    current = next === "ext" ? null : id;
+    extCur = next === "ext" ? id : null;
     document.body.classList.toggle("show-main", !!next);
     $("#v-collie").hidden = next !== "collie";
-    $("#v-auto").hidden = next !== "auto";
+    $("#v-panel").hidden = !PANEL_VIEWS.has(next);
     $("#v-devices").hidden = next !== "devices";
-    $("#v-prefs").hidden = next !== "prefs";
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
     renderSide();
     if (next === "collie") { renderSuper(true); renderTarget(true); if (!narrow()) $("#super-input").focus(); }
-    if (next === "auto") openAuto();
+    if (PANEL_VIEWS.has(next)) openPanel(next);
     if (next === "devices") openDevices();
-    if (next === "prefs") renderPrefs();
     if (next === "ext") openExt(id);
     if (next === "pane") {
       $("#gone").hidden = true;
@@ -1158,57 +1191,300 @@
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
   }, () => targetNow().machine);
 
-  // ───────────────────────────── automation view
-  let autoTab = store.get("autoTab", "inbox");
+  // ───────────────────────────── panel views (执行轨迹 / 长期记忆 / 定时任务 / 外部触发 / 设置)
+  let traceTab = store.get("traceTab", "flow");     // "flow" | "events"
+  let traceFilter = store.get("traceFilter", "all"); // "all" | "running" | "attn" | "done"
+  let memTab = store.get("memTab", "active");       // "active" | "notes" | "archive"
+  let settingsTab = store.get("settingsTab", "collie"); // "collie" | "local"
+  const expandedTraceCards = new Set();
   let autoTimer;
-  $("#auto-tabs").addEventListener("click", (e) => {
+
+  const PANEL_META = {
+    trace: {
+      name: "执行轨迹",
+      sub: "还原每次派活从下发、跨机执行、回报到结束的完整任务流转链路",
+      tabs: () => [["flow", "任务流转"], ["events", "底层事件流水"]],
+      cur: () => traceTab,
+      set: (t) => { traceTab = t; store.set("traceTab", t); },
+    },
+    memory: {
+      name: "长期记忆",
+      sub: "Collie 在新会话中自动继承的长期指令、进行中任务与经验笔记",
+      tabs: () => [["active", "指令与在途任务"], ["notes", "经验笔记"], ["archive", "做梦整理与归档"]],
+      cur: () => memTab,
+      set: (t) => { memTab = t; store.set("memTab", t); },
+    },
+    timers: {
+      name: "定时任务",
+      sub: "周期巡检、每日提醒与延后跟进调度",
+      tabs: null,
+    },
+    hooks: {
+      name: "外部触发",
+      sub: "接入 GitHub、飞书等外部 Webhook，并配置免唤醒过滤规则",
+      tabs: null,
+    },
+    settings: {
+      name: "设置",
+      sub: "统一管理 Collie 全局中枢调度与当前设备的界面习惯",
+      tabs: () => [["collie", "Collie 全局配置"], ["local", "本机界面与通知"]],
+      cur: () => settingsTab,
+      set: (t) => { settingsTab = t; store.set("settingsTab", t); },
+    },
+  };
+
+  $("#panel-tabs").addEventListener("click", (e) => {
     const t = e.target.closest("button")?.dataset.tab;
-    if (!t) return;
-    autoTab = t; store.set("autoTab", t);
-    openAuto();
+    const meta = PANEL_META[view];
+    if (!t || !meta?.tabs) return;
+    meta.set(t);
+    openPanel(view);
   });
 
-  function openAuto() {
+  function openPanel(which = view) {
+    const meta = PANEL_META[which];
+    if (!meta) return;
     memEditing = false;
-    $("#auto-body")._memSig = "";
-    $$("#auto-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === autoTab));
+    const body = $("#panel-body");
+    body._memSig = "";
+    body._traceSig = "";
+    $("#panel-name").textContent = meta.name;
+    $("#panel-sub").textContent = meta.sub;
+    const tabsBar = $("#panel-tabs-bar"), tabsEl = $("#panel-tabs");
+    if (meta.tabs) {
+      const cur = meta.cur();
+      tabsBar.hidden = false;
+      tabsEl.innerHTML = meta.tabs().map(([k, l]) => `<button type="button" data-tab="${k}" class="${k === cur ? "on" : ""}">${l}</button>`).join("");
+    } else {
+      tabsBar.hidden = true;
+      tabsEl.innerHTML = "";
+    }
     clearInterval(autoTimer);
-    loadAuto();
-    if (autoTab === "inbox" || autoTab === "threads") autoTimer = setInterval(loadAuto, 4000);
-    if (autoTab === "memory") autoTimer = setInterval(() => { if (!memEditing) loadAuto(); }, 5000);
+    loadPanel(which);
+    if (which === "trace") autoTimer = setInterval(() => loadPanel("trace"), 3500);
+    if (which === "memory") autoTimer = setInterval(() => { if (!memEditing) loadPanel("memory"); }, 5000);
+    if (which === "timers") autoTimer = setInterval(() => {
+      if (!document.activeElement?.closest?.("#timer-form")) loadPanel("timers");
+    }, 8000);
   }
 
-  async function loadAuto() {
-    const body = $("#auto-body");
+  async function loadPanel(which = view) {
+    const body = $("#panel-body");
+    if (!body || view !== which) return;
     try {
-      if (autoTab === "inbox" || autoTab === "threads") {
+      if (which === "trace") {
         const r = await api("/api/super/triggers");
-        if (view !== "auto") return;
-        body.innerHTML = autoTab === "inbox" ? inboxHTML(r.triggers || []) : threadsHTML(r.threads || []);
-      } else if (autoTab === "memory") {
+        if (view !== "trace") return;
+        const triggers = r.triggers || [], threads = r.threads || [];
+        const sig = traceTab + "|" + traceFilter + "|" + [...expandedTraceCards].join(",") + "|"
+          + JSON.stringify(sup.workers.map((w) => [w.name, workerStatus(w), w.ended, w.last_report, w.report_at]))
+          + "|" + triggers.slice(0, 40).map((t) => t.id + ":" + t.status).join(",");
+        if (sig !== body._traceSig) {
+          body._traceSig = sig;
+          body.innerHTML = traceTab === "flow" ? traceFlowHTML(triggers, threads) : inboxHTML(triggers, threads);
+        }
+      } else if (which === "memory") {
         const r = await api("/api/super/memory");
-        if (view !== "auto" || autoTab !== "memory" || memEditing) return;
-        // Workers' states count too: the task cards show them.
-        const sig = JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
+        if (view !== "memory" || memEditing) return;
+        const sig = memTab + "|" + JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
         if (sig !== body._memSig) {
           const open = new Set([...body.querySelectorAll("details[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
           const first = !body._memSig;
-          body._memSig = sig; body.innerHTML = memoryHTML(r);
+          body._memSig = sig;
+          body.innerHTML = memoryHTML(r, memTab);
           if (!first) body.querySelectorAll("details").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
         }
-        return;
-      } else if (autoTab === "timers") {
+      } else if (which === "timers") {
         const r = await api("/api/super/timers");
+        if (view !== "timers") return;
+        sup.timers = (r.timers || []).filter((t) => t.enabled).length;
+        renderSide();
         body.innerHTML = timersHTML(r.timers || []);
-      } else {
+      } else if (which === "hooks") {
         const r = await api("/api/super/settings");
-        body.innerHTML = autoTab === "hooks" ? hooksHTML(r) : settingsHTML(r);
-        if (autoTab !== "hooks") api("/api/super/lark?fresh").then((l) => {
-          const el = $("#lark-who");
-          if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
-        }).catch(() => {});
+        if (view !== "hooks") return;
+        body.innerHTML = hooksHTML(r);
+      } else if (which === "settings") {
+        if (settingsTab === "local") {
+          body.innerHTML = prefsHTML();
+        } else {
+          const r = await api("/api/super/settings");
+          if (view !== "settings" || settingsTab !== "collie") return;
+          body.innerHTML = settingsHTML(r);
+          api("/api/super/lark?fresh").then((l) => {
+            const el = $("#lark-who");
+            if (el) el.textContent = l.ready ? `发给 ${l.who || "lark-cli 登录的人"}（以机器人身份）` : `${l.problem}，所以不会发`;
+          }).catch(() => {});
+        }
       }
     } catch (err) { body.innerHTML = `<p class="panel-intro">${esc(err.message)}</p>`; }
+  }
+
+  function fmtDur(ms) {
+    if (!(ms > 0)) return "";
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60), rs = s % 60;
+    if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+    const h = Math.floor(m / 60), rm = m % 60;
+    return rm ? `${h}h ${rm}m` : `${h}h`;
+  }
+
+  function traceFlowHTML(triggers, threads) {
+    // Reconstruct every dispatched worker's full lifecycle from sup.workers + sup.entries + triggers.
+    const workers = [...(sup.workers || [])].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const entriesAsc = [...(sup.entries || [])].sort((a, b) => new Date(a.at) - new Date(b.at));
+    const trigsAsc = [...triggers].sort((a, b) => new Date(a.at) - new Date(b.at));
+
+    const items = workers.map((w) => {
+      const st = workerStatus(w);
+      const createdMs = new Date(w.created_at).getTime();
+      const pane = !w.ended && paneOf(w.name);
+      const past = !pane && workerHist(w.name, w.created_at);
+      const href = pane ? `#/p/${encodeURIComponent(pane)}` : past ? `#/h/${encodeURIComponent(past.id)}` : "";
+      const isBlocked = st === "blocked" || /^BLOCKED:/i.test(w.last_report || "");
+      const isFailed = st === "failed";
+      const isLive = !w.ended && st !== "gone";
+      const isWorking = isLive && (st === "working" || st === "starting" || st === "waiting" || st === "blocked");
+      const hasOkReport = !!(w.last_report && !/^BLOCKED:/i.test(w.last_report));
+
+      // Collect chronological lifecycle steps for this worker.
+      const steps = [];
+      // 1. Triggering user prompt right before spawn (within 5 minutes)
+      const prevUser = [...entriesAsc].reverse().find((e) => e.role === "user" && new Date(e.at).getTime() <= createdMs + 2000 && createdMs - new Date(e.at).getTime() < 5 * 60 * 1000);
+      if (prevUser) {
+        steps.push({ cls: "", tag: "用户发起", text: plainLine(prevUser.text).slice(0, 140), at: prevUser.at });
+      }
+      // 2. Collie spawn step
+      const targetStr = [KIND_LABEL[w.kind] || w.kind, w.model || (w.run && w.run[0]) || "默认模型"].filter(Boolean).join(" · ");
+      steps.push({
+        cls: "spawn",
+        tag: "派发启动",
+        text: `Collie 在 ${w.machine ? machineName(w.machine) : "本机"}（${tilde(w.cwd || "~")}）启动 ${w.name}（${targetStr}）`,
+        at: w.created_at,
+      });
+
+      // 3. Intermediate triggers & events referencing this worker
+      const seenTexts = new Set();
+      let sawReport = false;
+      for (const t of trigsAsc) {
+        const tMs = new Date(t.at).getTime();
+        if (tMs < createdMs - 1000) continue;
+        const related = t.ref === w.name || t.from === w.name || (t.targets || []).includes(w.name);
+        if (!related) continue;
+        let body = String(t.text || "").replace(/^report from [^:]+:\s*/i, "").trim();
+        if (!body || seenTexts.has(body.slice(0, 80))) continue;
+        seenTexts.add(body.slice(0, 80));
+        if (t.from === w.name || t.source === "worker") {
+          const blk = /^BLOCKED:/i.test(body);
+          sawReport = true;
+          steps.push({ cls: blk ? "blocked" : "done", tag: blk ? "阻塞上报" : "结果回报", text: body, at: t.at });
+        } else if ((t.targets || []).includes(w.name)) {
+          steps.push({ cls: "spawn", tag: "追加指令", text: body, at: t.at });
+        }
+      }
+
+      // 4. Event entries (e.g., API error, crash, stop) from sup.entries
+      for (const e of entriesAsc) {
+        if (e.role !== "event" || e.ref !== w.name) continue;
+        const eMs = new Date(e.at).getTime();
+        if (eMs < createdMs - 1000) continue;
+        if (/^派出\s/.test(e.text)) continue;
+        const clean = e.text.trim();
+        if (sawReport && /回报[:：]/.test(clean)) continue;
+        if (seenTexts.has(clean.slice(0, 80))) continue;
+        seenTexts.add(clean.slice(0, 80));
+        const cls = e.tone === "error" ? "err" : e.tone === "blocked" ? "blocked" : /回报/.test(clean) ? "done" : "";
+        const tag = e.tone === "error" ? "运行异常" : e.tone === "blocked" ? "等待确认" : /已停止/.test(clean) ? "停止回收" : /回报/.test(clean) ? "结果回报" : "状态流转";
+        if (/回报/.test(clean)) sawReport = true;
+        steps.push({ cls, tag, text: clean.replace(new RegExp("^" + w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*回报[:：]\\s*"), ""), at: e.at });
+      }
+
+      // Fallback if last_report wasn't already captured from triggers/events
+      if (w.last_report && !sawReport && !seenTexts.has(w.last_report.trim().slice(0, 80))) {
+        const blk = /^BLOCKED:/i.test(w.last_report);
+        steps.push({ cls: blk ? "blocked" : "done", tag: blk ? "阻塞上报" : "结果回报", text: w.last_report.trim(), at: w.report_at && !w.report_at.startsWith("0001") ? w.report_at : w.created_at });
+      }
+
+      if (isWorking) {
+        steps.push({ cls: st === "blocked" ? "blocked" : "work", tag: STATUS_LABEL[st] || "执行中", text: st === "blocked" ? "正在等待确认或外部输入…" : "正在目标电脑上执行…", at: new Date().toISOString(), live: true });
+      } else if (isLive) {
+        steps.push({ cls: "done", tag: "驻留待命", text: "本轮任务已跑完，会话仍在后台待命（可继续追问或点右上角停止回收）", at: new Date().toISOString(), live: true });
+      }
+
+      steps.sort((a, b) => new Date(a.at) - new Date(b.at));
+      const endMs = isWorking ? Date.now() : Math.max(createdMs, ...steps.filter((s) => !s.live).map((s) => new Date(s.at).getTime()).filter((n) => !isNaN(n)));
+      const dur = fmtDur(endMs - createdMs);
+      const bucket = isWorking ? "running" : (isBlocked || isFailed) ? "attn" : "done";
+      const badgeCls = isWorking ? "queued" : (isBlocked || isFailed) ? "candidate" : hasOkReport ? "" : "ignored";
+      const badgeTxt = isWorking ? (STATUS_LABEL[st] || "执行中") : isFailed ? "执行异常" : isBlocked ? "阻塞结项" : isLive ? "已完成 · 待命" : hasOkReport ? "已回报结项" : "已结束";
+
+      return { w, st, href, steps, dur, bucket, isLive, isWorking, isBlocked, isFailed, badgeCls, badgeTxt };
+    });
+
+    const counts = {
+      all: items.length,
+      running: items.filter((x) => x.bucket === "running").length,
+      attn: items.filter((x) => x.bucket === "attn").length,
+      done: items.filter((x) => x.bucket === "done").length,
+    };
+    const shown = traceFilter === "all" ? items : items.filter((x) => x.bucket === traceFilter);
+    const customSubs = threads.filter((th) => th.subscribers?.length);
+
+    return `
+      <div class="trace-stats">
+        <button type="button" class="trace-stat ${traceFilter === "all" ? "on" : ""}" data-tf="all">
+          <span class="ts-num">${counts.all}</span><span class="ts-lab">全部任务轨迹</span>
+        </button>
+        <button type="button" class="trace-stat running ${traceFilter === "running" ? "on" : ""}" data-tf="running">
+          <span class="ts-num">${counts.running}</span><span class="ts-lab"><span class="dot working"></span>正在执行</span>
+        </button>
+        <button type="button" class="trace-stat attn ${traceFilter === "attn" ? "on" : ""}" data-tf="attn">
+          <span class="ts-num">${counts.attn}</span><span class="ts-lab"><span class="dot blocked"></span>异常 / 曾受阻</span>
+        </button>
+        <button type="button" class="trace-stat done ${traceFilter === "done" ? "on" : ""}" data-tf="done">
+          <span class="ts-num">${counts.done}</span><span class="ts-lab"><span class="dot idle"></span>已结项</span>
+        </button>
+      </div>
+      ${customSubs.length ? `<div class="card"><div class="card-h">活跃直连路由（外部会话绑定）</div><ul class="rows">${customSubs.map((th) => `<li class="row"><span class="badge queued">直达</span><div><div class="meta"><b>${esc(th.id)}</b><span>后续消息直达 → ${esc(th.subscribers.join(", "))}</span></div></div><span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div>` : ""}
+      <div class="trace-list">
+        ${shown.length ? shown.map(({ w, href, steps, dur, isLive, isWorking, isBlocked, isFailed, badgeCls, badgeTxt }) => {
+          const key = w.name + "@" + w.created_at;
+          const exp = expandedTraceCards.has(key);
+          return `<article class="trace-card ${isWorking ? "is-live" : isFailed ? "is-failed" : isBlocked ? "is-blocked" : ""} ${exp ? "expanded" : ""}" data-tc="${esc(key)}">
+            <header class="tc-head">
+              <div class="tc-main">
+                <div class="tc-title-row">
+                  <span class="badge ${badgeCls}">${esc(badgeTxt)}</span>
+                  <span class="tc-name">${esc(w.name)}</span>
+                  <span class="tc-chip">${GLYPHS[w.kind === "antigravity" ? "agy" : w.kind] || ""}<span>${esc(KIND_LABEL[w.kind] || w.kind)}${w.model ? " · " + esc(w.model.split("/").pop()) : ""}</span></span>
+                  <span class="tc-chip">${osGlyph((state.machines || []).find((m) => m.id === (w.machine || ""))?.os)}<span>${esc(w.machine ? machineName(w.machine) : "本机")}</span></span>
+                </div>
+                ${w.task ? `<div class="tc-task" title="点击展开/收起完整任务说明" data-act="tc-toggle">${esc(w.task)}</div>` : ""}
+                <div class="tc-meta">
+                  <span>目录 ${esc(tilde(w.cwd || "~"))}</span>
+                  <span>发起于 ${when(w.created_at)}</span>
+                  ${dur ? `<span>耗时 ${esc(dur)}</span>` : ""}
+                  ${w.thread && w.thread !== "chat:main" ? `<span>来源 ${esc(w.thread)}</span>` : ""}
+                </div>
+              </div>
+              <div class="tc-acts">
+                ${w.task && w.task.length > 90 ? `<button type="button" class="btn ghost small" data-act="tc-toggle">${exp ? "收起指令" : "展开指令"}</button>` : ""}
+                ${href ? `<a class="btn small" href="${href}">${isLive ? "查看实时终端 →" : "查看会话记录 →"}</a>` : ""}
+                ${isLive ? `<button type="button" class="btn ghost small" data-stop-worker="${esc(w.name)}">停止</button>` : ""}
+              </div>
+            </header>
+            <div class="tc-steps">
+              ${steps.map((s) => `<div class="tc-step ${s.cls || ""}">
+                <span class="s-dot"></span>
+                <span class="s-tag">${esc(s.tag)}</span>
+                <div class="s-body">${esc(s.text)}</div>
+                <span class="s-time">${s.live ? "当前" : when(s.at)}</span>
+              </div>`).join("")}
+            </div>
+          </article>`;
+        }).join("") : `<div class="card"><div class="empty-row">${items.length ? "当前筛选条件下没有任务轨迹" : "还没有派出过任务。在「和 Collie 对话」中交代一件事，这里就会实时记录完整的跨机调度轨迹。"}</div></div>`}
+      </div>`;
   }
 
   // ───────────────────────────── memory: what Collie keeps between sessions
@@ -1219,7 +1495,7 @@
     const hm = d.toTimeString().slice(0, 5);
     return d.toDateString() === today ? "今天 " + hm : d.toDateString() === tmr ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   };
-  function memoryHTML(r) {
+  function memoryHTML(r, tab = "active") {
     const files = r.files || [];
     const by = (f) => files.filter(f);
     const over = r.loaded > r.budget;
@@ -1228,7 +1504,7 @@
     const firstLine = (t, dflt) => t.split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
     // A task names the workers on it: show them live, and open their session.
     const crew = (f) => {
-      const latest = new Map(); // a name can be reused: the newest one
+      const latest = new Map();
       for (const w of sup.workers) if (!latest.has(w.name) || new Date(w.created_at) > new Date(latest.get(w.name).created_at)) latest.set(w.name, w);
       const ws = [...latest.values()].filter((w) => new RegExp(`(^|[^\\w-])${w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(f.text));
       if (!ws.length) return "";
@@ -1257,35 +1533,38 @@
     const done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
     const msgs = by((f) => f.name === "messages.md");
     const legacy = by((f) => f.legacy);
-    return `<p class="panel-intro">Collie 的长期记忆在 <code>${esc(r.dir)}/memory</code>，按用途分开：每次新会话只先读<b>指令、笔记索引、进行中的任务和最近说过的话</b>，其余需要时再看。
-      「做梦」时，Collie 回顾最近的会话来整理记忆：替换过时的条目，发现只有跨多次对话才看得出的习惯（标记为 inferred）。</p>
-      <div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
-        <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "现在整理"}</button></div>
-        <div class="mem-dream mem-load"><span class="grow">每次新会话先读：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议 ${kb(r.budget)} 以内${over ? "（偏大，做梦时会精简）" : ""}</span></div></div>
+
+    const statusCard = `<div class="card"><div class="mem-dream"><span class="dot ${r.dreaming ? "starting" : "asleep"}"></span><span class="grow">${dream}</span>
+      <button class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "做梦中…" : "立即整理记忆"}</button></div>
+      <div class="mem-dream mem-load"><span class="grow">每次新会话自动预载：<b class="${over ? "warn" : ""}">${kb(r.loaded)}</b> / 建议上限 ${kb(r.budget)}${over ? "（偏大，下次整理会自动精简）" : ""} · 存储于 <code>${esc(tilde(r.dir))}/memory</code></span></div></div>`;
+
+    if (tab === "notes") {
+      return `<p class="panel-intro">Collie 在排障与派活中沉淀下来的环境特征、机器差异（如 <code>agents.md</code>）和项目经验。新会话启动时只先读索引 <code>index.md</code>，具体笔记按需查阅，不浪费上下文。</p>
+        ${group("经验笔记", `共 ${notes.length} 篇 · index.md 为目录索引`, notes, { always: true, empty: "还没有沉淀的经验笔记", card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}`;
+    }
+    if (tab === "archive") {
+      return `${statusCard}
+        ${r.dreams?.length ? `<h4 class="mem-h">做梦整理日记<span class="muted">每晚自动回顾对话、去重合并记忆的记录</span></h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : `<h4 class="mem-h">做梦整理日记</h4><div class="card"><div class="empty-row">还没有做梦整理记录</div></div>`}
+        ${group("已结项任务归档", "已完成或中止的历史任务记录", done, { always: true, empty: "暂无已归档任务", card: (f) => ({ label: f.name.replace(/^tasks\/done\//, ""), crew: true }) })}
+        ${group("最近回复摘录", "Hub 自动维护，防止跨会话重复汇报", msgs, { card: { edit: false, label: "messages.md" } })}`;
+    }
+    return `${statusCard}
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
-      ${group("指令", "你的长期要求和偏好，每次都读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有" })}
-      ${group("进行中的任务", "一件事一个文件，每次都读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "没有进行中的任务" })}
-      ${group("笔记", "只先读索引，其余需要时读", notes, { card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, "") }) })}
-      ${group("最近说过的话", "hub 自动记录，避免重复", msgs, { card: { edit: false, label: "messages.md" } })}
-      ${r.dreams.length ? `<h4 class="mem-h">做梦日记</h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="muted mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : ""}
-      ${group("已完成", "做完或放弃的任务", done, { card: (f) => ({ label: f.name.replace(/^tasks\/done\//, ""), crew: true }) })}`;
+      ${group("长期指令", "你的长期习惯、偏好与自动化规则，每次新会话必读", ins, { card: { open: true, label: "instructions.md", sub: "" }, always: true, empty: "还没有长期指令" })}
+      ${group("进行中的任务", "跨多轮跟进的在途事项，每次新会话必读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "当前没有跨会话跟进中的任务文件" })}`;
   }
 
-  function inboxHTML(ts) {
-    return `<p class="panel-intro">你的消息、外部事件、定时器，以及派出的 agent 完成或卡住，都会进这里。先按来源策略过滤；订阅了线程的 agent 直接收到，其余交给 Collie 判断。对方正忙时事件会先攒着，空闲后一次送过去。</p>
-      <div class="card"><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
+  function inboxHTML(ts, ths = []) {
+    return `<p class="panel-intro">这里是底层消息总线的原始触发器流水（用于诊断排查）：包含聊天消息、子 Agent 回报、系统通知与外部 Webhook。日常查看任务进展请用上方的「任务流转」视图。</p>
+      <div class="card"><div class="card-h">最近触发事件（${ts.length}）</div><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
         <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
-        <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>from ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>candidate</span>" : ""}</div>
+        <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>来自 ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>按需判断</span>" : ""}</div>
         <div class="text">${esc(t.text)}</div></div>
-        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">收件箱是空的</li>`}</ul></div>`;
-  }
-
-  function threadsHTML(ths) {
-    return `<p class="panel-intro">同一个对话、Issue/PR 或群聊话题里的连续事件构成一条线程。Collie 派出的 agent 订阅线程后，后续事件直达它，不再经过 Collie。chat:main 始终由 Collie 自己处理。</p>
-      <div class="card"><ul class="rows">${ths.length ? ths.map((th) => `<li class="row">
-        <span class="badge">${th.triggers?.length || 0}</span>
-        <div><div class="meta"><b>${esc(th.id)}</b>${th.subscribers?.length ? `<span>订阅：${esc(th.subscribers.join(", "))}</span>` : "<span>→ Collie</span>"}</div></div>
-        <span class="right">${when(th.last_at)}</span></li>`).join("") : `<li class="empty-row">还没有线程</li>`}</ul></div>`;
+        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">暂无事件记录</li>`}</ul></div>
+      ${ths.length > 1 ? `<div class="card"><div class="card-h">会话路由通道（Threads）</div><ul class="rows">${ths.map((th) => `<li class="row">
+        <span class="badge">${th.triggers?.length || 0} 条</span>
+        <div><div class="meta"><b>${esc(th.id)}</b>${th.subscribers?.length ? `<span>直连订阅：${esc(th.subscribers.join(", "))}</span>` : "<span>默认交由 Collie 处理</span>"}</div></div>
+        <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div>` : ""}`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -1376,7 +1655,7 @@
         <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`).join("") : `<li class="empty-row">还没有定时</li>`}</ul></div>`;
   }
   // Timer form: mode, days and quick times are buttons; everything re-describes the spec.
-  $("#auto-body").addEventListener("click", (e) => {
+  $("#panel-body").addEventListener("click", (e) => {
     const f = e.target.closest("#timer-form");
     if (!f) return;
     const b = e.target.closest("button[type=button]");
@@ -1393,28 +1672,34 @@
     }
     syncTimerForm(f);
   });
-  $("#auto-body").addEventListener("input", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
-  $("#auto-body").addEventListener("change", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
+  $("#panel-body").addEventListener("input", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
+  $("#panel-body").addEventListener("change", (e) => { const f = e.target.closest("#timer-form"); if (f) syncTimerForm(f); });
 
   function hooksHTML(r) {
     const base = location.origin + "/hooks/";
     const url = (src) => `${base}${src}?key=${r.hook_key}`;
-    return `<p class="panel-intro">把外部事件接进来。Webhook 立即返回 202，过滤和路由在收件箱里异步完成。未经请求的事件默认是 <b>candidate</b>：只有 Collie 的记忆或你的规则覆盖到时才会行动，否则保持安静。</p>
-      <div class="card"><div class="card-h">Webhook 地址</div><div class="form">
-        <label>GitHub <small>Settings → Webhooks，Content type 选 application/json</small><div class="code"><span>${esc(url("github"))}</span><button class="icon-btn" data-copy="${esc(url("github"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
-        <label>飞书 / Lark <small>事件订阅的请求地址，已支持 url_verification</small><div class="code"><span>${esc(url("feishu"))}</span><button class="icon-btn" data-copy="${esc(url("feishu"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
-        <label>通用 <small>POST JSON：{"text","thread","from","id"}，source 名可自取</small><div class="code"><span>curl -X POST '${esc(url("ci"))}' -H 'Content-Type: application/json' -d '{"thread":"build-42","text":"nightly build failed"}'</span></div></label>
+    return `<p class="panel-intro">把外部平台事件（GitHub PR/Issue、飞书机器人、CI 报警等）接入 Collie。Webhook 收到后立即返回 <code>202 Accepted</code>，并先过下方过滤规则：不匹配的噪音事件在入口直接丢弃，<b>零大模型 Token 消耗</b>。</p>
+      <div class="card"><div class="card-h">Webhook 接入地址</div><div class="form">
+        <label>GitHub <small>仓库 Settings → Webhooks，Content type 选 application/json</small><div class="code"><span>${esc(url("github"))}</span><button class="icon-btn" data-copy="${esc(url("github"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
+        <label>飞书 / Lark <small>应用事件订阅请求地址，原生支持 url_verification 握手</small><div class="code"><span>${esc(url("feishu"))}</span><button class="icon-btn" data-copy="${esc(url("feishu"))}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></label>
+        <label>通用 HTTP 触发 <small>POST JSON：{"text","thread","from","id"}，路径末尾名称即为 source</small><div class="code"><span>curl -X POST '${esc(url("ci"))}' -H 'Content-Type: application/json' -d '{"thread":"build-42","text":"nightly build failed"}'</span></div></label>
       </div></div>
-      <div class="card"><div class="card-h">来源策略（快路径）<button class="btn small" id="add-policy">添加</button></div>
+      <div class="card"><div class="card-h">事件过滤规则（免唤醒省 Token）<button class="btn small" id="add-policy">添加规则</button></div>
+        <div class="policy-presets">
+          <span>快捷添加：</span>
+          <button type="button" class="chip-btn" data-preset-source="webhook:github" data-preset-action="candidate">+ GitHub 按需判断</button>
+          <button type="button" class="chip-btn" data-preset-source="webhook:feishu" data-preset-action="respond">+ 飞书消息必回</button>
+          <button type="button" class="chip-btn" data-preset-source="webhook:ci" data-preset-action="ignore">+ 屏蔽噪音源</button>
+        </div>
         <div id="policies">${(r.policies || []).map(policyRow).join("")}</div>
-        <div class="form"><div class="form-actions"><button class="btn primary small" id="save-policies">保存策略</button></div></div></div>`;
+        <div class="form"><p class="muted" style="margin:0;font-size:12px;line-height:1.55">说明：<b>直接忽略</b> 会在 Go 网关层直接拦截（0 Token）；<b>按需判断（candidate）</b> 仅在命中你的长期指令时才行动；<b>直接响应</b> 则每次都会唤醒 Collie 回复。支持填写发送者白名单。</p><div class="form-actions"><button class="btn primary small" id="save-policies">保存过滤规则</button></div></div></div>`;
   }
 
   function policyRow(p = { source: "webhook:", action: "candidate", allow: [] }) {
     return `<div class="policy">
       <input data-f="source" value="${esc(p.source)}" placeholder="webhook:github">
-      <select data-f="action">${["respond", "candidate", "ignore"].map((a) => `<option value="${a}" ${p.action === a ? "selected" : ""}>${{ respond: "直接响应", candidate: "候选（Collie 判断）", ignore: "忽略" }[a]}</option>`).join("")}</select>
-      <input data-f="allow" value="${esc((p.allow || []).join(", "))}" placeholder="白名单（可选，逗号分隔）">
+      <select data-f="action">${["respond", "candidate", "ignore"].map((a) => `<option value="${a}" ${p.action === a ? "selected" : ""}>${{ respond: "直接响应（必唤醒）", candidate: "按需判断（省打扰）", ignore: "直接忽略（0 Token）" }[a]}</option>`).join("")}</select>
+      <input data-f="allow" value="${esc((p.allow || []).join(", "))}" placeholder="发送人白名单（可选，逗号分隔）">
       <button class="icon-btn" data-del-policy title="删除"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
   }
 
@@ -1553,7 +1838,7 @@
     </form>`;
   }
 
-  $("#auto-body").addEventListener("submit", async (e) => {
+  $("#panel-body").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target;
     try {
@@ -1562,12 +1847,13 @@
         if (r.err) { toast(r.err, "attn"); return; }
         await api("/api/super/timers", { body: { spec: r.spec, text: f.text.value, target: f.target.value, owner: "you" } });
         toast(`已添加：${describeSpec(r.spec)}`);
-        loadAuto();
+        loadPanel("timers");
       } else if (f.classList.contains("mem-edit")) {
         await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
         memEditing = false;
+        $("#panel-body")._memSig = "";
         toast("已保存");
-        loadAuto();
+        loadPanel("memory");
       } else if (f.id === "settings-form") {
         const cur = (await api("/api/super/settings")).settings;
         const s = {
@@ -1594,7 +1880,57 @@
     } catch (err) { toast(err.message, "attn"); }
   });
 
-  $("#auto-body").addEventListener("click", async (e) => {
+  $("#panel-body").addEventListener("click", async (e) => {
+    // Execution trajectory filter cards & task text expand/collapse
+    const tf = e.target.closest("[data-tf]")?.dataset.tf;
+    if (tf) {
+      traceFilter = tf; store.set("traceFilter", tf);
+      $("#panel-body")._traceSig = "";
+      loadPanel("trace");
+      return;
+    }
+    if (e.target.closest("[data-act='tc-toggle']")) {
+      const card = e.target.closest("[data-tc]");
+      if (card) {
+        const k = card.dataset.tc;
+        if (expandedTraceCards.has(k)) expandedTraceCards.delete(k); else expandedTraceCards.add(k);
+        card.classList.toggle("expanded", expandedTraceCards.has(k));
+        const btn = card.querySelector("button[data-act='tc-toggle']");
+        if (btn) btn.textContent = expandedTraceCards.has(k) ? "收起指令" : "展开指令";
+      }
+      return;
+    }
+    const stopW = e.target.closest("[data-stop-worker]")?.dataset.stopWorker;
+    if (stopW) {
+      if (!confirm(`停止正在执行的任务「${stopW}」？`)) return;
+      try {
+        await api(`/api/super/workers/${encodeURIComponent(stopW)}/stop`, { method: "POST", body: {} });
+        toast(`已停止 ${stopW}`);
+        $("#panel-body")._traceSig = "";
+        loadPanel("trace");
+      } catch (err) { toast(err.message, "attn"); }
+      return;
+    }
+
+    // Local device preferences inside Settings -> 本机界面与通知
+    const prefBtn = e.target.closest(".seg[data-pref] button, button.switch[data-pref]");
+    if (prefBtn) {
+      if (prefBtn.classList.contains("switch")) {
+        const key = prefBtn.dataset.pref, on = prefBtn.getAttribute("aria-checked") !== "true";
+        if (key === "notify" && on && "Notification" in window && Notification.permission !== "granted") {
+          const p = await Notification.requestPermission();
+          if (p !== "granted") { toast("浏览器没有允许通知", "attn"); loadPanel("settings"); return; }
+        }
+        store.set(key, on);
+      } else {
+        const key = prefBtn.closest("[data-pref]").dataset.pref, v = prefBtn.dataset.v;
+        if (key === "mode2") setMode(v); else store.set(key, v);
+        if (key === "theme" || key === "text" || key === "sendKey") applyLook();
+      }
+      loadPanel("settings");
+      return;
+    }
+
     const t = e.target.closest("button");
     if (!t) return;
     if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
@@ -1604,21 +1940,24 @@
       box.querySelector("[data-view]").hidden = memEditing;
       box.querySelector(".mem-tools").hidden = memEditing;
       if (memEditing) box.querySelector("textarea").focus();
-      else { $("#auto-body")._memSig = ""; loadAuto(); }
+      else { $("#panel-body")._memSig = ""; loadPanel("memory"); }
       return;
     }
     if (t.dataset.act === "dream-now") {
       t.disabled = true; t.textContent = "开始中…";
       try { await api("/api/super/dream", { body: {} }); toast("Collie 去做梦了"); }
       catch (err) { toast(err.message, "attn"); }
-      loadAuto();
+      $("#panel-body")._memSig = "";
+      loadPanel("memory");
       return;
     }
     if (t.dataset.delTimer) {
       await api(`/api/super/timers/${t.dataset.delTimer}/delete`, { method: "POST", body: {} }).catch((err) => toast(err.message));
-      loadAuto();
+      loadPanel("timers");
     } else if (t.dataset.copy) {
       await copy(t.dataset.copy); toast("已复制");
+    } else if (t.dataset.presetSource) {
+      $("#policies")?.insertAdjacentHTML("beforeend", policyRow({ source: t.dataset.presetSource, action: t.dataset.presetAction || "candidate", allow: [] }));
     } else if (t.id === "add-policy") {
       $("#policies").insertAdjacentHTML("beforeend", policyRow());
     } else if (t.hasAttribute("data-del-policy")) {
@@ -1628,7 +1967,7 @@
         source: $("[data-f=source]", row).value.trim(), action: $("[data-f=action]", row).value,
         allow: $("[data-f=allow]", row).value.split(",").map((x) => x.trim()).filter(Boolean),
       })).filter((p) => p.source);
-      try { await api("/api/super/settings", { body: { policies } }); toast("策略已保存"); } catch (err) { toast(err.message, "attn"); }
+      try { await api("/api/super/settings", { body: { policies } }); toast("过滤规则已保存"); } catch (err) { toast(err.message, "attn"); }
     }
   });
 
@@ -1698,6 +2037,8 @@
     b.hidden = false;
     b.disabled = !on;
     $("#x-forget").hidden = !h;
+    const rev = $("#x-reveal");
+    if (rev) rev.hidden = true;
   }
   async function openHist(hid) {
     const el = $("#x-thread");
@@ -1844,6 +2185,8 @@
     if (extCur?.startsWith("h:")) return renderHistHead(extCur.slice(2));
     $("#x-tag").textContent = "只读";
     $("#x-forget").hidden = true;
+    const rev = $("#x-reveal");
+    if (rev) rev.hidden = true;
     $("#x-takeover").textContent = "在 herdr 里接管";
     $("#x-takeover").className = "btn primary small";
     $("#x-composer").hidden = true;
@@ -1861,6 +2204,11 @@
     $("#x-status").className = "status " + (gone ? "ended" : "unknown");
     $("#x-cwd").textContent = (e.machine ? machineName(e.machine) + " · " : "") + tilde(e.cwd);
     const app = e.app || "另一个终端";
+    const canReveal = !gone && !!e.session && ((e.kind === "codex" && /Codex/i.test(app)) || (e.kind === "claude" && String(e.id).startsWith("cd-")));
+    if (rev && canReveal) {
+      rev.hidden = false;
+      rev.textContent = e.machine ? `在 ${machineName(e.machine)} 桌面端打开` : `在 ${app} 里打开`;
+    }
     if (!e.live && !gone) {
       // A desktop app's conversation that is not running right now.
       $("#x-tag").textContent = e.can_send ? "可对话" : "只读";
@@ -1869,11 +2217,12 @@
       $("#x-takeover").hidden = !e.can_take_over;
       $("#x-takeover").disabled = false;
       $("#x-takeover").textContent = "在 herdr 里继续";
-      $("#x-takeover").className = "btn small";
+      $("#x-takeover").className = e.can_send ? "btn small" : "btn primary small";
       $("#x-composer").hidden = !e.can_send;
       if (e.can_send) $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : "经 Codex App 送达";
+      const ro = (e.read_only || "").replace(/[。.]$/, "");
       $("#x-note").textContent = e.can_send ? ""
-        : (e.read_only || "") + (e.can_take_over ? "。也可以在 herdr 里用同一个会话继续，之后就能在这里对话。" : "");
+        : ro + (e.can_take_over && !/herdr/.test(ro) ? "。可点右侧在 herdr 里继续同一个会话，之后就能直接在这里对话。" : ro ? "。" : "");
       return;
     }
     $("#x-takeover").hidden = !e.can_take_over;
@@ -1893,7 +2242,8 @@
       $("#x-hint").textContent = e.kind === "agy" ? "经 Antigravity 送达" : e.app === "Codex 桌面版" ? "经 Codex App 送达" : e.kind === "codex" ? "经 Codex 后台送达" : "经会话收件箱送达";
       $("#x-note").textContent = "";
     } else if (!gone && e.read_only && e.session) {
-      $("#x-note").textContent = e.read_only + "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。";
+      const ro = e.read_only.replace(/[。.]$/, "");
+      $("#x-note").textContent = ro + (e.can_take_over ? "。接管会先结束那边的进程（相当于按 Ctrl-C），再在 herdr 里接着同一个会话继续。" : "。");
     }
   }
   bindComposer($("#x-composer"), $("#x-input"), async (text) => {
@@ -1962,7 +2312,18 @@
     } catch (err) {
       toast(err.message, "attn");
       b.disabled = false;
-    } finally { b.textContent = "在 herdr 里接管"; }
+    } finally { b.textContent = e.live ? "在 herdr 里接管" : "在 herdr 里继续"; }
+  });
+  $("#x-reveal")?.addEventListener("click", async () => {
+    const e = ext.find((x) => x.id === extCur);
+    if (!e) return;
+    const b = $("#x-reveal");
+    b.disabled = true;
+    try {
+      await api(`/api/external/${encodeURIComponent(e.id)}/reveal`, { body: {} });
+      toast(e.machine ? `已在 ${machineName(e.machine)} 上唤起桌面端` : "已在桌面端打开");
+    } catch (err) { toast(err.message, "attn"); }
+    finally { b.disabled = false; }
   });
 
   // ───────────────────────────── preferences (per device, in localStorage)
@@ -2007,12 +2368,12 @@
     const next = order[(order.indexOf(prefs.theme()) + 1) % order.length];
     store.set("theme", next);
     applyLook();
-    if (view === "prefs") renderPrefs();
+    if (view === "settings" && settingsTab === "local") loadPanel("settings");
     toast(`外观：${{ system: "跟随系统", light: "浅色模式", dark: "深色模式" }[next]}`);
   });
   applyLook();
 
-  function renderPrefs() {
+  function prefsHTML() {
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
       `<button type="button" data-v="${v}" class="${v === cur ? "on" : ""}">${label}</button>`).join("")}</div>`;
     const sw = (key, on) => `<button type="button" class="switch" role="switch" aria-checked="${on}" data-pref="${key}"></button>`;
@@ -2021,41 +2382,22 @@
       : Notification.permission === "denied" ? "浏览器已拒绝通知，需要在浏览器的网站设置里打开"
       : "页面在后台时，agent 需要你确认或完成任务会弹通知";
     const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-    $("#prefs-body").innerHTML = `<div class="prefs">
-      <div class="card"><div class="card-h">外观</div>
+    return `<div class="prefs">
+      <p class="panel-intro">以下选项仅保存在当前浏览器的本地存储中，不影响其他设备。如需调整 Collie 大脑、默认派活机器或飞书通知，请切到上方的「Collie 全局配置」。</p>
+      <div class="card"><div class="card-h">外观显示</div>
         ${row("主题", "跟随系统时，设备切到深色模式这里也跟着变", seg("theme", prefs.theme(), [["system", '<span class="theme-swatch system"></span>跟随系统'], ["light", '<span class="theme-swatch light"></span>浅色'], ["dark", '<span class="theme-swatch dark"></span>深色']]))}
-        ${row("对话文字", "", seg("text", prefs.text(), [["small", "小"], ["normal", "标准"], ["large", "大"]]))}
+        ${row("对话文字大小", "", seg("text", prefs.text(), [["small", "紧凑"], ["normal", "标准"], ["large", "大字号"]]))}
       </div>
-      <div class="card"><div class="card-h">对话</div>
-        ${row("打开 agent 时显示", "对话：从会话记录整理的消息；屏幕：终端原样；日志：自动换行的滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]]))}
-        ${row("发送消息", "另一种按法用来换行；Shift+Enter 总是换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
-        ${row("折叠连续的工具步骤", "超过 3 步时收成一行，只露出最后一步", sw("fold", prefs.fold()))}
+      <div class="card"><div class="card-h">会话交互习惯</div>
+        ${row("打开 Agent 时默认视图", "对话：结构化消息卡片；屏幕：原生终端；日志：纯文本滚动输出", seg("mode2", mode, [["chat", "对话"], ["screen", "屏幕"], ["log", "日志"]]))}
+        ${row("发送消息快捷键", "另一种按法用来换行；Shift+Enter 始终换行", seg("sendKey", prefs.sendKey(), [["enter", "Enter"], ["mod", mac ? "⌘ Enter" : "Ctrl Enter"]]))}
+        ${row("折叠连续的工具步骤", "连续工具调用超过 3 步时自动收起，仅露出最新一步", sw("fold", prefs.fold()))}
       </div>
-      <div class="card"><div class="card-h">通知</div>
-        ${row("浏览器通知", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
+      <div class="card"><div class="card-h">桌面通知</div>
+        ${row("浏览器通知提醒", esc(perm), sw("notify", prefs.notify() && (!("Notification" in window) || Notification.permission !== "denied")))}
       </div>
-      <p class="panel-intro">Collie 本身的设置（它自己用哪个 agent、派活默认在哪台电脑、通知机器人）在 <a href="#/auto" data-auto-tab="settings">自动化 → 设置</a>；电脑和手机的连接在 <a href="#/devices">设备</a>。</p>
     </div>`;
   }
-  $("#prefs-body").addEventListener("click", async (e) => {
-    const link = e.target.closest("a[data-auto-tab]");
-    if (link) autoTab = link.dataset.autoTab;
-    const b = e.target.closest(".seg[data-pref] button, button.switch[data-pref]");
-    if (!b) return;
-    if (b.classList.contains("switch")) {
-      const key = b.dataset.pref, on = b.getAttribute("aria-checked") !== "true";
-      if (key === "notify" && on && "Notification" in window && Notification.permission !== "granted") {
-        const p = await Notification.requestPermission();
-        if (p !== "granted") { toast("浏览器没有允许通知", "attn"); renderPrefs(); return; }
-      }
-      store.set(key, on);
-    } else {
-      const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
-      if (key === "mode2") setMode(v); else store.set(key, v);
-      if (key === "theme" || key === "text" || key === "sendKey") applyLook();
-    }
-    renderPrefs();
-  });
 
   // ───────────────────────────── devices
   let devTimer;
@@ -3283,7 +3625,8 @@
         await api("/api/super/settings", { body: { settings: { ...cur, paused: !cur.paused } } });
         toast(cur.paused ? "已恢复投递" : "已暂停投递");
       }
-      if (act === "auto") location.hash = "#/auto";
+      if (act === "trace") location.hash = "#/trace";
+      if (act === "settings") { settingsTab = "collie"; store.set("settingsTab", "collie"); location.hash = "#/settings"; if (view === "settings") openPanel("settings"); }
     } catch (err) { toast(err.message, "attn"); }
   });
 
@@ -3548,13 +3891,14 @@
         ico: osGlyph(m.os), title: `在 ${m.name} 上新建会话`, sub: `${m.os || "本地"} · ${tilde(m.home || "~")}`, meta: "电脑",
         run: () => openLauncher(m.id),
       })),
-      { ico: '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg>', title: "自动化 · 收件箱", sub: "查看触发器与事件队列", meta: "自动化", run: () => { autoTab = "inbox"; store.set("autoTab", "inbox"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
-      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.2 2"/></svg>', title: "自动化 · 定时任务", sub: "创建或管理周期提醒与巡检", meta: "自动化", run: () => { autoTab = "timers"; store.set("autoTab", "timers"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
-      { ico: '<svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>', title: "自动化 · 长期记忆", sub: "查看或编辑 Collie 的 instructions 与笔记", meta: "自动化", run: () => { autoTab = "memory"; store.set("autoTab", "memory"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
-      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>', title: "自动化 · 全局设置", sub: "切换 Collie 大脑、派活默认与飞书通知", meta: "自动化", run: () => { autoTab = "settings"; store.set("autoTab", "settings"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
-      { ico: OS_GLYPHS.relay, title: "设备与节点连接", sub: "管理接入电脑、配对二维码与版本升级", meta: "视图", run: () => { location.hash = "#/devices"; } },
-      { ico: THEME_ICONS[prefs.theme()] || THEME_ICONS.system, title: "切换外观主题（浅色 / 深色 / 跟随系统）", sub: `当前：${{ system: "跟随系统", light: "浅色", dark: "深色" }[prefs.theme()]}`, meta: "偏好", run: () => $("#theme-btn")?.click() },
-      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1"/></svg>', title: "浏览器偏好设置", sub: "字号、默认视图、发送快捷键与桌面通知", meta: "视图", run: () => { location.hash = "#/prefs"; } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>', title: "执行轨迹", sub: "查看每次派活从下发、跨机执行到汇报的完整任务流转链路", meta: "导航", run: () => { traceTab = "flow"; store.set("traceTab", "flow"); location.hash = "#/trace"; if (view === "trace") openPanel("trace"); } },
+      { ico: '<svg viewBox="0 0 24 24"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v18H7.5A2.5 2.5 0 0 0 5 22.5z"/><path d="M9 7h6M9 11h6"/></svg>', title: "长期记忆", sub: "按分栏查看或编辑 Collie 的长期指令、经验笔记与归档", meta: "导航", run: () => { location.hash = "#/memory"; } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4.2l2.8 1.8M9.5 2h5"/></svg>', title: "定时任务", sub: "创建或管理每日巡检与延后提醒", meta: "导航", run: () => { location.hash = "#/timers"; } },
+      { ico: '<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L10.7 5.2"/><path d="M14 11a5 5 0 0 0-7.07 0L4.8 13.1a5 5 0 0 0 7.07 7.07l1.41-1.41"/></svg>', title: "外部触发（Webhook 与过滤）", sub: "管理 GitHub / 飞书 Webhook 与免唤醒过滤规则", meta: "导航", run: () => { location.hash = "#/hooks"; } },
+      { ico: OS_GLYPHS.relay, title: "设备与节点连接", sub: "管理接入电脑、配对二维码与版本升级", meta: "导航", run: () => { location.hash = "#/devices"; } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1"/></svg>', title: "设置 · Collie 全局配置", sub: "切换 Collie 大脑、默认派活电脑与飞书通知", meta: "设置", run: () => { settingsTab = "collie"; store.set("settingsTab", "collie"); location.hash = "#/settings"; if (view === "settings") openPanel("settings"); } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1"/></svg>', title: "设置 · 本机界面与通知", sub: "主题外观、字号、默认视图、快捷键与浏览器通知", meta: "设置", run: () => { settingsTab = "local"; store.set("settingsTab", "local"); location.hash = "#/settings"; if (view === "settings") openPanel("settings"); } },
+      { ico: THEME_ICONS[prefs.theme()] || THEME_ICONS.system, title: "切换外观主题（浅色 / 深色 / 跟随系统）", sub: `当前：${{ system: "跟随系统", light: "浅色", dark: "深色" }[prefs.theme()]}`, meta: "快捷", run: () => $("#theme-btn")?.click() },
     ].filter((x) => match(x.title, x.sub, x.meta));
 
     const liveItems = [
