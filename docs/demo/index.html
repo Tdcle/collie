@@ -94,9 +94,14 @@
       <section class="group proj-group" id="project-group">
         <div class="group-head">
           <h2>项目 <span class="count" id="project-count"></span></h2>
-          <button type="button" class="group-add" data-open-launch="project" title="新建项目">
-            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          </button>
+          <div class="group-acts">
+            <button type="button" class="group-add" id="btn-sync-projects" title="从宿主机同步桌面端项目（Codex）">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"/><path d="M21 3v5h-5"/></svg>
+            </button>
+            <button type="button" class="group-add" data-open-launch="project" title="新建项目">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
         </div>
         <div class="proj-list" id="project-list"></div>
       </section>

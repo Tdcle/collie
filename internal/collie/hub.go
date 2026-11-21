@@ -408,6 +408,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("POST /api/sessions/project", s.assignSessionProject)
 	api("GET /api/projects", s.listProjects)
 	api("POST /api/projects", s.createProject)
+	api("POST /api/projects/sync", s.syncProjectsHandler)
 	api("POST /api/projects/{id}/update", s.updateProject)
 	api("POST /api/projects/{id}/delete", s.deleteProject)
 	api("POST /api/devices/{id}/rename", s.renameDevice)

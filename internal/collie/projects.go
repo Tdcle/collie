@@ -17,19 +17,22 @@ import (
 type Project struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
-	Machine   string    `json:"machine"`          // "" = Hub, or node device ID
-	Cwd       string    `json:"cwd"`              // e.g. "~/maso/collie" or "D:\\Paper"
-	Kind      string    `json:"kind"`             // default agent kind: claude | codex | agy | gemini
-	Model     string    `json:"model,omitempty"`  // optional default model
-	Effort    string    `json:"effort,omitempty"` // optional default effort
+	Machine   string    `json:"machine"`           // "" = Hub, or node device ID
+	Cwd       string    `json:"cwd"`               // e.g. "~/maso/collie" or "D:\\Paper"
+	Roots     []string  `json:"roots,omitempty"`   // optional multi-root paths imported from host app
+	Kind      string    `json:"kind"`              // default agent kind: claude | codex | agy | gemini
+	Model     string    `json:"model,omitempty"`   // optional default model
+	Effort    string    `json:"effort,omitempty"`  // optional default effort
+	HostApp   string    `json:"host_app,omitempty"` // e.g. "Codex 桌面版" when synced from host
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 var projectStore = struct {
 	sync.Mutex
-	list   []*Project
-	loaded bool
+	list      []*Project
+	dismissed map[string]bool
+	loaded    bool
 }{}
 
 func newProjectID() string {
@@ -69,6 +72,7 @@ func (s *Server) loadProjectsLocked() {
 	}
 	projectStore.loaded = true
 	projectStore.list = []*Project{}
+	projectStore.dismissed = map[string]bool{}
 	if s.sup == nil || s.sup.db == nil {
 		return
 	}
@@ -77,6 +81,13 @@ func (s *Server) loadProjectsLocked() {
 		_ = json.Unmarshal([]byte(raw), &projectStore.list)
 		if projectStore.list == nil {
 			projectStore.list = []*Project{}
+		}
+	}
+	var rawDis string
+	if s.sup.db.QueryRow(`SELECT v FROM kv WHERE k='projects_dismissed'`).Scan(&rawDis) == nil && rawDis != "" {
+		_ = json.Unmarshal([]byte(rawDis), &projectStore.dismissed)
+		if projectStore.dismissed == nil {
+			projectStore.dismissed = map[string]bool{}
 		}
 	}
 }
@@ -89,12 +100,34 @@ func (s *Server) saveProjectsLocked() {
 	if _, err := s.sup.db.Exec(`INSERT INTO kv(k,v) VALUES('projects',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b)); err != nil {
 		log.Printf("save projects: %v", err)
 	}
+	if projectStore.dismissed != nil {
+		db, _ := json.Marshal(projectStore.dismissed)
+		if _, err := s.sup.db.Exec(`INSERT INTO kv(k,v) VALUES('projects_dismissed',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(db)); err != nil {
+			log.Printf("save projects_dismissed: %v", err)
+		}
+	}
+}
+
+func (s *Server) machineHome(machine string) string {
+	if s.herdr == nil {
+		if machine == "" {
+			return s.home
+		}
+		return ""
+	}
+	for _, m := range s.herdr.Machines() {
+		if m.ID == machine {
+			return m.Home
+		}
+	}
+	return ""
 }
 
 func (s *Server) projectsSnapshot() []*Project {
 	if s.node {
 		return nil
 	}
+	s.triggerHostProjectSync()
 	projectStore.Lock()
 	defer projectStore.Unlock()
 	s.loadProjectsLocked()
@@ -107,6 +140,9 @@ func (s *Server) projectsSnapshot() []*Project {
 			continue
 		}
 		cp := *p
+		if len(p.Roots) > 0 {
+			cp.Roots = append([]string(nil), p.Roots...)
+		}
 		out = append(out, &cp)
 	}
 	return out
@@ -157,13 +193,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		machine = ""
 	}
 	now := time.Now()
-	cwdKey := normProjectCwdKey(cwd)
+	home := s.machineHome(machine)
+	cwdKey := expandProjectCwdKey(cwd, home)
 
 	projectStore.Lock()
 	s.loadProjectsLocked()
+	if projectStore.dismissed != nil && cwdKey != "" {
+		delete(projectStore.dismissed, machine+"|"+cwdKey)
+	}
 	var created *Project
 	for _, existing := range projectStore.list {
-		if existing != nil && existing.Machine == machine && normProjectCwdKey(existing.Cwd) == cwdKey {
+		if existing != nil && existing.Machine == machine && expandProjectCwdKey(existing.Cwd, home) == cwdKey {
 			existing.Name = name
 			existing.Cwd = cwd
 			existing.Kind = kind
@@ -286,6 +326,18 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	for _, p := range projectStore.list {
 		if p != nil && p.ID == id {
 			removed = true
+			home := s.machineHome(p.Machine)
+			if projectStore.dismissed == nil {
+				projectStore.dismissed = map[string]bool{}
+			}
+			if k := expandProjectCwdKey(p.Cwd, home); k != "" {
+				projectStore.dismissed[p.Machine+"|"+k] = true
+			}
+			for _, rt := range p.Roots {
+				if k := expandProjectCwdKey(rt, home); k != "" {
+					projectStore.dismissed[p.Machine+"|"+k] = true
+				}
+			}
 			continue
 		}
 		if p != nil {

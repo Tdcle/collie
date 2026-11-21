@@ -209,3 +209,80 @@ func TestProjectsLifecycleAndMakeDir(t *testing.T) {
 		t.Fatalf("deleting project must not delete sessions")
 	}
 }
+
+func TestHostCodexProjectSyncAndDismiss(t *testing.T) {
+	dir := t.TempDir()
+	codexDir := filepath.Join(dir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 1. Seed Codex state_5.sqlite + .codex-global-state.json
+	stateDBPath := filepath.Join(codexDir, "state_5.sqlite")
+	sdb, err := openDB(stateDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sdb.Exec(`
+		CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', position INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
+		CREATE TABLE project_roots (project_id TEXT NOT NULL, position INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY (project_id, position));
+		INSERT INTO projects VALUES ('p-sfd', 'SFD-Net', '{}', 0, 1795144334317, 1795144334342);
+		INSERT INTO project_roots VALUES ('p-sfd', 0, ?), ('p-sfd', 1, ?);
+	`, filepath.Join(dir, "Desktop", "SFD_Net"), filepath.Join(dir, "Desktop", "SFD_Net_2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.Close()
+
+	globalJSON := `{"project-order":["lp-win"],"local-projects":{"lp-win":{"id":"lp-win","name":"SFD-Win","rootPaths":["C:\\Users\\26422\\Documents\\ChatGPT\\SFD-Net 2"],"createdAt":1794292127806,"updatedAt":1794292127806}}}`
+	if err := os.WriteFile(filepath.Join(codexDir, ".codex-global-state.json"), []byte(globalJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := openDB(filepath.Join(dir, "collie.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	projectStore.Lock()
+	projectStore.loaded = false
+	projectStore.list = nil
+	projectStore.dismissed = nil
+	projectStore.Unlock()
+	hostProjectSync.Lock()
+	hostProjectSync.lastByMachine = map[string]time.Time{}
+	hostProjectSync.running = false
+	hostProjectSync.Unlock()
+
+	h := newHerdr("", "hub", dir)
+	h.local.Online = true
+	srv := &Server{
+		herdr: h,
+		token: "tok",
+		home:  dir,
+		sup:   &Super{db: db},
+		auths: newAuth(db, "tok"),
+	}
+
+	added, changed := srv.syncHostProjectsNow(t.Context())
+	if added != 2 || !changed {
+		t.Fatalf("expected 2 synced projects, got added=%d changed=%v", added, changed)
+	}
+	projs := srv.projectsSnapshot()
+	if len(projs) != 2 || projs[0].Name != "SFD-Net" || projs[0].Cwd != "~/Desktop/SFD_Net" || len(projs[0].Roots) != 2 {
+		t.Fatalf("unexpected synced projects: %+v", projs)
+	}
+
+	// Dismissing/deleting a synced project must prevent it from re-importing on subsequent syncs
+	rDel := httptest.NewRequest("POST", "/api/projects/"+projs[0].ID+"/delete", bytes.NewBufferString(`{}`))
+	rDel.SetPathValue("id", projs[0].ID)
+	wDel := httptest.NewRecorder()
+	srv.deleteProject(wDel, rDel)
+	if wDel.Code != 200 {
+		t.Fatalf("deleteProject failed: %d", wDel.Code)
+	}
+	added2, _ := srv.syncHostProjectsNow(t.Context())
+	if added2 != 0 || len(srv.projectsSnapshot()) != 1 {
+		t.Fatalf("dismissed project should not be re-imported: added2=%d len=%d", added2, len(srv.projectsSnapshot()))
+	}
+}

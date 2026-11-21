@@ -329,6 +329,7 @@ kbd {
   color: var(--fg-3); margin: 0; padding: 0 8px 6px; list-style: none;
 }
 .group-head h2 { padding: 0; }
+.group-acts { display: flex; align-items: center; gap: 2px; }
 .group-add {
   width: 22px; height: 22px; border-radius: 6px; border: 0; padding: 0;
   display: grid; place-items: center; background: transparent; color: var(--fg-3);
@@ -336,6 +337,7 @@ kbd {
 }
 .group-add svg { width: 13.5px; height: 13.5px; stroke-width: 2; }
 .group-add:hover { background: var(--bg-3); color: var(--fg); }
+.group-add.spinning svg { animation: spin .85s linear infinite; color: var(--signal); }
 
 /* Sidebar Pinned Projects Tree */
 .proj-list { display: grid; gap: 3px; }
@@ -465,9 +467,8 @@ kbd {
 .dot.waiting { box-sizing: border-box; border: 1.5px dashed var(--fg-3); animation: spin 6s linear infinite; }
 .dot.blocked { background: var(--attn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--attn) 24%, transparent); }
 @keyframes spin { to { transform: rotate(360deg); } }
-.dot.idle { background: var(--fg-3); animation: rest 3.2s ease-in-out infinite; }
-@keyframes rest { 0%, 100% { opacity: .35; } 50% { opacity: .9; } }
-@media (prefers-reduced-motion: reduce) { .dot.idle, .dot.working::after, .dot.starting::after { animation: none; opacity: .75; } }
+.dot.idle { background: var(--fg-3); opacity: .55; }
+@media (prefers-reduced-motion: reduce) { .dot.working::after, .dot.starting::after { animation: none; opacity: .75; } }
 .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); white-space: nowrap; flex: none; }
 .status.blocked { color: var(--attn); font-weight: 600; }
 .status.failed { color: var(--err); font-weight: 500; }

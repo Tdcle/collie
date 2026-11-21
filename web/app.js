@@ -502,13 +502,16 @@
     let best = null, bestLen = -1;
     for (const p of projs) {
       if ((p.machine || "") !== mId) continue;
-      const pp = canonMachinePath(p.cwd, mId);
-      if (!pp) continue;
-      const isRootLike = pp === "/" || pp === hp || /^[a-z]:\/?$/i.test(pp);
-      const matched = isRootLike ? sp === pp : (sp === pp || sp.startsWith(pp + "/"));
-      if (matched && pp.length > bestLen) {
-        best = p;
-        bestLen = pp.length;
+      const candidates = [p.cwd, ...(Array.isArray(p.roots) ? p.roots : [])].filter(Boolean);
+      for (const cand of candidates) {
+        const pp = canonMachinePath(cand, mId);
+        if (!pp) continue;
+        const isRootLike = pp === "/" || pp === hp || /^[a-z]:\/?$/i.test(pp);
+        const matched = isRootLike ? sp === pp : (sp === pp || sp.startsWith(pp + "/"));
+        if (matched && pp.length > bestLen) {
+          best = p;
+          bestLen = pp.length;
+        }
       }
     }
     return best;
@@ -527,16 +530,21 @@
   }
 
   // ───────────────────────────── sidebar
+  const SHOW_SIDE_DOT = new Set(["working", "starting", "waiting", "blocked", "failed"]);
+  function sideDotHTML(st, labelMap = STATUS_LABEL) {
+    return SHOW_SIDE_DOT.has(st) ? `<span class="dot ${esc(st)}" title="${esc(labelMap[st] || st)}"></span>` : "";
+  }
   function itemHTML(v) {
     const where = (state.machines || []).length > 1 ? machineName(v.machine) + " · " : "";
     const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
     const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
-    const more = v.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="p:${esc(v.pane_id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button>` : "";
-    return `<li class="s-li"><a class="item ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
+    const more = v.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="p:${esc(v.pane_id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button>` : "";
+    const quiet = !SHOW_SIDE_DOT.has(v.status);
+    return `<li class="s-li"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
       <span class="glyph">${glyph(v)}</span>
       <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>` : esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}</div><div class="sub">${esc(sub)}</div></span>
-      <span class="dot ${esc(v.status)}" title="${esc(STATUS_LABEL[v.status] || v.status)}"></span></a>${more}</li>`;
+      ${sideDotHTML(v.status)}</a>${more}</li>`;
   }
 
   const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
@@ -2208,9 +2216,10 @@
     const extRow = (e, inProj = false) => {
       const open = e.live && e.status === "idle";
       const where = [KIND_LABEL[e.kind] || e.kind, !inProj && many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
-      const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "运行中")}"></span>` : "";
+      const showDot = e.live && SHOW_SIDE_DOT.has(e.status);
+      const dot = showDot ? sideDotHTML(e.status, EXT_STATE) : "";
       const attnCls = e.live && e.status === "blocked" ? "attn-row" : "";
-      return `<li class="s-li ${attnCls}"><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
+      return `<li class="s-li ${attnCls}"><a class="item ${showDot ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
         <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
@@ -2231,10 +2240,11 @@
       const sub = a.is_agent ? `${named}${KIND_LABEL[a.kind] || a.kind}` : tilde(a.cwd);
       const more = a.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="p:${esc(a.pane_id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button>` : "";
       const attnCls = a.status === "blocked" ? "attn-row" : "";
-      return `<li class="s-li ${attnCls}"><a class="item ${view === "pane" && a.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(a.pane_id)}">
+      const quiet = !SHOW_SIDE_DOT.has(a.status);
+      return `<li class="s-li ${attnCls}"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && a.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(a.pane_id)}">
         <span class="glyph">${glyph(a)}</span>
         <span class="body"><div class="name">${isCollieOwned(a) && a.name !== ROUTER ? `<span class="nm">${esc(title(a))}</span><span class="by-collie">Collie 派出</span>` : esc(title(a))}</div><div class="sub">${esc(sub)}</div></span>
-        <span class="dot ${esc(a.status)}" title="${esc(STATUS_LABEL[a.status] || a.status)}"></span></a>${more}</li>`;
+        ${sideDotHTML(a.status)}</a>${more}</li>`;
     };
 
     const matchM = (m) => sideMachine === null || (m || "") === sideMachine;
@@ -2257,7 +2267,7 @@
       if (ck) seenKeys.add(ck);
       const isBlocked = a.status === "blocked";
       const isRunning = isActivelyRunning(a.status);
-      const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "done" ? 2 : 3;
+      const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "failed" ? 2 : 3;
       const t = (ck && extTimeMap.get(ck)) || +new Date(meta?.updated_at || 0) || 0;
       const proj = projectOfSession(a.kind, a.machine, a.session, a.cwd, "p:" + a.pane_id);
       pool.push({
@@ -3888,6 +3898,21 @@
     await refreshSessionMeta();
     toast("已移除项目");
   }
+
+  $("#btn-sync-projects")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    if (btn.classList.contains("spinning")) return;
+    btn.classList.add("spinning");
+    try {
+      const r = await api("/api/projects/sync", { method: "POST", body: {} });
+      await refreshSessionMeta();
+      toast(r.added > 0 ? `已从宿主机同步 ${r.added} 个新项目` : "宿主机项目已是最新");
+    } catch (err) {
+      toast(err.message, "attn");
+    } finally {
+      btn.classList.remove("spinning");
+    }
+  });
 
   // Floating sidebar session & project context menus
   const sessPopMenu = $("#sess-pop-menu"), projPopMenu = $("#proj-pop-menu");
