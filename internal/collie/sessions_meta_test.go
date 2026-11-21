@@ -133,3 +133,79 @@ func TestCodexSegmentedRolloutAndGeminiTranscript(t *testing.T) {
 		t.Fatalf("unexpected gemini messages: %+v", tr.msgs)
 	}
 }
+
+func TestProjectsLifecycleAndMakeDir(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "collie.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	projectStore.Lock()
+	projectStore.loaded = false
+	projectStore.list = nil
+	projectStore.Unlock()
+	sessionMetaStore.Lock()
+	sessionMetaStore.loaded = false
+	sessionMetaStore.byKey = nil
+	sessionMetaStore.Unlock()
+
+	srv := &Server{
+		herdr: newHerdr("", "hub", dir),
+		token: "tok",
+		home:  dir,
+		sup:   &Super{db: db},
+		auths: newAuth(db, "tok"),
+	}
+
+	// 1. makeDir creates folder cleanly
+	rMk := httptest.NewRequest("POST", "/api/dirs", bytes.NewBufferString(`{"parent":"~","name":"paper-rev"}`))
+	wMk := httptest.NewRecorder()
+	srv.makeDir(wMk, rMk)
+	if wMk.Code != 200 || !isDir(filepath.Join(dir, "paper-rev")) {
+		t.Fatalf("makeDir failed: code=%d body=%s", wMk.Code, wMk.Body.String())
+	}
+
+	// 2. Create project
+	rCr := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(`{"machine":"wlc","cwd":"~/paper-rev","kind":"codex"}`))
+	wCr := httptest.NewRecorder()
+	srv.createProject(wCr, rCr)
+	if wCr.Code != 200 {
+		t.Fatalf("createProject failed: code=%d body=%s", wCr.Code, wCr.Body.String())
+	}
+	projs := srv.projectsSnapshot()
+	if len(projs) != 1 || projs[0].Name != "paper-rev" || projs[0].Kind != "codex" || projs[0].Machine != "wlc" {
+		t.Fatalf("unexpected projects: %+v", projs)
+	}
+	pid := projs[0].ID
+
+	// 3. Bind pane project and promote to canonical session
+	srv.bindPaneProject("w9:p1@wlc", pid)
+	srv.promotePaneProjectToSession("w9:p1@wlc", "codex", "wlc", "sess-99")
+	ck := canonicalSessionKey("codex", "wlc", "sess-99")
+	if srv.sessionMetaSnapshot()[ck] == nil || srv.sessionMetaSnapshot()[ck].ProjectID != pid {
+		t.Fatalf("expected promoted session project binding, got %+v", srv.sessionMetaSnapshot()[ck])
+	}
+
+	// 4. Update project
+	rUp := httptest.NewRequest("POST", "/api/projects/"+pid+"/update", bytes.NewBufferString(`{"name":"IEEE 论文返修","kind":"claude"}`))
+	rUp.SetPathValue("id", pid)
+	wUp := httptest.NewRecorder()
+	srv.updateProject(wUp, rUp)
+	if wUp.Code != 200 || srv.projectsSnapshot()[0].Name != "IEEE 论文返修" || srv.projectsSnapshot()[0].Kind != "claude" {
+		t.Fatalf("updateProject failed: code=%d projs=%+v", wUp.Code, srv.projectsSnapshot())
+	}
+
+	// 5. Delete project clears explicit session project_id without marking session deleted
+	rDel := httptest.NewRequest("POST", "/api/projects/"+pid+"/delete", bytes.NewBufferString(`{}`))
+	rDel.SetPathValue("id", pid)
+	wDel := httptest.NewRecorder()
+	srv.deleteProject(wDel, rDel)
+	if wDel.Code != 200 || len(srv.projectsSnapshot()) != 0 {
+		t.Fatalf("deleteProject failed: code=%d", wDel.Code)
+	}
+	if srv.isSessionDeleted("codex", "wlc", "sess-99") {
+		t.Fatalf("deleting project must not delete sessions")
+	}
+}

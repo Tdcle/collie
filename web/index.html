@@ -49,15 +49,12 @@
         <img src="/icon.svg" alt="">
         <span class="brand-text">Collie</span>
       </a>
-      <button class="icon-btn new-session-btn" id="new-btn" title="新建 Agent 或终端">
-        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
     </header>
 
     <div class="side-search">
-      <button type="button" class="cmdk-btn" id="cmdk-btn" title="快速搜索会话、切换电脑或执行操作">
+      <button type="button" class="cmdk-btn" id="cmdk-btn" title="快速搜索项目、会话、切换电脑或执行操作">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M19.5 19.5l-3.6-3.6"/></svg>
-        <span>搜索会话或跳转…</span>
+        <span>搜索项目、会话或跳转…</span>
         <kbd id="cmdk-kbd">⌘K</kbd>
       </button>
     </div>
@@ -68,32 +65,22 @@
         <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
         <span class="dot" id="nav-collie-dot"></span>
       </a>
-      <div class="side-nav-grid">
-        <a class="nav-tile" id="nav-trace" href="#/trace" title="查看所有派发任务的流转阶段、耗时与汇报链路">
-          <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>
-          <span>执行轨迹</span>
-          <span class="count-pill" id="nav-queue" hidden></span>
-        </a>
-        <a class="nav-tile" id="nav-memory" href="#/memory" title="查看与编辑 Collie 的指令、任务记忆与笔记">
-          <svg viewBox="0 0 24 24"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v18H7.5A2.5 2.5 0 0 0 5 22.5z"/><path d="M5 19.5A2.5 2.5 0 0 1 7.5 17H19"/><path d="M9 7h6M9 11h6"/></svg>
-          <span>长期记忆</span>
-        </a>
-        <a class="nav-tile" id="nav-timers" href="#/timers" title="管理周期巡检与定时提醒">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4.2l2.8 1.8M9.5 2h5"/></svg>
-          <span>定时任务</span>
-          <span class="count-pill quiet" id="nav-timer-count" hidden></span>
-        </a>
-        <a class="nav-tile" id="nav-hooks" href="#/hooks" title="管理 GitHub / 飞书 Webhook 与事件过滤规则">
-          <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L10.7 5.2"/><path d="M14 11a5 5 0 0 0-7.07 0L4.8 13.1a5 5 0 0 0 7.07 7.07l1.41-1.41"/></svg>
-          <span>外部触发</span>
-        </a>
+      <div class="side-create">
+        <button type="button" class="create-btn" id="btn-new-project" title="绑定常用代码库目录，在左侧顶部固定为项目">
+          <svg viewBox="0 0 24 24"><path d="M3 6.5A2 2 0 0 1 5 4.5h4.2a2 2 0 0 1 1.56.75l1.18 1.5H19a2 2 0 0 1 2 2v3.25"/><path d="M3 9v8.5a2 2 0 0 0 2 2h7.5"/><path d="M18 14v6M15 17h6"/></svg>
+          <span>新建项目</span>
+        </button>
+        <button type="button" class="create-btn" id="btn-new-session" title="在指定电脑与目录新建独立对话会话">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span>新建会话</span>
+        </button>
       </div>
     </nav>
 
     <div class="side-scroll">
       <div class="s-filter" id="session-filter">
         <div class="sf-machine" id="sf-machine-wrap" hidden>
-          <select id="side-machine-sel" data-pick="side-m" data-title="按电脑筛选会话" title="按电脑筛选会话"></select>
+          <select id="side-machine-sel" data-pick="side-m" data-title="按电脑筛选项目与会话" title="按电脑筛选项目与会话"></select>
         </div>
         <div class="sf-toggles">
           <button type="button" class="sf-btn" data-sf="running">
@@ -104,9 +91,27 @@
           </button>
         </div>
       </div>
+
+      <section class="group proj-group" id="project-group">
+        <div class="group-head">
+          <h2>项目 <span class="count" id="project-count"></span></h2>
+          <button type="button" class="group-add" data-open-launch="project" title="新建项目">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+        <div class="proj-list" id="project-list"></div>
+      </section>
+
       <section class="group" id="session-group">
+        <div class="group-head">
+          <h2><span id="session-group-title">会话</span> <span class="count" id="session-count"></span></h2>
+          <button type="button" class="group-add" data-open-launch="session" title="新建独立会话">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
         <ul class="list" id="session-list"></ul>
       </section>
+
       <details class="group" id="archived-group" hidden>
         <summary><h2>已归档 <span class="count" id="archived-count"></span></h2></summary>
         <ul class="list" id="archived-list"></ul>
@@ -117,6 +122,27 @@
       <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie 应用中打开</span></a>
       <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
+
+    <nav class="side-dock" aria-label="系统面板">
+      <a class="dock-btn" id="nav-trace" href="#/trace" title="查看所有派发任务的流转阶段、耗时与汇报链路">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>
+        <span>执行轨迹</span>
+        <span class="count-pill" id="nav-queue" hidden></span>
+      </a>
+      <a class="dock-btn" id="nav-memory" href="#/memory" title="查看与编辑 Collie 的指令、任务记忆与笔记">
+        <svg viewBox="0 0 24 24"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v18H7.5A2.5 2.5 0 0 0 5 22.5z"/><path d="M5 19.5A2.5 2.5 0 0 1 7.5 17H19"/><path d="M9 7h6M9 11h6"/></svg>
+        <span>长期记忆</span>
+      </a>
+      <a class="dock-btn" id="nav-timers" href="#/timers" title="管理周期巡检与定时提醒">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4.2l2.8 1.8M9.5 2h5"/></svg>
+        <span>定时任务</span>
+        <span class="count-pill quiet" id="nav-timer-count" hidden></span>
+      </a>
+      <a class="dock-btn" id="nav-hooks" href="#/hooks" title="管理 GitHub / 飞书 Webhook 与事件过滤规则">
+        <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L10.7 5.2"/><path d="M14 11a5 5 0 0 0-7.07 0L4.8 13.1a5 5 0 0 0 7.07 7.07l1.41-1.41"/></svg>
+        <span>外部触发</span>
+      </a>
+    </nav>
   </aside>
 
   <main class="main">
@@ -249,6 +275,7 @@
           </button>
           <div class="menu" id="ext-menu" hidden>
             <button data-act="sess-rename">重命名会话</button>
+            <button data-act="sess-project">归属到项目…</button>
             <button data-act="sess-archive" id="ext-archive-btn">归档会话</button>
             <hr>
             <button data-act="sess-delete" class="danger">删除会话</button>
@@ -292,6 +319,7 @@
           </button>
           <div class="menu" id="more-menu" hidden>
             <button data-act="sess-rename">重命名会话</button>
+            <button data-act="sess-project">归属到项目…</button>
             <button data-act="sess-archive">归档会话</button>
             <button data-act="interrupt" id="menu-interrupt">中断当前执行</button>
             <hr>
@@ -340,59 +368,104 @@
   </aside>
 </div>
 
-<!-- ───────────── launcher ───────────── -->
-<dialog class="sheet" id="launch">
+<!-- ───────────── launcher (project / project-session / standalone session) ───────────── -->
+<dialog class="sheet launch-sheet" id="launch">
   <form method="dialog" id="launch-form">
     <header class="sheet-head">
       <h3 id="launch-title">新建独立会话</h3>
       <button class="icon-btn" value="cancel" formnovalidate title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
     <div class="sheet-body">
-      <p class="sheet-note muted" id="launch-note">想让 Collie 自动拆解并跨电脑派活？直接在「和 Collie 对话」里发话即可。这里是手动在指定电脑和目录新建一个独立对话会话。</p>
-      <div class="field">
-        <label>Agent</label>
-        <div class="kinds" id="kinds">
-          <label class="kind-card"><input type="radio" name="kind" value="claude" checked>
-            <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg><b>Claude</b><small>claude</small></label>
-          <label class="kind-card"><input type="radio" name="kind" value="codex">
-            <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg><b>Codex</b><small>codex</small></label>
-          <label class="kind-card"><input type="radio" name="kind" value="antigravity">
-            <svg viewBox="10 14 92 86" fill="currentColor" stroke="none"><path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"/></svg><b>Antigravity</b><small>agy</small></label>
-          <label class="kind-card"><input type="radio" name="kind" value="gemini">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M13.55 7.15A10.2 10.2 0 0 1 12 2.5 10.2 10.2 0 0 1 2.5 12a10.2 10.2 0 0 1 8.15 4.55"/><path d="M16.35 9.65A10.2 10.2 0 0 0 21.5 12 10.2 10.2 0 0 0 12 21.5"/></svg><b>Gemini</b><small>gemini</small></label>
+      <p class="sheet-note muted" id="launch-note"></p>
+
+      <div class="proj-bind-card" id="l-proj-banner" hidden>
+        <div class="pbc-ico"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2a2 2 0 0 1 1.55.74l1.2 1.51H19a2 2 0 0 1 2 2v1.25H6.6a2 2 0 0 0-1.92 1.45L3 18V7Z"/><path d="M4.68 12.95A2 2 0 0 1 6.6 11.5h13.75a1.3 1.3 0 0 1 1.25 1.66l-1.55 5.4A2 2 0 0 1 18.13 20H4.5a1.3 1.3 0 0 1-1.25-1.66Z"/></svg></div>
+        <div class="pbc-main">
+          <div class="pbc-title"><b id="l-proj-banner-name"></b><span class="tag" id="l-proj-banner-machine"></span></div>
+          <div class="pbc-path mono" id="l-proj-banner-cwd"></div>
         </div>
+        <button type="button" class="btn small ghost" id="l-proj-subdir-btn">选择子目录</button>
       </div>
+
       <div class="field" id="l-machine-field" hidden>
-        <label>目标电脑</label>
+        <label id="l-machine-label">目标电脑</label>
         <div class="machine-pick" id="l-machines"></div>
       </div>
-      <div class="field agent-only">
-        <label for="l-model">模型与思考强度 <span class="muted">可选</span></label>
+
+      <div class="field">
+        <label id="l-kind-label">Agent</label>
+        <div class="kinds" id="kinds">
+          <label class="kind-card"><input type="radio" name="kind" value="claude" checked>
+            <svg viewBox="0 0 24 24"><path d="M12 2.9v5.9M12 15.2v5.9M3.35 9.19l5.61 1.82M15.04 12.99l5.61 1.82M6.65 19.36l3.47-4.77M13.88 9.41l3.47-4.77M17.35 19.36l-3.47-4.77M10.12 9.41 6.65 4.64M3.35 14.81l5.61-1.82M15.04 11.01l5.61-1.82"/></svg><b>Claude</b><small>claude</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="codex">
+            <svg viewBox="0 0 24 24"><path d="M12 2.9 19.88 7.45v9.1L12 21.1 4.12 16.55v-9.1Z"/><path d="M12 8.2 15.29 10.1v3.8L12 15.8 8.71 13.9v-3.8Z"/><path d="M12 8.2 19.88 7.45M15.29 10.1 19.88 16.55M15.29 13.9 12 21.1M8.71 13.9 4.12 16.55M8.71 10.1 4.12 7.45M12 8.2V2.9"/></svg><b>Codex</b><small>codex</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="antigravity">
+            <svg viewBox="0 0 24 24"><path d="M12 3.4C15.1 3.4 17.1 12.8 19.9 17.9c.65 1.18-.58 2.25-1.72 1.48C15.7 17.7 14.3 13.9 12 13.9s-3.7 3.8-6.18 5.48c-1.14.77-2.37-.3-1.72-1.48C6.9 12.8 8.9 3.4 12 3.4Z"/></svg><b>Antigravity</b><small>agy</small></label>
+          <label class="kind-card"><input type="radio" name="kind" value="gemini">
+            <svg viewBox="0 0 24 24"><path d="M12 2.8C12.38 7.82 16.18 11.62 21.2 12 16.18 12.38 12.38 16.18 12 21.2 11.62 16.18 7.82 12.38 2.8 12 7.82 11.62 11.62 7.82 12 2.8Z"/></svg><b>Gemini</b><small>gemini</small></label>
+        </div>
+      </div>
+
+      <div class="field" id="l-model-field">
+        <label for="l-model" id="l-model-label">模型与思考强度 <span class="muted">可选</span></label>
         <div class="model-row"><select id="l-model"></select><select id="l-effort"></select></div>
       </div>
-      <div class="field agent-only">
-        <label for="l-name">固定代号 <span class="muted">可选</span></label>
-        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="留空则自动使用对话主题命名" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <small class="muted">需要在命令行或让 Collie 按名字寻址它时再填（小写字母开头，可含数字、- 和 _）</small>
-      </div>
-      <div class="field">
-        <label for="l-cwd">工作目录</label>
-        <div class="dir">
-          <input id="l-cwd" class="mono" value="~" autocomplete="off" autocapitalize="off" spellcheck="false">
-          <button type="button" class="icon-btn" id="dir-up" title="返回上一级目录"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+
+      <div class="field" id="l-dir-field">
+        <div class="dir-head-row">
+          <label for="l-cwd" id="l-dir-label">项目目录</label>
+          <div class="dir-roots" id="dir-roots"></div>
         </div>
-        <div class="recent" id="recent"></div>
-        <ul class="dirs" id="dirs"></ul>
+        <div class="dtree-box">
+          <div class="dtree-bar">
+            <button type="button" class="dtree-tool" id="dir-up" title="返回上一级目录">
+              <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><span>上一级</span>
+            </button>
+            <div class="dtree-crumbs" id="dir-crumbs"></div>
+            <button type="button" class="dtree-tool" id="dir-edit-btn" title="手动输入或粘贴路径">
+              <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            <button type="button" class="dtree-tool" id="dir-mkdir-btn" title="在当前选中目录下新建文件夹">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建文件夹</span>
+            </button>
+          </div>
+          <div class="dtree-path-row" id="dir-path-row" hidden>
+            <input id="l-cwd" class="mono" value="~" placeholder="输入或粘贴路径，例如 ~/code 或 D:\Projects" autocomplete="off" autocapitalize="off" spellcheck="false">
+            <button type="button" class="btn small" id="dir-go-btn">定位</button>
+          </div>
+          <div class="dtree-mkdir-row" id="dir-mkdir-row" hidden>
+            <input id="dir-mkdir-input" type="text" placeholder="新文件夹名称…" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn small primary" id="dir-mkdir-ok">创建</button>
+            <button type="button" class="btn small ghost" id="dir-mkdir-cancel">取消</button>
+          </div>
+          <div class="recent dtree-recent" id="recent" hidden></div>
+          <div class="dtree-scroll" id="dir-tree" role="tree" aria-label="目录树"></div>
+        </div>
       </div>
-      <div class="field agent-only">
+
+      <div class="field" id="l-proj-name-field" hidden>
+        <label for="l-proj-name">项目名称</label>
+        <input id="l-proj-name" maxlength="60" placeholder="自动使用目录名，也可自定义名称" autocomplete="off">
+      </div>
+
+      <div class="field" id="l-prompt-field">
         <label for="l-prompt">首条任务指令 <span class="muted">可选</span></label>
-        <textarea id="l-prompt" rows="3" placeholder="例如：跑一遍单元测试，定位并修复失败的用例"></textarea>
+        <textarea id="l-prompt" rows="2" placeholder="留空则直接进入对话界面；填写后启动即自动发送首条指令"></textarea>
       </div>
+
+      <details class="set-adv" id="l-adv-field">
+        <summary>高级选项（命令行固定代号）</summary>
+        <div class="field" style="margin-top:8px">
+          <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="留空自动命名（小写字母开头，可含数字、- 和 _）" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </div>
+      </details>
+
       <p class="form-error" id="launch-error"></p>
     </div>
     <footer class="sheet-foot">
       <button class="btn" value="cancel" formnovalidate>取消</button>
-      <button class="btn primary" id="launch-go" value="go">启动</button>
+      <button class="btn" id="launch-proj-start" value="proj-go" hidden>创建并开始对话</button>
+      <button class="btn primary" id="launch-go" value="go">启动会话</button>
     </footer>
   </form>
 </dialog>
@@ -435,13 +508,41 @@
   </form>
 </dialog>
 
-<!-- ───────────── floating sidebar session context menu ───────────── -->
+<!-- ───────────── floating sidebar context menus ───────────── -->
 <div class="menu sess-pop-menu" id="sess-pop-menu" hidden>
   <button type="button" data-sact="rename">重命名会话</button>
+  <button type="button" data-sact="project" id="spm-project">归属到项目…</button>
   <button type="button" data-sact="archive" id="spm-archive">归档会话</button>
   <hr>
   <button type="button" data-sact="delete" class="danger">删除会话</button>
 </div>
+
+<div class="menu sess-pop-menu" id="proj-pop-menu" hidden>
+  <button type="button" data-pact="new-sess">在此项目新建会话</button>
+  <button type="button" data-pact="edit">编辑项目设置</button>
+  <hr>
+  <button type="button" data-pact="delete" class="danger">移除项目</button>
+</div>
+
+<!-- ───────────── assign session to project dialog ───────────── -->
+<dialog class="sheet mini-sheet" id="sess-proj-dlg">
+  <form method="dialog" id="sess-proj-form">
+    <header class="sheet-head">
+      <h3>将会话归属到项目</h3>
+      <button class="icon-btn" value="cancel" formnovalidate title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="sheet-body">
+      <div class="field">
+        <label for="sess-proj-sel" id="sess-proj-label">选择项目</label>
+        <select id="sess-proj-sel" data-title="选择归属项目"></select>
+      </div>
+    </div>
+    <footer class="sheet-foot">
+      <button class="btn" value="cancel" formnovalidate>取消</button>
+      <button class="btn primary" value="ok">确定</button>
+    </footer>
+  </form>
+</dialog>
 
 <div class="toasts" id="toasts"></div>
 

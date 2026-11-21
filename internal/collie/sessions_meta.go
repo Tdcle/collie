@@ -15,6 +15,7 @@ import (
 // sessions, and ended history entries.
 type SessionMeta struct {
 	Title     string    `json:"title,omitempty"`
+	ProjectID string    `json:"project_id,omitempty"`
 	Archived  bool      `json:"archived,omitempty"`
 	Deleted   bool      `json:"deleted,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -82,7 +83,7 @@ func (s *Server) sessionMetaSnapshot() map[string]*SessionMeta {
 	}
 	out := make(map[string]*SessionMeta, len(sessionMetaStore.byKey))
 	for k, v := range sessionMetaStore.byKey {
-		if v == nil || (v.Title == "" && !v.Archived && !v.Deleted) {
+		if v == nil || (v.Title == "" && v.ProjectID == "" && !v.Archived && !v.Deleted) {
 			continue
 		}
 		cp := *v
@@ -139,7 +140,7 @@ func upsertMetaKey(key string, fn func(m *SessionMeta)) {
 	}
 	fn(m)
 	m.UpdatedAt = time.Now()
-	if m.Title == "" && !m.Archived && !m.Deleted {
+	if m.Title == "" && m.ProjectID == "" && !m.Archived && !m.Deleted {
 		delete(sessionMetaStore.byKey, key)
 	}
 }

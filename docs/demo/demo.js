@@ -10,21 +10,27 @@
   // ───────────────────────────── the scene
   const machines = [
     { id: "", name: "devbox", os: "linux/amd64", home: "/home/alex", local: true, online: true, agents: ["claude", "codex", "agy", "gemini"] },
-    { id: "macbook", name: "macbook", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.5", agents: ["claude", "codex", "gemini"] },
+    { id: "macbook", name: "Mac", os: "darwin/arm64", home: "/Users/alex", online: true, version: "v0.2.30", agents: ["claude", "codex", "gemini"] },
+    { id: "winbox", name: "Win", os: "windows/amd64", home: "C:\\Users\\alex", online: true, version: "v0.2.30", agents: ["claude", "codex"] },
   ];
+  const projects = [
+    { id: "prj_1", name: "shop-api", machine: "", cwd: "~/code/shop-api", kind: "codex" },
+    { id: "prj_2", name: "shop-web", machine: "macbook", cwd: "~/code/shop-web", kind: "claude" },
+  ];
+  const sessionMeta = {};
   const agent = (o) => ({ workspace_label: o.name, title: "", is_agent: true, machine: o.pane_id.includes("@") ? o.pane_id.split("@")[1] : "", ...o });
   const agents = [
     agent({ pane_id: "w1:p1", workspace_id: "w1", name: "collie", kind: "claude", status: "idle", cwd: "/home/alex/.collie/router" }),
     agent({ pane_id: "w2:p1@macbook", workspace_id: "w2@macbook", name: "claude-1", kind: "claude", status: "working", cwd: "/Users/alex/code/shop-web", topic: "首页加暗色模式", run: ["opus", "high"] }),
     agent({ pane_id: "w3:p1", workspace_id: "w3", name: "codex-1", kind: "codex", status: "blocked", cwd: "/home/alex/code/shop-api", topic: "修复 /orders 分页的边界问题", run: ["gpt-6.1-sol", "high"] }),
-    agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/shop-api", topic: "整理数据库迁移脚本", run: ["", ""] }),
+    agent({ pane_id: "w4:p1", workspace_id: "w4", name: "agy-1", kind: "agy", status: "waiting", cwd: "/home/alex/code/infra", topic: "整理数据库迁移脚本", run: ["", ""] }),
     agent({ pane_id: "w5:p1", workspace_id: "w5", name: "fix-flaky-test", kind: "codex", status: "working", cwd: "/home/alex/code/shop-api", run: ["gpt-6.1-sol", "medium"] }),
     agent({ pane_id: "w6:p1@macbook", workspace_id: "w6@macbook", name: "release-notes", kind: "claude", status: "done", cwd: "/Users/alex/code/shop-web", run: ["sonnet", "low"] }),
   ];
   const shells = [
     { pane_id: "w7:p1", workspace_id: "w7", workspace_label: "logs", name: "logs", kind: "", status: "shell", cwd: "/home/alex/code/shop-api", title: "", is_agent: false, machine: "" },
   ];
-  const state = () => ({ ok: true, agents, shells, machines });
+  const state = () => ({ ok: true, agents, shells, machines, projects, session_meta: sessionMeta });
 
   const workers = [
     { name: "fix-flaky-test", kind: "codex", cwd: "/home/alex/code/shop-api", task: "找出 TestOrdersPagination 偶发失败的原因并修好", thread: "chat:main", pane_id: "w5:p1", workspace_id: "w5", machine: "", created_by: "collie", created_at: ago(14), status: "working", run: ["gpt-6.1-sol", "medium"] },
@@ -122,13 +128,13 @@
     { id: "cd-2", kind: "claude", pid: 4310, cwd: "/Users/alex/code/shop-web", app: "Claude 桌面版", started: ago(240), session: "s2", title: "重构购物车状态管理", updated: ago(55), machine: "macbook", status: "idle", can_send: true, live: true },
   ];
   const history = [
-    { id: "h1", kind: "codex", cwd: "/home/alex/code/shop-api", name: "codex-3", session: "s3", ended: ago(60 * 20), title: "升级 Go 到 1.25" },
-    { id: "h2", kind: "claude", cwd: "/Users/alex/code/shop-web", name: "claude-4", session: "s4", ended: ago(60 * 30), title: "图片懒加载", machine: "macbook" },
+    { id: "h1", kind: "codex", cwd: "/home/alex/code/infra", name: "codex-3", session: "s3", ended: ago(60 * 20), title: "升级 Go 到 1.25" },
+    { id: "h2", kind: "claude", cwd: "/Users/alex/code/design", name: "claude-4", session: "s4", ended: ago(60 * 30), title: "图片懒加载方案评审", machine: "macbook" },
     { id: "h3", kind: "gemini", cwd: "/Users/alex/code/docs", name: "gemini-1", session: "s5", ended: ago(60 * 48), title: "整理多语种 API 文档", machine: "macbook" },
-    { id: "h4", kind: "codex", cwd: "/home/alex/code/shop-api", name: "codex-4", session: "s6", ended: ago(60 * 65), title: "修复订单导出 CSV 编码" },
-    { id: "h5", kind: "claude", cwd: "/Users/alex/code/shop-web", name: "claude-5", session: "s7", ended: ago(60 * 90), title: "优化移动端结账弹层", machine: "macbook" },
-    { id: "h6", kind: "agy", cwd: "/home/alex/code/shop-api", name: "agy-2", session: "s8", ended: ago(60 * 120), title: "压测库存扣减并发锁" },
-    { id: "h7", kind: "gemini", cwd: "/Users/alex/code/shop-web", name: "gemini-2", session: "s9", ended: ago(60 * 150), title: "提炼设计系统 Token", machine: "macbook" },
+    { id: "h4", kind: "codex", cwd: "D:\\Paper\\ieee-rev", name: "codex-4", session: "s6", ended: ago(60 * 65), title: "论文返修实验补充", machine: "winbox" },
+    { id: "h5", kind: "claude", cwd: "/Users/alex/code/mobile", name: "claude-5", session: "s7", ended: ago(60 * 90), title: "优化移动端结账弹层", machine: "macbook" },
+    { id: "h6", kind: "agy", cwd: "/home/alex/code/bench", name: "agy-2", session: "s8", ended: ago(60 * 120), title: "压测库存扣减并发锁" },
+    { id: "h7", kind: "gemini", cwd: "/Users/alex/code/tokens", name: "gemini-2", session: "s9", ended: ago(60 * 150), title: "提炼设计系统 Token", machine: "macbook" },
   ];
   const extChats = {
     x1: [{ kind: "user", text: "根据这周的 commit 帮我写周报，分成已完成、进行中、下周计划。" }, { kind: "assistant", text: "**已完成**\n- 订单列表分页修复\n- 迁移脚本整理（41 → 33）\n\n**进行中**\n- 首页暗色模式\n\n**下周计划**\n- v1.4 发布" }],
@@ -314,14 +320,51 @@
       if (q.get("machine") !== "macbook" || !/CHANGELOG\.md$/.test(q.get("path") || "")) return json({ error: "找不到这个文件" }, 404);
       return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
     }
-    if (p === "/api/dirs") return json({ dirs: ["~/code/shop-api", "~/code/shop-web", "~/code/notes"] });
+    if (p === "/api/dirs") {
+      const mId = q.get("machine") || "";
+      const isWin = mId === "winbox";
+      const home = isWin ? "C:\\Users\\alex" : mId === "macbook" ? "/Users/alex" : "/home/alex";
+      if (method === "POST") {
+        const par = (body.parent || "~").replace(/[\\/]+$/, "");
+        const disp = (par === "/" ? "" : par) + (isWin && !par.startsWith("~") ? "\\" : "/") + body.name;
+        return json({ ok: true, path: disp.replace(/^~/, home), display: disp, name: body.name });
+      }
+      const raw = (q.get("path") || "~").trim();
+      const tree = isWin
+        ? { "~": ["Desktop", "Documents", "Projects"], "C:\\": ["Users", "Program Files", "Work"], "D:\\": ["Paper", "Datasets"], "D:\\Paper": ["ieee-rev", "figures"] }
+        : { "~": ["code", "docs", "scripts"], "~/code": ["shop-api", "shop-web", "infra", "notes"], "~/code/shop-api": ["cmd", "internal", "migrations"], "~/code/shop-web": ["src", "public"], "/": ["home", "opt", "var"] };
+      const disp = raw.startsWith(home) ? "~" + raw.slice(home.length) : raw;
+      const dirs = tree[disp] || tree[raw] || [];
+      const parent = disp === "~" ? (isWin ? "C:\\Users" : mId === "macbook" ? "/Users" : "/home") : disp.includes("/") ? disp.slice(0, disp.lastIndexOf("/")) || "/" : "/";
+      return json({ path: disp.replace(/^~/, home), display: disp, parent, home, sep: isWin ? "\\" : "/", drives: isWin ? ["C:\\", "D:\\"] : [], dirs });
+    }
+    if (p === "/api/projects") {
+      if (method === "POST") {
+        const np = { id: "prj_" + (++seq), name: body.name || (body.cwd || "").split(/[\\/]/).pop() || "新项目", machine: body.machine || "", cwd: body.cwd || "~", kind: body.kind || "claude" };
+        projects.push(np);
+        pushAll();
+        return json({ ok: true, project: np });
+      }
+      return json({ projects });
+    }
+    if ((m = /^\/api\/projects\/([^/]+)\/update$/.exec(p))) {
+      const prj = projects.find((x) => x.id === decodeURIComponent(m[1]));
+      if (prj) Object.assign(prj, body);
+      pushAll();
+      return json({ ok: true, project: prj });
+    }
+    if ((m = /^\/api\/projects\/([^/]+)\/delete$/.exec(p))) {
+      const idx = projects.findIndex((x) => x.id === decodeURIComponent(m[1]));
+      if (idx >= 0) projects.splice(idx, 1);
+      pushAll();
+      return json({ ok: true });
+    }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "macbook", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.5", agents: ["claude", "codex"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
-        { id: "iphone", kind: "browser", name: "iPhone · Safari", current: false, created_at: ago(60 * 24 * 3), last_seen: ago(12) },
-        { id: "chrome", kind: "browser", name: "Mac · Chrome", current: true, created_at: ago(60 * 24 * 2), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.30", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.30", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", herdr: true, version: "v0.2.5", agents: ["claude", "codex", "agy"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.5",
+      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.30", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.30",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

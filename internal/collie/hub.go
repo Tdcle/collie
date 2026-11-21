@@ -45,16 +45,19 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		var body []byte
+		var agentProjectID string
 		switch {
 		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec":
 			machine = r.URL.Query().Get("machine")
 		case r.URL.Path == "/api/agents" && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 			var b struct {
-				Machine string `json:"machine"`
+				Machine   string `json:"machine"`
+				ProjectID string `json:"project_id"`
 			}
 			json.Unmarshal(body, &b)
 			machine = b.Machine
+			agentProjectID = b.ProjectID
 			r.Body = io.NopCloser(bytes.NewReader(body))
 		case r.URL.Path == "/api/state":
 			machine = ""
@@ -63,11 +66,15 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 			h(w, r)
 			return
 		}
-		s.forward(w, r, machine, path, body)
+		s.forwardWithProject(w, r, machine, path, body, agentProjectID)
 	}
 }
 
 func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path string, body []byte) {
+	s.forwardWithProject(w, r, machine, path, body, "")
+}
+
+func (s *Server) forwardWithProject(w http.ResponseWriter, r *http.Request, machine, path string, body []byte, agentProjectID string) {
 	client, err := s.herdr.Client(machine)
 	if err != nil {
 		writeJSON(w, 503, map[string]any{"error": "这台电脑现在不在线（" + machine + "）"})
@@ -99,6 +106,14 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, machine, path s
 				return err
 			}
 			b = suffixIDs(b, machine)
+			if agentProjectID != "" && (resp.StatusCode == 200 || resp.StatusCode == 202) {
+				var launched struct {
+					PaneID string `json:"pane_id"`
+				}
+				if json.Unmarshal(b, &launched) == nil && launched.PaneID != "" {
+					s.bindPaneProject(launched.PaneID, agentProjectID)
+				}
+			}
 			resp.Body = io.NopCloser(bytes.NewReader(b))
 			resp.ContentLength = int64(len(b))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
@@ -390,6 +405,11 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("POST /api/sessions/rename", s.renameSession)
 	api("POST /api/sessions/archive", s.archiveSession)
 	api("POST /api/sessions/delete", s.deleteSession)
+	api("POST /api/sessions/project", s.assignSessionProject)
+	api("GET /api/projects", s.listProjects)
+	api("POST /api/projects", s.createProject)
+	api("POST /api/projects/{id}/update", s.updateProject)
+	api("POST /api/projects/{id}/delete", s.deleteProject)
 	api("POST /api/devices/{id}/rename", s.renameDevice)
 	api("POST /api/devices/{id}/delete", s.deleteDevice)
 	api("GET /api/hubs", s.getHubs)

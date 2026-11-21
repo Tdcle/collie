@@ -36,21 +36,23 @@
     return today ? hhmm(t) : d.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + hhmm(t);
   };
 
-  // ───────────────────────────── icons & labels
+  // ───────────────────────────── icons & labels (unified 24x24 monochrome icon suite)
   const GLYPHS = {
-    claude: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg>',
-    codex: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>',
-    agy: '<svg viewBox="10 14 92 86" fill="currentColor" stroke="none"><path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"/></svg>',
-    antigravity: '<svg viewBox="10 14 92 86" fill="currentColor" stroke="none"><path d="M89.6992 93.695C94.3659 97.195 101.366 94.8617 94.9492 88.445C75.6992 69.7783 79.7825 18.445 55.8659 18.445C31.9492 18.445 36.0325 69.7783 16.7825 88.445C9.78251 95.445 17.3658 97.195 22.0325 93.695C40.1159 81.445 38.9492 59.8617 55.8659 59.8617C72.7825 59.8617 71.6159 81.445 89.6992 93.695Z"/></svg>',
-    gemini: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M13.55 7.15A10.2 10.2 0 0 1 12 2.5 10.2 10.2 0 0 1 2.5 12a10.2 10.2 0 0 1 8.15 4.55"/><path d="M16.35 9.65A10.2 10.2 0 0 0 21.5 12 10.2 10.2 0 0 0 12 21.5"/></svg>',
-    agent: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10"/><path d="M12 15h.01M20 15h.01M12 20c2.4 1.8 5.6 1.8 8 0"/></svg>',
-    shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
+    claude: '<svg viewBox="0 0 24 24"><path d="M12 2.9v5.9M12 15.2v5.9M3.35 9.19l5.61 1.82M15.04 12.99l5.61 1.82M6.65 19.36l3.47-4.77M13.88 9.41l3.47-4.77M17.35 19.36l-3.47-4.77M10.12 9.41 6.65 4.64M3.35 14.81l5.61-1.82M15.04 11.01l5.61-1.82"/></svg>',
+    codex: '<svg viewBox="0 0 24 24"><path d="M12 2.9 19.88 7.45v9.1L12 21.1 4.12 16.55v-9.1Z"/><path d="M12 8.2 15.29 10.1v3.8L12 15.8 8.71 13.9v-3.8Z"/><path d="M12 8.2 19.88 7.45M15.29 10.1 19.88 16.55M15.29 13.9 12 21.1M8.71 13.9 4.12 16.55M8.71 10.1 4.12 7.45M12 8.2V2.9"/></svg>',
+    agy: '<svg viewBox="0 0 24 24"><path d="M12 3.4C15.1 3.4 17.1 12.8 19.9 17.9c.65 1.18-.58 2.25-1.72 1.48C15.7 17.7 14.3 13.9 12 13.9s-3.7 3.8-6.18 5.48c-1.14.77-2.37-.3-1.72-1.48C6.9 12.8 8.9 3.4 12 3.4Z"/></svg>',
+    antigravity: '<svg viewBox="0 0 24 24"><path d="M12 3.4C15.1 3.4 17.1 12.8 19.9 17.9c.65 1.18-.58 2.25-1.72 1.48C15.7 17.7 14.3 13.9 12 13.9s-3.7 3.8-6.18 5.48c-1.14.77-2.37-.3-1.72-1.48C6.9 12.8 8.9 3.4 12 3.4Z"/></svg>',
+    gemini: '<svg viewBox="0 0 24 24"><path d="M12 2.8C12.38 7.82 16.18 11.62 21.2 12 16.18 12.38 12.38 16.18 12 21.2 11.62 16.18 7.82 12.38 2.8 12 7.82 11.62 11.62 7.82 12 2.8Z"/></svg>',
+    folder: '<svg viewBox="0 0 24 24"><path d="M3 6.5A2 2 0 0 1 5 4.5h4.2a2 2 0 0 1 1.56.75l1.18 1.5H19a2 2 0 0 1 2 2v8.75a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+    folderOpen: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2a2 2 0 0 1 1.55.74l1.2 1.51H19a2 2 0 0 1 2 2v1.25H6.6a2 2 0 0 0-1.92 1.45L3 18V7Z"/><path d="M4.68 12.95A2 2 0 0 1 6.6 11.5h13.75a1.3 1.3 0 0 1 1.25 1.66l-1.55 5.4A2 2 0 0 1 18.13 20H4.5a1.3 1.3 0 0 1-1.25-1.66Z"/></svg>',
+    agent: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9 11h.01M15 11h.01M9 15c1.8 1.3 4.2 1.3 6 0"/></svg>',
+    shell: '<svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M7 10l3 2.3L7 14.6M11.5 15h5"/></svg>',
     collie: '<img src="/icon.svg" alt="" style="width:20px;height:20px">',
   };
   const OS_GLYPHS = {
-    mac: '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M2 18.5h20"/></svg>',
-    win: '<svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="1"/><rect x="13.3" y="3.5" width="7.2" height="7.2" rx="1"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="1"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="1"/></svg>',
-    linux: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.8"/><rect x="3" y="13" width="18" height="7" rx="1.8"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/></svg>',
+    mac: '<svg class="svg-fill" viewBox="-1.8 -1.8 27.6 27.6"><path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z"/></svg>',
+    win: '<svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7.3" height="7.3" rx="1.2"/><rect x="13.2" y="3.5" width="7.3" height="7.3" rx="1.2"/><rect x="3.5" y="13.2" width="7.3" height="7.3" rx="1.2"/><rect x="13.2" y="13.2" width="7.3" height="7.3" rx="1.2"/></svg>',
+    linux: '<svg viewBox="0 0 24 24"><rect x="3.2" y="4.2" width="17.6" height="6.6" rx="1.8"/><rect x="3.2" y="13.2" width="17.6" height="6.6" rx="1.8"/><path d="M7.2 7.5h.01M7.2 16.5h.01M11.2 7.5h5.8M11.2 16.5h5.8"/></svg>',
     relay: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M6.7 7.3l3.1 2.7M17.3 7.3l-3.1 2.7M6.7 16.7l3.1-2.7M17.3 16.7l-3.1-2.7"/></svg>',
   };
   const osGlyph = (os, relay = false) => relay ? OS_GLYPHS.relay : /^darwin/i.test(os || "") ? OS_GLYPHS.mac : /^windows/i.test(os || "") ? OS_GLYPHS.win : OS_GLYPHS.linux;
@@ -310,8 +312,10 @@
       // Each hub has its own Collie; only this hub's is "Collie" here.
       ...(a.name === ROUTER ? { name: "Collie · " + h.name, topic: "Collie · " + h.name } : {}) });
     const ms = s.machines && s.machines.length ? s.machines : [{ id: "", name: h.name, local: true, online: s.ok !== false }];
+    const projs = (s.projects || []).map((p) => ({ ...p, id: tagged(p.id, k), machine: tagged(p.machine || "", k), hub: k }));
     return {
       agents: (s.agents || []).map(fix), shells: (s.shells || []).map(fix),
+      projects: projs,
       machines: ms.map((m) => ({ ...m, hub: k, id: tagged(m.id, k), local: false,
         name: m.local ? h.name : h.name + " · " + m.name,
         online: online && (m.local ? s.ok !== false : m.online) })),
@@ -324,6 +328,7 @@
     for (const p of parts) Object.assign(meta, p.session_meta || {});
     return { ...localState,
       session_meta: meta,
+      projects: [...(localState.projects || []), ...parts.flatMap((p) => p.projects || [])],
       agents: [...(localState.agents || []), ...parts.flatMap((p) => p.agents)],
       shells: [...(localState.shells || []), ...parts.flatMap((p) => p.shells)],
       machines: [...(localState.machines && localState.machines.length ? localState.machines : [{ id: "", name: "本机", local: true, online: localState.ok }]),
@@ -464,9 +469,53 @@
   function getSessMeta(kind, machine, session, fallbackKey) {
     const map = state.session_meta || {};
     const ck = canonSessKey(kind, machine, session);
-    return (ck && map[ck]) || (fallbackKey && map[fallbackKey]) || null;
+    const cm = ck && map[ck], fm = fallbackKey && map[fallbackKey];
+    if (cm && fm) return { ...fm, ...cm, project_id: cm.project_id || fm.project_id || "" };
+    return cm || fm || null;
+  }
+  function canonMachinePath(rawPath, machineId) {
+    let s = cleanPath(rawPath).trim();
+    if (!s) return "";
+    const m = (state.machines || []).find((x) => (x.id || "") === (machineId || ""));
+    const home = cleanPath(m?.home || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    s = s.replace(/\\/g, "/");
+    if (home && (s === "~" || s.startsWith("~/"))) {
+      s = home + s.slice(1);
+    }
+    if (s.length > 1 && !/^[A-Za-z]:\/$/.test(s)) s = s.replace(/\/+$/, "");
+    const isWin = /^windows/i.test(m?.os || "") || /^[A-Za-z]:/.test(s);
+    return isWin ? s.toLowerCase() : s;
+  }
+  function projectOfSession(kind, machine, session, cwd, fallbackKey) {
+    const projs = state.projects || [];
+    if (!projs.length) return null;
+    const meta = getSessMeta(kind, machine, session, fallbackKey);
+    if (meta?.project_id === "-") return null;
+    if (meta?.project_id) {
+      const explicit = projs.find((p) => p.id === meta.project_id);
+      if (explicit) return explicit;
+    }
+    const mId = machine || "";
+    const sp = canonMachinePath(cwd, mId);
+    if (!sp) return null;
+    const hp = canonMachinePath("~", mId);
+    let best = null, bestLen = -1;
+    for (const p of projs) {
+      if ((p.machine || "") !== mId) continue;
+      const pp = canonMachinePath(p.cwd, mId);
+      if (!pp) continue;
+      const isRootLike = pp === "/" || pp === hp || /^[a-z]:\/?$/i.test(pp);
+      const matched = isRootLike ? sp === pp : (sp === pp || sp.startsWith(pp + "/"));
+      if (matched && pp.length > bestLen) {
+        best = p;
+        bestLen = pp.length;
+      }
+    }
+    return best;
   }
   const MORE_ICO = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>';
+  const PLUS_ICO = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
+  const CHEV_RIGHT_ICO = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
 
   function title(v) {
     if (!v) return "";
@@ -602,9 +651,9 @@
   // Instant 0ms selection feedback on pointerdown before hashchange / async fetches run.
   $(".side")?.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = e.target.closest("a.nav-item, a.nav-tile, a.item");
+    const a = e.target.closest("a.nav-item, a.dock-btn, a.item");
     if (!a || !a.getAttribute("href")?.startsWith("#/")) return;
-    $$(".side .nav-item.active, .side .nav-tile.active, .side .item.active").forEach((el) => el.classList.remove("active"));
+    $$(".side .nav-item.active, .side .dock-btn.active, .side .item.active").forEach((el) => el.classList.remove("active"));
     a.classList.add("active");
     $("#nav-devices").classList.remove("active");
     $("#nav-settings")?.classList.remove("active");
@@ -974,7 +1023,7 @@
     mWrap.hidden = !showM;
     $(".rp-grid", f)?.classList.toggle("three", !showM);
     f.router_machine.innerHTML = `<option value="" data-sub="优先选装了对应 agent 的在线电脑" ${!(s.router_machine || "") ? "selected" : ""}>自动选择</option>` +
-      ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" data-sub="${esc(m.local ? "hub" : m.os || "")}" ${m.id === (s.router_machine || "") ? "selected" : ""}>${esc(m.name)}</option>`).join("");
+      ms.map((m) => `<option value="${esc(m.id)}" data-os="${osKey(m.os)}" data-sub="${esc(m.local ? "hub" : m.os || "")}" ${m.id === (s.router_machine || "") ? "selected" : ""}>${esc(m.name)}</option>`).join("");
     const fillQuickKinds = () => {
       const selM = f.router_machine.value;
       const have = selM ? ms.find((m) => m.id === selM)?.agents
@@ -1084,7 +1133,7 @@
     }
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
     const mSel = $("#t-machine"), kSel = $("#t-kind");
-    fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}"
+    fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-os="${osKey(m.os)}"
       data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
     fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["gemini", "Gemini"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
@@ -1840,7 +1889,7 @@
       <section class="card set-sec">
         <header><h4>Collie 自己</h4><p>负责和你对话、理解意图、拆解任务与回报结果。记忆保存在 <code>${esc(tilde(r.router_dir))}</code>（ROUTER.md 是操作手册，memory/ 是长期记忆，运行在其他电脑上时自动同步）。</p></header>
         <div class="set-grid ${showRM ? "" : "three"}">
-          ${showRM ? `<label>运行电脑<select name="router_machine" data-title="Collie 自己运行在哪台电脑"><option value="" data-sub="优先选装了对应 agent 的在线电脑" ${!(s.router_machine || "") ? "selected" : ""}>自动选择</option>${rMachines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.router_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
+          ${showRM ? `<label>运行电脑<select name="router_machine" data-title="Collie 自己运行在哪台电脑"><option value="" data-sub="优先选装了对应 agent 的在线电脑" ${!(s.router_machine || "") ? "selected" : ""}>自动选择</option>${rMachines.map((m) => `<option value="${esc(m.id)}" data-os="${osKey(m.os)}" ${m.id === (s.router_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
           <label>Agent<select name="router_kind" data-title="Collie 自己用的 agent">${kindOpts(s.router_kind)}</select></label>
           ${modelPick("router", s.router_model, s.router_effort)}
         </div>
@@ -1856,7 +1905,7 @@
           ${modelPick("worker", s.worker_model, s.worker_effort)}
         </div>
         <div class="set-grid three">
-          ${showWM ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${wMachines.map((m) => `<option value="${esc(m.id)}" data-dot="${m.local || m.online ? "online" : "offline"}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
+          ${showWM ? `<label>电脑<select name="worker_machine" data-title="派活默认在哪台电脑">${wMachines.map((m) => `<option value="${esc(m.id)}" data-os="${osKey(m.os)}" ${m.id === (s.worker_machine || "") ? "selected" : ""}>${esc(m.name)}${m.local ? "（hub）" : m.online ? "" : "（离线）"}</option>`).join("")}</select></label>` : ""}
           <label class="${showWM ? "span2" : "span3"}">目录<input name="worker_cwd" class="mono" value="${esc(tilde(s.worker_cwd))}"></label>
         </div>
       </section>
@@ -2147,28 +2196,45 @@
     extAll = !extAll; store.set("extAll", extAll);
     renderSessions();
   });
+  let projOpenMap = store.get("projOpen", {});
+  function isProjOpen(id) { return projOpenMap[id] !== false; }
+  function setProjOpen(id, open) {
+    projOpenMap[id] = !!open;
+    store.set("projOpen", projOpenMap);
+  }
+
   function renderSessions() {
     const many = (state.machines || []).length > 1;
-    const extRow = (e) => {
+    const extRow = (e, inProj = false) => {
       const open = e.live && e.status === "idle";
-      const where = [KIND_LABEL[e.kind] || e.kind, many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
+      const where = [KIND_LABEL[e.kind] || e.kind, !inProj && many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const dot = e.live ? `<span class="dot ${esc(e.status || "unknown")}" title="${esc(EXT_STATE[e.status] || "运行中")}"></span>` : "";
       const attnCls = e.live && e.status === "blocked" ? "attn-row" : "";
       return `<li class="s-li ${attnCls}"><a class="item ${e.live ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
-        <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button></li>`;
+        <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
-    const histRow = (h) => {
-      const sub = [KIND_LABEL[h.kind] || h.kind, many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
+    const histRow = (h, inProj = false) => {
+      const sub = [KIND_LABEL[h.kind] || h.kind, !inProj && many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
       return `<li class="s-li"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a>
-        <button type="button" class="item-more" data-smenu="h:${esc(h.id)}" title="重命名 / 归档 / 删除">${MORE_ICO}</button></li>`;
+        <button type="button" class="item-more" data-smenu="h:${esc(h.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
-    const paneRow = (a) => {
-      const html = itemHTML(a);
-      return a.status === "blocked" ? html.replace('<li class="s-li">', '<li class="s-li attn-row">') : html;
+    const paneRow = (a, inProj = false) => {
+      if (!inProj) {
+        const html = itemHTML(a);
+        return a.status === "blocked" ? html.replace('<li class="s-li">', '<li class="s-li attn-row">') : html;
+      }
+      const named = a.is_agent && a.name !== ROUTER && !isWorker(a.name) && a.name && !autoName(a.name) && a.topic && a.topic !== a.name ? a.name + " · " : "";
+      const sub = a.is_agent ? `${named}${KIND_LABEL[a.kind] || a.kind}` : tilde(a.cwd);
+      const more = a.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="p:${esc(a.pane_id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button>` : "";
+      const attnCls = a.status === "blocked" ? "attn-row" : "";
+      return `<li class="s-li ${attnCls}"><a class="item ${view === "pane" && a.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(a.pane_id)}">
+        <span class="glyph">${glyph(a)}</span>
+        <span class="body"><div class="name">${isCollieOwned(a) && a.name !== ROUTER ? `<span class="nm">${esc(title(a))}</span><span class="by-collie">Collie 派出</span>` : esc(title(a))}</div><div class="sub">${esc(sub)}</div></span>
+        <span class="dot ${esc(a.status)}" title="${esc(STATUS_LABEL[a.status] || a.status)}"></span></a>${more}</li>`;
     };
 
     const matchM = (m) => sideMachine === null || (m || "") === sideMachine;
@@ -2180,7 +2246,7 @@
     }
 
     const seenKeys = new Set();
-    const pool = []; // unified session entries for selected machine
+    const pool = [];
 
     for (const a of state.agents) {
       if (a.name === ROUTER && a.status !== "blocked") continue;
@@ -2193,12 +2259,14 @@
       const isRunning = isActivelyRunning(a.status);
       const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "done" ? 2 : 3;
       const t = (ck && extTimeMap.get(ck)) || +new Date(meta?.updated_at || 0) || 0;
+      const proj = projectOfSession(a.kind, a.machine, a.session, a.cwd, "p:" + a.pane_id);
       pool.push({
         key: "p:" + a.pane_id,
+        proj,
         archived: !!meta?.archived && !isBlocked && !isRunning,
         isRunning, isBlocked, groupRank, t,
         active: view === "pane" && current === a.pane_id,
-        html: paneRow(a),
+        html: paneRow(a, !!proj),
       });
     }
 
@@ -2212,13 +2280,15 @@
       const isBlocked = !!(e.live && e.status === "blocked");
       const isRunning = !!(e.live && isActivelyRunning(e.status));
       const groupRank = isBlocked ? 0 : isRunning ? 1 : 3;
+      const proj = projectOfSession(e.kind, e.machine, e.session, e.cwd, "x:" + e.id);
       pool.push({
         key: e.id,
+        proj,
         archived: !!meta?.archived && !isBlocked && !isRunning,
         isRunning, isBlocked, groupRank,
         t: +new Date(e.updated || e.started) || 0,
         active: view === "ext" && extCur === e.id,
-        html: extRow(e),
+        html: extRow(e, !!proj),
       });
     }
 
@@ -2229,13 +2299,15 @@
       const ck = canonSessKey(h.kind, h.machine, h.session);
       if (ck && seenKeys.has(ck)) continue;
       if (ck) seenKeys.add(ck);
+      const proj = projectOfSession(h.kind, h.machine, h.session, h.cwd, "h:" + h.id);
       pool.push({
         key: "h:" + h.id,
+        proj,
         archived: !!meta?.archived,
         isRunning: false, isBlocked: false, groupRank: 3,
         t: +new Date(h.ended) || 0,
         active: view === "ext" && extCur === "h:" + h.id,
-        html: histRow(h),
+        html: histRow(h, !!proj),
       });
     }
 
@@ -2254,25 +2326,82 @@
       b.setAttribute("aria-pressed", String(on));
     });
 
-    const filtered = sideStatus === "running" ? unarchived.filter((x) => x.isRunning)
-      : sideStatus === "blocked" ? unarchived.filter((x) => x.isBlocked)
-      : unarchived;
+    const matchStatus = (x) => sideStatus === "running" ? x.isRunning : sideStatus === "blocked" ? x.isBlocked : true;
 
-    let shown = extAll ? filtered : filtered.slice(0, RECENT_N);
-    const cur = !shown.some((x) => x.active) && filtered.find((x) => x.active);
+    // 1. Pinned Projects Section (Fixed at Top)
+    const allProjs = (state.projects || []).filter((p) => matchM(p.machine));
+    const projGrp = $("#project-group"), projListEl = $("#project-list"), projCntEl = $("#project-count");
+    if (projGrp && projListEl) {
+      const byProj = new Map(allProjs.map((p) => [p.id, []]));
+      for (const item of unarchived) {
+        if (item.proj && byProj.has(item.proj.id) && matchStatus(item)) {
+          byProj.get(item.proj.id).push(item);
+        }
+      }
+      const visibleProjs = sideStatus ? allProjs.filter((p) => (byProj.get(p.id) || []).length > 0) : allProjs;
+      projGrp.hidden = Boolean(sideStatus && !visibleProjs.length);
+      if (projCntEl) projCntEl.textContent = visibleProjs.length || "";
+
+      if (visibleProjs.length) {
+        projListEl.innerHTML = visibleProjs.map((p) => {
+          const items = byProj.get(p.id) || [];
+          const hasActive = items.some((x) => x.active);
+          const hasBlocked = items.some((x) => x.isBlocked);
+          const hasRunning = items.some((x) => x.isRunning);
+          const open = sideStatus ? true : (hasActive || isProjOpen(p.id));
+          const where = many && sideMachine === null ? machineName(p.machine) : "";
+          const badgeParts = [where, items.length ? String(items.length) : ""].filter(Boolean).join(" · ");
+          const collapsedDot = !open && (hasBlocked || hasRunning)
+            ? `<span class="dot ${hasBlocked ? "blocked" : "working"}"></span>` : "";
+          const childHTML = open
+            ? `<ul class="list proj-sessions">${items.length
+                ? items.map((x) => x.html).join("")
+                : `<li><button type="button" class="empty-proj-sess" data-proj-new="${esc(p.id)}">${PLUS_ICO}<span>在此项目新建会话</span></button></li>`
+              }</ul>`
+            : "";
+          return `<div class="proj-node ${open ? "open" : ""}" data-proj-id="${esc(p.id)}">
+            <div class="proj-row" data-proj-toggle="${esc(p.id)}" title="${esc(machineName(p.machine) + " · " + tilde(p.cwd))}">
+              <span class="proj-chev">${CHEV_RIGHT_ICO}</span>
+              <span class="proj-ico">${open ? GLYPHS.folderOpen : GLYPHS.folder}</span>
+              <span class="proj-main">
+                <span class="proj-name">${esc(p.name)}</span>
+                ${badgeParts ? `<span class="proj-sub">${esc(badgeParts)}</span>` : ""}
+              </span>
+              ${collapsedDot}
+              <span class="proj-acts">
+                <button type="button" class="proj-act" data-proj-new="${esc(p.id)}" title="在「${esc(p.name)}」下新建会话">${PLUS_ICO}</button>
+                <button type="button" class="proj-act" data-pmenu="${esc(p.id)}" title="项目管理">${MORE_ICO}</button>
+              </span>
+            </div>
+            ${childHTML}
+          </div>`;
+        }).join("");
+      } else {
+        projListEl.innerHTML = `<button type="button" class="proj-empty-cta" data-open-launch="project">${GLYPHS.folder}<span>点击绑定常用项目目录，会话自动按项目归组</span></button>`;
+      }
+    }
+
+    // 2. Standalone Sessions Section (Below Projects)
+    const loose = unarchived.filter((x) => !x.proj && matchStatus(x));
+    const sessTitleEl = $("#session-group-title"), sessCntEl = $("#session-count");
+    if (sessTitleEl) sessTitleEl.textContent = (state.projects || []).length ? "独立会话" : "会话";
+    if (sessCntEl) sessCntEl.textContent = loose.length || "";
+
+    let shown = extAll ? loose : loose.slice(0, RECENT_N);
+    const cur = !shown.some((x) => x.active) && loose.find((x) => x.active);
     if (cur) shown = [...shown, cur];
 
-    const moreBtn = filtered.length > RECENT_N
+    const moreBtn = loose.length > RECENT_N
       ? `<li><button type="button" class="more-row ${extAll ? "open" : ""}" data-act="ext-more">
           <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-          <span>${extAll ? "收起" : `展开其余 ${filtered.length - RECENT_N} 个`}</span>
+          <span>${extAll ? "收起" : `展开其余 ${loose.length - RECENT_N} 个`}</span>
         </button></li>`
       : "";
 
-    const emptyMsg = sideStatus === "running" ? "当前没有正在进行中的会话"
-      : sideStatus === "blocked" ? "当前没有待审核的会话"
-      : sideMachine !== null ? "这台电脑暂无会话"
-      : "暂无会话，点击右上角 + 新建或让 Collie 派活";
+    const emptyMsg = sideStatus === "running" ? "当前没有正在进行中的独立会话"
+      : sideStatus === "blocked" ? "当前没有待审核的独立会话"
+      : sideMachine !== null ? "这台电脑暂无独立会话"
+      : "暂无独立会话，可点击上方「新建会话」或「新建项目」";
 
     const listEl = $("#session-list");
     if (listEl) {
@@ -3712,19 +3841,124 @@
     toast("已删除会话");
   }
 
-  // Floating sidebar session context menu (`⋯` button on session rows)
-  const sessPopMenu = $("#sess-pop-menu");
+  // Session-to-project assignment dialog
+  const sessProjDlg = $("#sess-proj-dlg"), sessProjSel = $("#sess-proj-sel");
+  let sessProjTarget = null;
+  function openAssignSessionProject(target) {
+    if (!target || !sessProjDlg) return;
+    const mProjs = (state.projects || []).filter((p) => (p.machine || "") === (target.machine || ""));
+    if (!mProjs.length) {
+      toast(`${machineName(target.machine)} 还没有创建项目，可先点击左侧「新建项目」`);
+      return;
+    }
+    sessProjTarget = target;
+    $("#sess-proj-label").textContent = `将会话「${target.title}」归属到：`;
+    const meta = getSessMeta(target.kind, target.machine, target.session, target.token);
+    const curProj = projectOfSession(target.kind, target.machine, target.session, target.cwd, target.token);
+    const curVal = meta?.project_id || curProj?.id || "-";
+    sessProjSel.innerHTML = `<option value="-" data-sub="从项目分组中移出，显示在下方独立会话列表中" ${curVal === "-" ? "selected" : ""}>不归属项目（独立会话）</option>`
+      + `<option value="" data-sub="根据工作目录自动归入匹配的项目" ${curVal === "" ? "selected" : ""}>自动按目录匹配</option>`
+      + mProjs.map((p) => `<option value="${esc(p.id)}" data-sub="${esc(tilde(p.cwd))}" ${curVal === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+    enhance(sessProjSel);
+    syncPick(sessProjSel);
+    sessProjDlg.showModal();
+  }
+  $("#sess-proj-form")?.addEventListener("submit", async (e) => {
+    if (e.submitter?.value !== "ok" || !sessProjTarget) return;
+    e.preventDefault();
+    const target = sessProjTarget;
+    const pid = sessProjSel.value;
+    try {
+      await api("/api/sessions/project", { body: {
+        key: target.token || "",
+        pane_id: target.pane_id || "", ext_id: target.ext_id || "", hist_id: target.hist_id || "",
+        kind: target.kind || "", machine: target.machine || "", session: target.session || "",
+        project_id: pid,
+      } });
+      sessProjDlg.close();
+      await refreshSessionMeta();
+      toast(pid === "-" ? "已移出项目" : pid ? "已归属到项目" : "已恢复自动匹配");
+    } catch (err) { toast(err.message, "attn"); }
+  });
+
+  async function removeProject(proj) {
+    if (!proj) return;
+    if (!confirm(`移除项目「${proj.name}」？\n\n仅从侧栏顶部移除该项目分组，项目目录下的文件与已有对话记录都会保留。`)) return;
+    await api(`/api/projects/${encodeURIComponent(proj.id)}/delete`, { method: "POST", body: {} });
+    await refreshSessionMeta();
+    toast("已移除项目");
+  }
+
+  // Floating sidebar session & project context menus
+  const sessPopMenu = $("#sess-pop-menu"), projPopMenu = $("#proj-pop-menu");
   let sessPopToken = null, sessPopBtn = null;
+  let projPopId = null, projPopBtn = null;
   function closeSessPop() {
     if (sessPopMenu) sessPopMenu.hidden = true;
     sessPopBtn?.classList.remove("open");
     sessPopBtn = null; sessPopToken = null;
   }
+  function closeProjPop() {
+    if (projPopMenu) projPopMenu.hidden = true;
+    projPopBtn?.classList.remove("open");
+    projPopBtn = null; projPopId = null;
+  }
+  function closeSideMenus() { closeSessPop(); closeProjPop(); }
+
   document.addEventListener("click", (e) => {
+    const openLaunchBtn = e.target.closest("[data-open-launch]");
+    if (openLaunchBtn) {
+      e.preventDefault();
+      openLauncher({ mode: openLaunchBtn.dataset.openLaunch === "project" ? "project" : "session" });
+      return;
+    }
+    const projNewBtn = e.target.closest("[data-proj-new]");
+    if (projNewBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const proj = (state.projects || []).find((p) => p.id === projNewBtn.dataset.projNew);
+      if (proj) openLauncher({ mode: "project-session", project: proj });
+      return;
+    }
+    const pb = e.target.closest("[data-pmenu]");
+    if (pb) {
+      e.preventDefault(); e.stopPropagation();
+      $$(".menu").forEach((m) => { if (m !== projPopMenu) m.hidden = true; });
+      closeSessPop();
+      if (projPopBtn === pb && !projPopMenu.hidden) { closeProjPop(); return; }
+      closeProjPop();
+      projPopId = pb.dataset.pmenu;
+      projPopBtn = pb; pb.classList.add("open");
+      projPopMenu.hidden = false;
+      const r = pb.getBoundingClientRect();
+      projPopMenu.style.left = Math.min(innerWidth - 172, Math.max(8, r.right - 144)) + "px";
+      projPopMenu.style.top = (r.bottom + 130 > innerHeight ? Math.max(8, r.top - 120) : r.bottom + 4) + "px";
+      return;
+    }
+    const pact = e.target.closest("#proj-pop-menu [data-pact]")?.dataset.pact;
+    if (pact) {
+      const proj = (state.projects || []).find((p) => p.id === projPopId);
+      closeProjPop();
+      if (proj) {
+        if (pact === "new-sess") openLauncher({ mode: "project-session", project: proj });
+        if (pact === "edit") openLauncher({ mode: "project", editProject: proj });
+        if (pact === "delete") removeProject(proj).catch((err) => toast(err.message, "attn"));
+      }
+      return;
+    }
+    const projToggle = e.target.closest("[data-proj-toggle]");
+    if (projToggle && !e.target.closest("button")) {
+      const pid = projToggle.dataset.projToggle;
+      const node = projToggle.closest(".proj-node");
+      const nextOpen = !node?.classList.contains("open");
+      setProjOpen(pid, nextOpen);
+      renderSessions();
+      return;
+    }
     const mb = e.target.closest("[data-smenu]");
     if (mb) {
       e.preventDefault(); e.stopPropagation();
       $$(".menu").forEach((m) => { if (m !== sessPopMenu) m.hidden = true; });
+      closeProjPop();
       if (sessPopBtn === mb && !sessPopMenu.hidden) { closeSessPop(); return; }
       closeSessPop();
       const target = resolveSessionTarget(mb.dataset.smenu);
@@ -3732,10 +3966,15 @@
       sessPopToken = mb.dataset.smenu;
       sessPopBtn = mb; mb.classList.add("open");
       $("#spm-archive").textContent = target.archived ? "移出归档" : "归档会话";
+      const spmProj = $("#spm-project");
+      if (spmProj) {
+        const curP = projectOfSession(target.kind, target.machine, target.session, target.cwd, target.token);
+        spmProj.textContent = curP ? "更改 / 移出项目…" : "归属到项目…";
+      }
       sessPopMenu.hidden = false;
       const r = mb.getBoundingClientRect();
-      const left = Math.min(innerWidth - 172, Math.max(8, r.right - 140));
-      const top = r.bottom + 140 > innerHeight ? Math.max(8, r.top - 126) : r.bottom + 4;
+      const left = Math.min(innerWidth - 176, Math.max(8, r.right - 148));
+      const top = r.bottom + 165 > innerHeight ? Math.max(8, r.top - 152) : r.bottom + 4;
       sessPopMenu.style.left = left + "px";
       sessPopMenu.style.top = top + "px";
       return;
@@ -3745,16 +3984,17 @@
       const target = resolveSessionTarget(sessPopToken);
       closeSessPop();
       if (sact === "rename") promptRenameSession(target);
+      if (sact === "project") openAssignSessionProject(target);
       if (sact === "archive") toggleArchiveSession(target).catch((err) => toast(err.message, "attn"));
       if (sact === "delete") removeSession(target).catch((err) => toast(err.message, "attn"));
       return;
     }
-    if (!sessPopMenu?.hidden) closeSessPop();
+    closeSideMenus();
     const opener = e.target.closest("[data-menu]");
-    $$(".menu:not(#sess-pop-menu)").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
+    $$(".menu:not(#sess-pop-menu):not(#proj-pop-menu)").forEach((m) => { if (!opener || m.id !== opener.dataset.menu) m.hidden = true; });
     if (opener) { const m = $("#" + opener.dataset.menu); m.hidden = !m.hidden; }
   });
-  $(".side-scroll")?.addEventListener("scroll", closeSessPop, { passive: true });
+  $(".side-scroll")?.addEventListener("scroll", closeSideMenus, { passive: true });
 
   document.addEventListener("click", async (e) => {
     const act = e.target.closest("[data-act]")?.dataset.act;
@@ -3762,6 +4002,7 @@
     try {
       if (act === "interrupt") { sendKeys(["ctrl+c"]); toast("已发送中断信号"); }
       if (act === "sess-rename") promptRenameSession(resolveSessionTarget());
+      if (act === "sess-project") openAssignSessionProject(resolveSessionTarget());
       if (act === "sess-archive") await toggleArchiveSession(resolveSessionTarget());
       if (act === "sess-delete") await removeSession(resolveSessionTarget());
       if (act === "router-cfg") {
@@ -3783,31 +4024,42 @@
     } catch (err) { toast(err.message, "attn"); }
   });
 
-  // ───────────────────────────── launcher
+  // ───────────────────────────── launcher (Project / Project-Session / Standalone Session + File Tree)
   const sheet = $("#launch");
   const cwdInput = $("#l-cwd");
   const nameInput = $("#l-name");
-  let nameTouched = false;
+  const projNameInput = $("#l-proj-name");
+  let nameTouched = false, projNameTouched = false;
+  let launchMode = "session"; // "session" | "project" | "project-session"
+  let activeLaunchProj = null;
+  let editingProj = null;
+  let projSubdirOpen = false;
+
+  function suggestProjectNameFromCwd(p) {
+    if (projNameTouched && projNameInput.value.trim()) return;
+    const s = cleanPath(p || "").replace(/[\\/]+$/, "");
+    if (!s || s === "~" || s === "/") { projNameInput.value = "主目录"; return; }
+    if (/^[A-Za-z]:$/.test(s)) { projNameInput.value = s.toUpperCase(); return; }
+    projNameInput.value = s.split(/[\\/]/).pop() || s;
+  }
 
   function suggestName() {
     if (!nameTouched) nameInput.value = "";
     fillLaunchModels();
   }
-  // Model and effort for a new agent: "" leaves it to the agent's own settings
-  // on that computer (what it would run if started by hand).
   let launchSeq = 0;
-  async function fillLaunchModels() {
+  async function fillLaunchModels(presetModel, presetEffort) {
     const seq = ++launchSeq, kind = $("input[name=kind]:checked")?.value;
     const mSel = $("#l-model");
     const keep = { model: mSel.value, effort: $("#l-effort").value, key: mSel._key };
     const info = await modelsFor(kind, pickMachine);
     if (seq !== launchSeq) return;
-    const same = keep.key === kind + "@" + pickMachine;
+    const same = presetModel === undefined && keep.key === kind + "@" + pickMachine;
     const mem = getSavedModel(kind, pickMachine);
     mSel._key = kind + "@" + pickMachine;
     const list = [...(info.models || [])];
-    const wantModel = same ? keep.model : (mem?.model || "");
-    const wantEffort = same ? keep.effort : (mem?.effort || "");
+    const wantModel = presetModel !== undefined ? presetModel : same ? keep.model : (mem?.model || "");
+    const wantEffort = presetEffort !== undefined ? presetEffort : same ? keep.effort : (mem?.effort || "");
     if (wantModel && !list.some((m) => m.id === wantModel)) list.unshift({ id: wantModel });
     const def = info.default ? info.default.split("/").pop() : "";
     mSel.innerHTML = `<option value="" data-short="默认模型" data-sub="${esc(info.default ? "现在是 " + info.default : "agent 自己的设置")}">默认${def ? "（" + esc(def) + "）" : ""}</option>` +
@@ -3836,17 +4088,17 @@
     const kind = $("input[name=kind]:checked").value;
     saveLastModel(kind, pickMachine, $("#l-model").value, $("#l-effort").value);
   });
+
   let pickMachine = "";
   const recentKey = () => "recentDirs" + (pickMachine ? ":" + pickMachine : "");
   function renderMachinePick() {
-    const ms = runnableMachines();
-    $("#l-machine-field").hidden = ms.length < 2;
-    if (!ms.some((m) => m.id === pickMachine)) pickMachine = ms[0]?.id || "";
+    const ms = runnableMachines(pickMachine);
+    $("#l-machine-field").hidden = launchMode === "project-session" || ms.length < 2;
+    if (launchMode !== "project-session" && !ms.some((m) => m.id === pickMachine)) pickMachine = ms[0]?.id || "";
     $("#l-machines").innerHTML = ms.map((m) => `<button type="button" class="${m.id === pickMachine ? "on" : ""}" data-m="${esc(m.id)}">
       ${osGlyph(m.os)}${esc(m.name)}${m.local ? "<small>hub</small>" : ""}</button>`).join("");
     markKinds();
   }
-  // Agents the chosen computer doesn't have can't be picked.
   function markKinds() {
     const have = (state.machines || []).find((m) => m.id === pickMachine)?.agents;
     for (const r of $$("input[name=kind]")) {
@@ -3857,19 +4109,354 @@
       r.disabled = missing;
       card.classList.toggle("missing", missing);
       card.title = missing ? "这台电脑上没装 " + AGENT_LABEL[k] : "";
-      small.textContent = missing ? "没装" : small.dataset.cmd;
+      small.textContent = missing ? "未安装" : small.dataset.cmd;
     }
     if ($("input[name=kind]:checked")?.disabled) {
       const first = $$("input[name=kind]").find((r) => !r.disabled);
       if (first) { first.checked = true; first.dispatchEvent(new Event("change")); }
     }
   }
-  function resetDir() {
-    const recent = store.get(recentKey(), []);
-    cwdInput.value = recent[0] || "~";
-    $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
-    browse(cwdInput.value);
+
+  // ── Multi-level Expandable Directory Tree (DirTree) ──
+  const treeCache = new Map();     // "machine::normKey" -> { path, display, parent, home, sep, drives, dirs }
+  const treeExpanded = new Set();  // set of normKeys currently expanded
+  const treeLoading = new Set();
+  let treeMeta = { home: "", sep: "/", drives: [] };
+  let treeRoot = "~";              // active top root path ("~", "/", or "C:\\", "D:\\")
+  let treeReqSeq = 0;
+
+  function treeNormKey(p) {
+    let s = cleanPath(p || "").trim();
+    if (!s || s === "~") return "~";
+    const sep = treeMeta.sep || (s.includes("\\") || /^[A-Za-z]:/.test(s) ? "\\" : "/");
+    if (treeMeta.home) {
+      const hm = cleanPath(treeMeta.home).replace(/\\/g, "/").replace(/\/+$/, "");
+      const sn = s.replace(/\\/g, "/");
+      if (sn.toLowerCase() === hm.toLowerCase()) return "~";
+      if (sn.toLowerCase().startsWith(hm.toLowerCase() + "/")) {
+        s = "~/" + sn.slice(hm.length + 1);
+      }
+    }
+    s = s.replace(/\\/g, "/");
+    if (/^[A-Za-z]:$/.test(s)) s += "/";
+    if (s.length > 1 && !/^[A-Za-z]:\/$/.test(s)) s = s.replace(/\/+$/, "");
+    void sep;
+    return treeMeta.drives?.length || /^[A-Za-z]:/.test(s) ? s.toLowerCase() : s;
   }
+
+  function joinChildPath(parentPath, childName) {
+    if (/^[A-Za-z]:[\\/]?$/.test(childName)) {
+      return childName.replace(/\//g, "\\").replace(/\\?$/, "\\");
+    }
+    const isWin = Boolean(treeMeta.drives?.length) || parentPath.includes("\\") || /^[A-Za-z]:/.test(parentPath);
+    const sep = isWin && !parentPath.startsWith("~") ? "\\" : "/";
+    const baseP = parentPath.replace(/[\\/]+$/, "");
+    if (!baseP || baseP === "/") return "/" + childName;
+    if (/^[A-Za-z]:$/.test(baseP)) return baseP + "\\" + childName;
+    return baseP + sep + childName;
+  }
+
+  async function fetchDirNode(p, force = false) {
+    const raw = (p || "~").trim() || "~";
+    const prelimKey = pickMachine + "::" + treeNormKey(raw);
+    if (!force && treeCache.has(prelimKey)) return treeCache.get(prelimKey);
+    const r = await api("/api/dirs?path=" + encodeURIComponent(raw) + (pickMachine ? "&machine=" + encodeURIComponent(pickMachine) : ""));
+    if (r.home) treeMeta.home = r.home;
+    if (r.sep) treeMeta.sep = r.sep;
+    if (Array.isArray(r.drives)) treeMeta.drives = r.drives;
+    const canonical = r.display && r.display.startsWith("~") ? r.display.replace(/\\/g, "/") : r.path;
+    const nk = treeNormKey(canonical);
+    const entry = { ...r, canonical, nk };
+    treeCache.set(pickMachine + "::" + nk, entry);
+    treeCache.set(prelimKey, entry);
+    return entry;
+  }
+
+  function inferRootAndChain(targetPath) {
+    const s = cleanPath(targetPath || "~").trim() || "~";
+    const norm = s.replace(/\\/g, "/");
+    if (treeMeta.home) {
+      const hm = cleanPath(treeMeta.home).replace(/\\/g, "/").replace(/\/+$/, "");
+      if (norm === "~" || norm.startsWith("~/") || norm.toLowerCase() === hm.toLowerCase() || norm.toLowerCase().startsWith(hm.toLowerCase() + "/")) {
+        const rel = (norm === "~" || norm.toLowerCase() === hm.toLowerCase())
+          ? ""
+          : norm.startsWith("~/") ? norm.slice(2) : norm.slice(hm.length + 1);
+        const parts = rel.split("/").filter(Boolean);
+        const chain = ["~"];
+        let acc = "~";
+        for (const pt of parts) { acc += "/" + pt; chain.push(acc); }
+        return { root: "~", chain };
+      }
+    } else if (norm === "~" || norm.startsWith("~/")) {
+      const parts = norm.slice(2).split("/").filter(Boolean);
+      const chain = ["~"];
+      let acc = "~";
+      for (const pt of parts) { acc += "/" + pt; chain.push(acc); }
+      return { root: "~", chain };
+    }
+    if (/^[A-Za-z]:/.test(norm)) {
+      const drv = norm.slice(0, 2).toUpperCase() + "\\";
+      const rest = norm.slice(2).replace(/^\/+/, "");
+      const parts = rest ? rest.split("/").filter(Boolean) : [];
+      const chain = [drv];
+      let acc = drv.slice(0, 2);
+      for (const pt of parts) { acc += "\\" + pt; chain.push(acc); }
+      return { root: drv, chain };
+    }
+    const parts = norm.replace(/^\/+/, "").split("/").filter(Boolean);
+    const chain = ["/"];
+    let acc = "";
+    for (const pt of parts) { acc += "/" + pt; chain.push(acc); }
+    return { root: "/", chain };
+  }
+
+  function renderDirToolbar() {
+    const rootsEl = $("#dir-roots");
+    const crumbsEl = $("#dir-crumbs");
+    const curKey = treeNormKey(cwdInput.value);
+    const roots = [{ label: "主目录 ~", path: "~" }];
+    if (treeMeta.drives?.length) {
+      for (const d of treeMeta.drives) roots.push({ label: d.replace(/\\$/, ""), path: d });
+    } else {
+      roots.push({ label: "根目录 /", path: "/" });
+    }
+    if (rootsEl) {
+      rootsEl.innerHTML = roots.map((rt) => {
+        const on = treeNormKey(treeRoot) === treeNormKey(rt.path);
+        return `<button type="button" class="dir-root-btn ${on ? "on" : ""}" data-root="${esc(rt.path)}">${esc(rt.label)}</button>`;
+      }).join("");
+    }
+    const { chain } = inferRootAndChain(cwdInput.value);
+    if (crumbsEl) {
+      crumbsEl.innerHTML = chain.map((cp, idx) => {
+        const label = idx === 0 ? (cp === "~" ? "~" : cp.replace(/\\$/, "")) : cp.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+        const isCur = idx === chain.length - 1;
+        return `${idx ? '<span class="dt-sep">›</span>' : ""}<button type="button" class="dt-crumb ${isCur ? "cur" : ""}" data-crumb="${esc(cp)}">${esc(label)}</button>`;
+      }).join("");
+      crumbsEl.scrollLeft = crumbsEl.scrollWidth;
+    }
+    const upBtn = $("#dir-up");
+    if (upBtn) {
+      const atTop = curKey === "/" || (curKey === "~" && !treeMeta.home);
+      upBtn.disabled = atTop;
+    }
+  }
+
+  function renderDirTreeDOM() {
+    renderDirToolbar();
+    const box = $("#dir-tree");
+    if (!box) return;
+    const selKey = treeNormKey(cwdInput.value);
+
+    const renderBranch = (nodePath, label, isRoot = false, depth = 0) => {
+      if (depth > 18) return "";
+      const nk = treeNormKey(nodePath);
+      const cached = treeCache.get(pickMachine + "::" + nk);
+      const expanded = treeExpanded.has(nk);
+      const selected = nk === selKey;
+      const loading = treeLoading.has(nk);
+      const knownEmpty = Boolean(cached && Array.isArray(cached.dirs) && cached.dirs.length === 0);
+      const chevCls = knownEmpty && !isRoot ? "leaf" : expanded ? "open" : "";
+      let kidsHTML = "";
+      if (expanded) {
+        if (loading && !cached) {
+          kidsHTML = `<div class="dt-empty">加载中…</div>`;
+        } else if (cached) {
+          if (cached.dirs.length) {
+            kidsHTML = `<ul class="dt-ul nested">${cached.dirs.map((d) => renderBranch(joinChildPath(cached.canonical || nodePath, d), d, false, depth + 1)).join("")}</ul>`;
+          } else {
+            kidsHTML = `<div class="dt-empty">没有子文件夹</div>`;
+          }
+        }
+      }
+      return `<li class="dt-li">
+        <div class="dt-row ${selected ? "selected" : ""}" data-dt-path="${esc(cached?.canonical || nodePath)}">
+          <button type="button" class="dt-chev ${chevCls}" data-dt-toggle="${esc(cached?.canonical || nodePath)}" tabindex="-1" aria-label="展开或收起">${CHEV_RIGHT_ICO}</button>
+          <span class="dt-ico">${expanded || selected ? GLYPHS.folderOpen : GLYPHS.folder}</span>
+          <span class="dt-label">${esc(label)}</span>
+          ${selected ? '<span class="dt-badge">当前目录</span>' : ""}
+        </div>
+        ${kidsHTML}
+      </li>`;
+    };
+
+    const rootLabel = treeRoot === "~" ? `~ (${tilde(treeMeta.home || "~") === "~" && treeMeta.home ? cleanPath(treeMeta.home) : "主目录"})` : treeRoot;
+    box.innerHTML = `<ul class="dt-ul">${renderBranch(treeRoot, rootLabel, true, 0)}</ul>`;
+  }
+
+  async function navigateTreeTo(targetPath, { scrollIntoView = true } = {}) {
+    const seq = ++treeReqSeq;
+    const raw = (targetPath || "~").trim() || "~";
+    try {
+      await fetchDirNode("~");
+      if (seq !== treeReqSeq) return;
+      const node = await fetchDirNode(raw);
+      if (seq !== treeReqSeq) return;
+      const disp = node.display && node.display.startsWith("~") ? node.display : node.path;
+      cwdInput.value = disp;
+      if (launchMode === "project") suggestProjectNameFromCwd(disp);
+      const { root, chain } = inferRootAndChain(disp);
+      treeRoot = root;
+      for (const step of chain) {
+        const snk = treeNormKey(step);
+        treeExpanded.add(snk);
+        await fetchDirNode(step).catch(() => {});
+        if (seq !== treeReqSeq) return;
+      }
+      renderDirTreeDOM();
+      if (scrollIntoView) {
+        requestAnimationFrame(() => {
+          $("#dir-tree .dt-row.selected")?.scrollIntoView({ block: "nearest" });
+        });
+      }
+    } catch (err) {
+      if (seq !== treeReqSeq) return;
+      renderDirTreeDOM();
+      $("#launch-error").textContent = "读取目录失败：" + err.message;
+    }
+  }
+
+  function renderRecentDirs() {
+    const recent = store.get(recentKey(), []);
+    const mProjs = launchMode === "session" ? (state.projects || []).filter((p) => (p.machine || "") === (pickMachine || "")) : [];
+    const chips = [
+      ...mProjs.map((p) => ({ label: "📁 " + p.name, path: p.cwd })),
+      ...recent.filter((d) => !mProjs.some((p) => p.cwd === d)).slice(0, 5).map((d) => ({ label: d, path: d })),
+    ];
+    const recEl = $("#recent");
+    if (!recEl) return;
+    recEl.hidden = chips.length === 0;
+    recEl.innerHTML = chips.length
+      ? `<span class="dr-lab">常用：</span>` + chips.map((c) => `<button type="button" data-d="${esc(c.path)}">${esc(c.label)}</button>`).join("")
+      : "";
+  }
+
+  function resetDir(initialPath) {
+    treeMeta = { home: "", sep: "/", drives: [] };
+    treeExpanded.clear();
+    const recent = store.get(recentKey(), []);
+    const start = initialPath || recent[0] || "~";
+    cwdInput.value = start;
+    renderRecentDirs();
+    navigateTreeTo(start);
+  }
+
+  $("#dir-roots")?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-root]");
+    if (!b) return;
+    $("#launch-error").textContent = "";
+    treeRoot = b.dataset.root;
+    navigateTreeTo(b.dataset.root);
+  });
+  $("#dir-crumbs")?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-crumb]");
+    if (!b) return;
+    $("#launch-error").textContent = "";
+    navigateTreeTo(b.dataset.crumb);
+  });
+  $("#dir-tree")?.addEventListener("click", async (e) => {
+    const tog = e.target.closest("[data-dt-toggle]");
+    if (tog) {
+      e.stopPropagation();
+      const p = tog.dataset.dtToggle, nk = treeNormKey(p);
+      if (treeExpanded.has(nk)) {
+        treeExpanded.delete(nk);
+        renderDirTreeDOM();
+      } else {
+        treeExpanded.add(nk);
+        treeLoading.add(nk);
+        renderDirTreeDOM();
+        await fetchDirNode(p).catch(() => {});
+        treeLoading.delete(nk);
+        renderDirTreeDOM();
+      }
+      return;
+    }
+    const row = e.target.closest("[data-dt-path]");
+    if (!row) return;
+    $("#launch-error").textContent = "";
+    const p = row.dataset.dtPath, nk = treeNormKey(p);
+    cwdInput.value = p;
+    if (launchMode === "project") suggestProjectNameFromCwd(p);
+    if (!treeExpanded.has(nk)) {
+      treeExpanded.add(nk);
+      treeLoading.add(nk);
+      renderDirTreeDOM();
+      await fetchDirNode(p).catch(() => {});
+      treeLoading.delete(nk);
+    }
+    renderDirTreeDOM();
+  });
+
+  $("#dir-up")?.addEventListener("click", () => {
+    $("#launch-error").textContent = "";
+    const curNk = treeNormKey(cwdInput.value);
+    const cached = treeCache.get(pickMachine + "::" + curNk);
+    let up = cached?.parent || "";
+    if (!up || up === "/") {
+      const v = cwdInput.value.replace(/[\\/]+$/, "");
+      if (/^[A-Za-z]:$/.test(v)) {
+        if (treeMeta.drives?.length > 1) return;
+        up = v + "\\";
+      } else {
+        const i = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
+        up = i > 0 ? v.slice(0, i) : i === 0 ? "/" : "~";
+        if (/^[A-Za-z]:$/.test(up)) up += "\\";
+      }
+    }
+    navigateTreeTo(up);
+  });
+
+  $("#dir-edit-btn")?.addEventListener("click", () => {
+    const row = $("#dir-path-row");
+    row.hidden = !row.hidden;
+    if (!row.hidden) { cwdInput.focus(); cwdInput.select(); }
+  });
+  $("#dir-go-btn")?.addEventListener("click", () => {
+    $("#launch-error").textContent = "";
+    navigateTreeTo(cwdInput.value);
+  });
+  cwdInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      $("#launch-error").textContent = "";
+      navigateTreeTo(cwdInput.value);
+    }
+  });
+
+  $("#dir-mkdir-btn")?.addEventListener("click", () => {
+    const row = $("#dir-mkdir-row"), inp = $("#dir-mkdir-input");
+    row.hidden = !row.hidden;
+    if (!row.hidden) { inp.value = ""; inp.focus(); }
+  });
+  $("#dir-mkdir-cancel")?.addEventListener("click", () => { $("#dir-mkdir-row").hidden = true; });
+  async function submitMkdir() {
+    const inp = $("#dir-mkdir-input"), name = inp.value.trim();
+    if (!name) return;
+    $("#launch-error").textContent = "";
+    const parent = cwdInput.value.trim() || "~";
+    try {
+      const r = await api("/api/dirs" + (pickMachine ? "?machine=" + encodeURIComponent(pickMachine) : ""), { body: { parent, name } });
+      $("#dir-mkdir-row").hidden = true;
+      inp.value = "";
+      await fetchDirNode(parent, true);
+      const nextP = r.display && r.display.startsWith("~") ? r.display : r.path;
+      await navigateTreeTo(nextP);
+      toast(`已创建文件夹「${name}」`);
+    } catch (err) { $("#launch-error").textContent = err.message; }
+  }
+  $("#dir-mkdir-ok")?.addEventListener("click", submitMkdir);
+  $("#dir-mkdir-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitMkdir(); }
+  });
+
+  $("#l-proj-subdir-btn")?.addEventListener("click", () => {
+    projSubdirOpen = !projSubdirOpen;
+    $("#l-dir-field").hidden = !projSubdirOpen;
+    $("#l-proj-subdir-btn").textContent = projSubdirOpen ? "收起目录树" : "选择子目录";
+    if (projSubdirOpen) resetDir(cwdInput.value);
+  });
+
   $("#l-machines").addEventListener("click", (e) => {
     const b = e.target.closest("[data-m]");
     if (!b) return;
@@ -3879,82 +4466,165 @@
     resetDir();
     suggestName();
   });
-  function openLauncher(presetMachine) {
+
+  function syncLaunchModeUI() {
+    const isProj = launchMode === "project";
+    const isProjSess = launchMode === "project-session";
+    $("#launch-title").textContent = isProj ? (editingProj ? "编辑项目设置" : "新建项目")
+      : isProjSess ? `在「${activeLaunchProj?.name || "项目"}」下新建会话` : "新建独立会话";
+    $("#launch-note").textContent = isProj
+      ? "先选择电脑与默认 Agent，再在目录树中选中代码库文件夹。项目会固定在左侧顶部，后续一键开启绑定目录的新对话。"
+      : isProjSess
+      ? "已自动绑定该项目的电脑与工作目录，选择本次要用的 Agent 即可开始对话。"
+      : "先选择目标电脑与 Agent，再在目录树中选择工作目录启动一个独立对话会话。";
+    $("#l-kind-label").textContent = isProj ? "默认 Agent" : "Agent";
+    $("#l-model-label").innerHTML = (isProj ? "默认模型与思考强度" : "模型与思考强度") + ' <span class="muted">可选</span>';
+    $("#l-dir-label").textContent = isProj ? "选择项目目录（点击展开子目录）" : "工作目录（点击展开子目录）";
+
+    $("#l-proj-banner").hidden = !isProjSess;
+    if (isProjSess && activeLaunchProj) {
+      $("#l-proj-banner-name").textContent = activeLaunchProj.name;
+      $("#l-proj-banner-machine").textContent = machineName(activeLaunchProj.machine);
+      $("#l-proj-banner-cwd").textContent = tilde(activeLaunchProj.cwd);
+      $("#l-proj-subdir-btn").textContent = projSubdirOpen ? "收起目录树" : "选择子目录";
+    }
+    $("#l-dir-field").hidden = isProjSess && !projSubdirOpen;
+    $("#l-proj-name-field").hidden = !isProj;
+    $("#l-prompt-field").hidden = isProj;
+    $("#l-adv-field").hidden = isProj;
+    $("#dir-path-row").hidden = true;
+    $("#dir-mkdir-row").hidden = true;
+
+    const projStartBtn = $("#launch-proj-start"), goBtn = $("#launch-go");
+    projStartBtn.hidden = !(isProj && !editingProj);
+    goBtn.textContent = isProj ? (editingProj ? "保存修改" : "创建项目") : "启动会话";
+  }
+
+  function openLauncher(opts = {}) {
+    if (typeof opts === "string") opts = { mode: "session", machine: opts };
+    launchMode = opts.mode || "session";
+    activeLaunchProj = opts.project || null;
+    editingProj = opts.editProject || null;
+    projSubdirOpen = false;
     nameTouched = false;
+    projNameTouched = Boolean(editingProj);
     $("#launch-error").textContent = "";
     $("#l-prompt").value = "";
-    pickMachine = typeof presetMachine === "string" ? presetMachine : store.get("machine", "");
+    nameInput.value = "";
+
+    const defaultM = sideMachine !== null ? sideMachine : store.get("machine", "");
+    pickMachine = editingProj ? (editingProj.machine || "")
+      : activeLaunchProj ? (activeLaunchProj.machine || "")
+      : typeof opts.machine === "string" ? opts.machine : defaultM;
+
+    syncLaunchModeUI();
     renderMachinePick();
-    const recent = store.get(recentKey(), []);
-    cwdInput.value = recent[0] || "~";
-    $("#recent").innerHTML = recent.slice(0, 6).map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join("");
-    const radio = $(`input[name=kind][value="${store.get("kind", "claude")}"]`);
+
+    const wantKind = editingProj?.kind || activeLaunchProj?.kind || store.get("kind", "claude");
+    const kindVal = wantKind === "agy" ? "antigravity" : wantKind;
+    const radio = $(`input[name=kind][value="${kindVal}"]`);
     if (radio && !radio.disabled) radio.checked = true;
     markKinds();
-    suggestName();
-    browse(cwdInput.value);
+
+    const presetModel = editingProj ? (editingProj.model || "") : activeLaunchProj?.model ? activeLaunchProj.model : undefined;
+    const presetEffort = editingProj ? (editingProj.effort || "") : activeLaunchProj?.effort ? activeLaunchProj.effort : undefined;
+    fillLaunchModels(presetModel, presetEffort);
+
+    if (editingProj) {
+      projNameInput.value = editingProj.name || "";
+      resetDir(editingProj.cwd || "~");
+    } else if (activeLaunchProj) {
+      cwdInput.value = activeLaunchProj.cwd || "~";
+    } else {
+      projNameInput.value = "";
+      resetDir(opts.cwd || "");
+    }
     sheet.showModal();
   }
-  $("#new-btn").addEventListener("click", () => openLauncher());
-  $$("input[name=kind]").forEach((r) => r.addEventListener("change", suggestName));
-  nameInput.addEventListener("input", () => { nameTouched = true; });
-  $("#recent").addEventListener("click", (e) => { const d = e.target.closest("button")?.dataset.d; if (d) { cwdInput.value = d; browse(d); } });
 
-  let browseTimer, dirParent = "";
-  async function browse(p) {
-    try {
-      const r = await api("/api/dirs?path=" + encodeURIComponent(p) + (pickMachine ? "&machine=" + encodeURIComponent(pickMachine) : ""));
-      dirParent = r.parent || "";
-      $("#dirs").innerHTML = r.dirs.map((d) => `<li data-d="${esc(d)}">${esc(d)}</li>`).join("");
-    } catch { dirParent = ""; $("#dirs").innerHTML = ""; }
-  }
-  cwdInput.addEventListener("input", () => { clearTimeout(browseTimer); browseTimer = setTimeout(() => browse(cwdInput.value), 250); });
-  $("#dirs").addEventListener("click", (e) => {
-    const d = e.target.closest("li")?.dataset.d;
-    if (!d) return;
-    if (/^[A-Za-z]:[\\/]?$/.test(d)) {
-      cwdInput.value = d;
-    } else {
-      const cur = cwdInput.value.replace(/[\\/]+$/, "") || "~";
-      const sep = cur.includes("\\") || /^[A-Za-z]:/.test(cur) ? "\\" : "/";
-      cwdInput.value = (cur === "/" ? "" : cur) + sep + d;
-    }
-    browse(cwdInput.value);
+  $("#btn-new-project")?.addEventListener("click", () => openLauncher({ mode: "project" }));
+  $("#btn-new-session")?.addEventListener("click", () => openLauncher({ mode: "session" }));
+  $$("input[name=kind]").forEach((r) => r.addEventListener("change", () => suggestName()));
+  nameInput.addEventListener("input", () => { nameTouched = true; });
+  projNameInput?.addEventListener("input", () => { projNameTouched = true; });
+  $("#recent").addEventListener("click", (e) => {
+    const d = e.target.closest("button")?.dataset.d;
+    if (d) { $("#launch-error").textContent = ""; navigateTreeTo(d); }
   });
-  $("#dir-up").addEventListener("click", () => {
-    let up = dirParent;
-    if (!up) {
-      const v = cwdInput.value.replace(/[\\/]+$/, "");
-      if (/^[A-Za-z]:$/.test(v)) up = "/";
-      else {
-        const i = Math.max(v.lastIndexOf("/"), v.lastIndexOf("\\"));
-        up = i > 0 ? v.slice(0, i) : i === 0 ? "/" : "~";
-        if (/^[A-Za-z]:$/.test(up)) up += "\\";
-      }
-    }
-    cwdInput.value = up;
-    browse(up);
-  });
+
   $("#launch-form").addEventListener("submit", async (e) => {
-    if (e.submitter?.value !== "go") return;
+    const action = e.submitter?.value;
+    if (action !== "go" && action !== "proj-go") return;
     e.preventDefault();
-    const kind = $("input[name=kind]:checked").value;
-    const body = { kind, name: nameInput.value.trim(), cwd: cwdInput.value.trim(), prompt: $("#l-prompt").value, machine: pickMachine,
-      model: $("#l-model").value, effort: $("#l-effort").value };
-    const go = $("#launch-go");
-    go.disabled = true; go.textContent = "启动中…";
+    const rawKind = $("input[name=kind]:checked").value;
+    const kind = rawKind === "antigravity" ? "agy" : rawKind;
+    const cwd = cwdInput.value.trim() || "~";
+    const model = $("#l-model").value;
+    const effort = $("#l-effort").value;
+    const go = $("#launch-go"), projGo = $("#launch-proj-start");
+    go.disabled = true; projGo.disabled = true;
+    const prevText = go.textContent;
+    go.textContent = launchMode === "project" && action === "go" ? "保存中…" : "启动中…";
     $("#launch-error").textContent = "";
     try {
+      if (launchMode === "project") {
+        const projBody = {
+          name: projNameInput.value.trim(),
+          machine: pickMachine,
+          cwd,
+          kind,
+          model,
+          effort,
+        };
+        let savedProj;
+        if (editingProj) {
+          savedProj = (await api(`/api/projects/${encodeURIComponent(editingProj.id)}/update`, { body: projBody })).project;
+          toast("已更新项目设置");
+        } else {
+          savedProj = (await api("/api/projects", { body: projBody })).project;
+          if (savedProj) setProjOpen(savedProj.id, true);
+        }
+        store.set("kind", rawKind);
+        store.set("machine", pickMachine);
+        saveLastModel(rawKind, pickMachine, model, effort);
+        store.set(recentKey(), [cwd, ...store.get(recentKey(), []).filter((d) => d !== cwd)].slice(0, 8));
+        await refreshSessionMeta();
+        if (action === "proj-go" && savedProj) {
+          const r = await api("/api/agents", { body: {
+            kind: rawKind, name: "", cwd: savedProj.cwd, prompt: "", machine: pickMachine,
+            model, effort, project_id: savedProj.id,
+          } });
+          sheet.close();
+          if (r.warning) toast(r.warning, "attn");
+          location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+        } else {
+          sheet.close();
+          if (!editingProj) toast(`已创建项目「${savedProj?.name || projBody.name}」`);
+        }
+        return;
+      }
+
+      const body = {
+        kind: rawKind,
+        name: nameInput.value.trim(),
+        cwd,
+        prompt: $("#l-prompt").value,
+        machine: pickMachine,
+        model,
+        effort,
+        project_id: launchMode === "project-session" && activeLaunchProj ? activeLaunchProj.id : "",
+      };
       const r = await api("/api/agents", { body });
-      store.set("kind", body.kind);
+      store.set("kind", rawKind);
       store.set("machine", pickMachine);
-      saveLastModel(body.kind, pickMachine, body.model, body.effort);
-      store.set(recentKey(), [body.cwd, ...store.get(recentKey(), []).filter((d) => d !== body.cwd)].slice(0, 8));
+      saveLastModel(rawKind, pickMachine, model, effort);
+      store.set(recentKey(), [cwd, ...store.get(recentKey(), []).filter((d) => d !== cwd)].slice(0, 8));
+      if (activeLaunchProj) setProjOpen(activeLaunchProj.id, true);
       sheet.close();
       if (r.warning) toast(r.warning, "attn");
       location.hash = "#/p/" + encodeURIComponent(r.pane_id);
     } catch (err) { $("#launch-error").textContent = err.message; }
-    finally { go.disabled = false; go.textContent = "启动"; }
+    finally { go.disabled = false; projGo.disabled = false; go.textContent = prevText; }
   });
 
   // ───────────────────────────── viewport (mobile keyboard)
@@ -4027,9 +4697,18 @@
     const match = (...parts) => !needle || parts.some((p) => String(p || "").toLowerCase().includes(needle));
     const groups = [];
 
+    const projItems = (state.projects || []).map((p) => ({
+      ico: GLYPHS.folder,
+      title: `${p.name} · 新建会话`,
+      sub: `${machineName(p.machine)} · ${tilde(p.cwd)} · 默认 ${KIND_LABEL[p.kind] || p.kind}`,
+      meta: "项目",
+      run: () => openLauncher({ mode: "project-session", project: p }),
+    })).filter((x) => match(x.title, x.sub, x.meta));
+
     const navActs = [
       { ico: GLYPHS.collie, title: "和 Collie 对话", sub: "回到主协调对话界面", meta: "视图", run: () => { location.hash = "#/collie"; } },
-      { ico: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>', title: "新建对话会话", sub: "在指定电脑与目录启动独立 Agent 对话", meta: "操作", run: () => openLauncher() },
+      { ico: GLYPHS.folder, title: "新建项目", sub: "绑定某台电脑上的代码库目录，在左侧顶部固定管理", meta: "操作", run: () => openLauncher({ mode: "project" }) },
+      { ico: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>', title: "新建独立会话", sub: "在指定电脑与目录启动独立 Agent 对话", meta: "操作", run: () => openLauncher({ mode: "session" }) },
       ...runnableMachines().map((m) => ({
         ico: osGlyph(m.os), title: `在 ${m.name} 上新建会话`, sub: `${m.os || "本地"} · ${tilde(m.home || "~")}`, meta: "电脑",
         run: () => openLauncher(m.id),
@@ -4071,6 +4750,7 @@
       })),
     ].sort((a, b) => b.t - a.t).filter((x) => match(x.title, x.sub, x.meta)).slice(0, needle ? 20 : 8);
 
+    if (projItems.length) groups.push(["项目快捷新建", projItems]);
     if (liveItems.length) groups.push(["进行中的会话", liveItems]);
     if (navActs.length) groups.push(["导航与快捷操作", navActs]);
     if (recentItems.length) groups.push(["最近会话", recentItems]);

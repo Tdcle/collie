@@ -103,6 +103,7 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) http.Handler) {
 	mux.Handle("GET /api/state", wrap(s.getState))
 	mux.Handle("GET /api/dirs", wrap(s.listDirs))
+	mux.Handle("POST /api/dirs", wrap(s.makeDir))
 	mux.Handle("GET /api/file", wrap(s.readFile))
 	mux.Handle("POST /api/agents", wrap(s.launchAgent))
 	mux.Handle("POST /api/agents/{target}/prompt", wrap(s.promptAgent))
@@ -233,6 +234,7 @@ type PaneState struct {
 	Shells      []AgentView             `json:"shells"`
 	Machines    []Machine               `json:"machines"`
 	SessionMeta map[string]*SessionMeta `json:"session_meta,omitempty"`
+	Projects    []*Project              `json:"projects,omitempty"`
 }
 
 func deref(p *string) string {
@@ -248,11 +250,11 @@ func (s *Server) state(ctx context.Context) PaneState {
 	machines := s.herdr.Machines()
 	ws, err := s.herdr.Workspaces(ctx)
 	if err != nil {
-		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot()}
+		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot(), Projects: s.projectsSnapshot()}
 	}
 	panes, err := s.herdr.Panes(ctx)
 	if err != nil {
-		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot()}
+		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot(), Projects: s.projectsSnapshot()}
 	}
 	agents, _ := s.herdr.Agents(ctx)
 
@@ -267,7 +269,7 @@ func (s *Server) state(ctx context.Context) PaneState {
 		names[a.PaneID] = deref(a.Name)
 	}
 
-	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot()}
+	st := PaneState{OK: true, Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, Projects: s.projectsSnapshot()}
 	topics := map[string]map[string]paneSession{"": s.titlesFor("", ctx)}
 	for _, m := range machines {
 		if !m.Local && m.Online {
@@ -289,6 +291,9 @@ func (s *Server) state(ctx context.Context) PaneState {
 		if v.IsAgent {
 			ps := topics[v.Machine][local]
 			v.Topic, v.Session = ps.Title, ps.Session
+			if v.Session != "" {
+				s.promotePaneProjectToSession(p.ID, v.Kind, v.Machine, v.Session)
+			}
 			if r, ok := s.herdr.Run(p.ID); ok {
 				v.Run = r // started from here
 			} else {
@@ -333,6 +338,7 @@ func (s *Server) state(ctx context.Context) PaneState {
 	s.herdr.pruneRuns(alive, func(m string) bool { return online[m] })
 	sort.SliceStable(st.Agents, less(st.Agents))
 	sort.SliceStable(st.Shells, less(st.Shells))
+	st.SessionMeta = s.sessionMetaSnapshot()
 	return st
 }
 
@@ -523,14 +529,15 @@ func (s *Server) promptAgent(w http.ResponseWriter, r *http.Request) {
 // shell pane, optionally handing it a first task.
 func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Kind   string   `json:"kind"`
-		Name   string   `json:"name"`
-		Cwd    string   `json:"cwd"`
-		Prompt string   `json:"prompt"`
-		Label  string   `json:"label"`
-		Args   []string `json:"args"`
-		Model  string   `json:"model"`  // "" = the agent's own default
-		Effort string   `json:"effort"` // likewise
+		Kind      string   `json:"kind"`
+		Name      string   `json:"name"`
+		Cwd       string   `json:"cwd"`
+		Prompt    string   `json:"prompt"`
+		Label     string   `json:"label"`
+		Args      []string `json:"args"`
+		Model     string   `json:"model"`      // "" = the agent's own default
+		Effort    string   `json:"effort"`     // likewise
+		ProjectID string   `json:"project_id"` // optional project binding on Hub
 	}
 	if !decode(w, r, &body) {
 		return
@@ -570,6 +577,9 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, args)
 	if paneID != "" {
 		s.herdr.RememberRun(paneID, body.Model, body.Effort)
+		if body.ProjectID != "" {
+			s.bindPaneProject(paneID, body.ProjectID)
+		}
 	}
 	if err != nil {
 		var he *HerdrError
@@ -665,14 +675,20 @@ func (s *Server) closeWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// listDirs powers the directory picker in the launcher.
+// listDirs powers the hierarchical directory tree picker in the launcher.
 func (s *Server) listDirs(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.URL.Query().Get("path"))
-	if raw == "/" {
-		if drives := windowsDrives(); len(drives) > 0 {
-			writeJSON(w, 200, map[string]any{"path": "/", "display": "/", "parent": "/", "dirs": drives})
-			return
-		}
+	if raw == "" {
+		raw = "~"
+	}
+	drives := windowsDrives()
+	sep := string(filepath.Separator)
+	if raw == "/" && len(drives) > 0 {
+		writeJSON(w, 200, map[string]any{
+			"path": "/", "display": "/", "parent": "/",
+			"home": s.home, "sep": sep, "drives": drives, "dirs": drives,
+		})
+		return
 	}
 	dir := s.expand(raw)
 	entries, err := os.ReadDir(dir)
@@ -692,11 +708,52 @@ func (s *Server) listDirs(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		li, lj := strings.ToLower(out[i]), strings.ToLower(out[j])
+		if li != lj {
+			return li < lj
+		}
+		return out[i] < out[j]
+	})
 	parent := filepath.Dir(dir)
 	if isDriveRoot(dir) {
 		parent = "/"
 	}
-	writeJSON(w, 200, map[string]any{"path": dir, "display": s.tilde(dir), "parent": parent, "dirs": out})
+	writeJSON(w, 200, map[string]any{
+		"path": dir, "display": s.tilde(dir), "parent": parent,
+		"home": s.home, "sep": sep, "drives": drives, "dirs": out,
+	})
+}
+
+// makeDir creates a subdirectory inside parent from the launcher's file tree.
+func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Parent string `json:"parent"`
+		Name   string `json:"name"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\:*?"<>|`) {
+		writeJSON(w, 400, map[string]any{"error": "文件夹名称不合法"})
+		return
+	}
+	parentRaw := strings.TrimSpace(body.Parent)
+	if parentRaw == "" {
+		parentRaw = "~"
+	}
+	parent := s.expand(parentRaw)
+	if !isDir(parent) {
+		writeJSON(w, 400, map[string]any{"error": "上级目录不存在：" + parent})
+		return
+	}
+	target := filepath.Join(parent, name)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		writeJSON(w, 400, map[string]any{"error": "创建文件夹失败：" + err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "path": target, "display": s.tilde(target), "name": name})
 }
 
 // ---------------------------------------------------------------- helpers
