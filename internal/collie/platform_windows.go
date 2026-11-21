@@ -4,6 +4,7 @@ package collie
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -362,14 +363,22 @@ func openURL(ctx context.Context, link string) error {
 }
 
 // replaceBinary swaps a new binary into exe on Windows, where a running .exe
-// cannot be overwritten or deleted directly, only renamed aside.
+// cannot be overwritten or deleted directly, only renamed aside. Using a
+// unique backup suffix avoids "Access is denied" if a previous .old file is
+// still locked across consecutive updates.
 func replaceBinary(tmp, exe string) error {
 	old := exe + ".old"
-	_ = os.Remove(old)
+	if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+		old = fmt.Sprintf("%s.old.%d", exe, os.Getpid())
+		_ = os.Remove(old)
+	}
 	hadOld := false
 	if _, err := os.Stat(exe); err == nil {
 		if err := os.Rename(exe, old); err != nil {
-			return err
+			old = fmt.Sprintf("%s.old.%d", exe, time.Now().UnixNano())
+			if rerr := os.Rename(exe, old); rerr != nil {
+				return rerr
+			}
 		}
 		hadOld = true
 	}
@@ -384,8 +393,15 @@ func replaceBinary(tmp, exe string) error {
 }
 
 func cleanupOldBinary() {
-	if exe, err := os.Executable(); err == nil {
-		_ = os.Remove(exe + ".old")
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(exe + ".old")
+	if matches, err := filepath.Glob(exe + ".old.*"); err == nil {
+		for _, m := range matches {
+			_ = os.Remove(m)
+		}
 	}
 }
 
