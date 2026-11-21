@@ -304,3 +304,32 @@ func TestEnsureNonBlockingAgentArgs(t *testing.T) {
 		t.Fatalf("expected claude args untouched, got %v", got3)
 	}
 }
+
+func TestSuperReportBlockedTone(t *testing.T) {
+	dir := t.TempDir()
+	srv := &Server{home: dir}
+	sp, err := newSuper(srv, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sp.db.Close()
+
+	sp.st.Workers["w1"] = &Worker{Name: "w1", Thread: "chat"}
+	sp.st.Workers["w2"] = &Worker{Name: "w2", Thread: "chat"}
+	if err := sp.Report("w1", "BLOCKED: missing proxy credentials"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Report("w2", "Updated Codex CLI to 0.171.0"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sp.st.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(sp.st.Entries))
+	}
+	if sp.st.Entries[0].Tone != "blocked" {
+		t.Fatalf("expected BLOCKED report to have tone=blocked, got %q", sp.st.Entries[0].Tone)
+	}
+	if sp.st.Entries[1].Tone != "done" {
+		t.Fatalf("expected normal report to have tone=done, got %q", sp.st.Entries[1].Tone)
+	}
+}
+

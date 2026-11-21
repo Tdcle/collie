@@ -1257,7 +1257,11 @@ func (sp *Super) Report(name, text string) error {
 	delete(sp.workerAskedAt, name)
 	w.LastReport, w.ReportAt = text, time.Now()
 	sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
-	sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, "done")
+	tone := "done"
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(text)), "BLOCKED:") {
+		tone = "blocked"
+	}
+	sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, tone)
 	return nil
 }
 
