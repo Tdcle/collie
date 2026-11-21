@@ -19,7 +19,7 @@
     if (h && s.length >= h.length && s.slice(0, h.length).replace(/\//g, "\\").toLowerCase() === h.replace(/\//g, "\\").toLowerCase() && (!s[h.length] || s[h.length] === "/" || s[h.length] === "\\")) {
       return "~" + s.slice(h.length);
     }
-    return s.replace(/^\/Users\/[^/]+|^\/home\/[^/]+|^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "~");
+    return s.replace(/^\/Users\/[^/]+|^\/home\/[^/]+|^\/root(?=$|\/)|^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "~");
   };
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
   // 21:52 today, 昨天 18:30, 11月18日 18:30 before that.
@@ -45,6 +45,13 @@
     shell: '<svg viewBox="0 0 32 32"><rect x="4" y="6" width="24" height="20" rx="3"/><path d="M9 13l4 3-4 3M15 20h7"/></svg>',
     collie: '<img src="icon.svg" alt="" style="width:20px;height:20px">',
   };
+  const OS_GLYPHS = {
+    mac: '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M2 18.5h20"/></svg>',
+    win: '<svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7.2" height="7.2" rx="1"/><rect x="13.3" y="3.5" width="7.2" height="7.2" rx="1"/><rect x="3.5" y="13.3" width="7.2" height="7.2" rx="1"/><rect x="13.3" y="13.3" width="7.2" height="7.2" rx="1"/></svg>',
+    linux: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.8"/><rect x="3" y="13" width="18" height="7" rx="1.8"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/></svg>',
+    relay: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M6.7 7.3l3.1 2.7M17.3 7.3l-3.1 2.7M6.7 16.7l3.1-2.7M17.3 16.7l-3.1-2.7"/></svg>',
+  };
+  const osGlyph = (os, relay = false) => relay ? OS_GLYPHS.relay : /^darwin/i.test(os || "") ? OS_GLYPHS.mac : /^windows/i.test(os || "") ? OS_GLYPHS.win : OS_GLYPHS.linux;
   const KIND_LABEL = { claude: "claude", codex: "codex", agy: "antigravity", antigravity: "antigravity" };
   const STATUS_LABEL = {
     idle: "空闲", working: "工作中", waiting: "在等后台任务", blocked: "等你确认", done: "已完成", unknown: "运行中", shell: "终端",
@@ -467,21 +474,49 @@
 
   const machineName = (id) => (state.machines || []).find((m) => m.id === (id || ""))?.name || id || "本机";
   const isCollieOwned = (v) => v.name === ROUTER || isWorker(v.name);
+  let sideMachine = null; // null = 全部; string = filter sidebar sessions to that machine id
+
+  $("#machine-filter")?.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mf]");
+    if (!b) return;
+    sideMachine = b.dataset.mf === "__all" ? null : b.dataset.mf;
+    renderSide();
+  });
 
   function renderSide() {
-    const blocked = state.agents.filter((a) => a.status === "blocked");
-    $("#attention-group").hidden = blocked.length === 0;
-    $("#attention").innerHTML = blocked.map(itemHTML).join("");
-
     const allMachines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
     const workMachines = allMachines.filter((m) => !isAgentlessHub(m));
     const countMachines = workMachines.length ? workMachines : allMachines;
-    const multi = countMachines.length > 1 || allMachines.length > 1;
+    if (sideMachine !== null && !workMachines.some((m) => m.id === sideMachine)) sideMachine = null;
+    const matchSideMachine = (m) => sideMachine === null || (m || "") === sideMachine;
+
+    const mf = $("#machine-filter");
+    if (mf) {
+      if (workMachines.length > 1) {
+        const countFor = (id) => {
+          const mm = (x) => id === null || (x || "") === id;
+          return state.agents.filter((a) => a.name !== ROUTER && mm(a.machine)).length
+            + ext.filter((e) => mm(e.machine)).length
+            + hist.filter((h) => h.name !== ROUTER && !sup.workers.some((w) => w.name === h.name) && mm(h.machine)).length
+            + state.shells.filter((s) => mm(s.machine)).length;
+        };
+        mf.hidden = false;
+        mf.innerHTML = `<button type="button" class="${sideMachine === null ? "on" : ""}" data-mf="__all">全部 <span class="mc">${countFor(null)}</span></button>`
+          + workMachines.map((m) => `<button type="button" class="${sideMachine === m.id ? "on" : ""}" data-mf="${esc(m.id)}">${osGlyph(m.os)}${esc(m.name)} <span class="mc">${countFor(m.id)}</span></button>`).join("");
+      } else {
+        mf.hidden = true;
+      }
+    }
+
+    const blocked = state.agents.filter((a) => a.status === "blocked" && matchSideMachine(a.machine));
+    $("#attention-group").hidden = blocked.length === 0;
+    $("#attention").innerHTML = blocked.map(itemHTML).join("");
 
     renderSessions();
-    $("#shells").innerHTML = state.shells.map(itemHTML).join("");
-    $("#shell-count").textContent = state.shells.length || "";
-    $("#shell-group").hidden = state.shells.length === 0;
+    const shells = state.shells.filter((s) => matchSideMachine(s.machine));
+    $("#shells").innerHTML = shells.map(itemHTML).join("");
+    $("#shell-count").textContent = shells.length || "";
+    $("#shell-group").hidden = shells.length === 0;
 
     const online = countMachines.filter((m) => m.local ? m.online !== false && state.ok : m.online).length;
     $("#conn").className = "conn " + (online ? "on" : "off");
@@ -555,6 +590,7 @@
 
   // ───────────────────────────── Collie (super-agent) view
   let superSig = "";
+  const expandedEvents = new Set();
   const routerModelMachine = (r) => {
     if (r?.machine) return r.machine;
     const ms = runnableMachines();
@@ -625,7 +661,14 @@
     st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(collieStatus(r.status))}`;
     $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
     const cx = $("#router-ctx");
-    cx.textContent = r.handover ? "正在交接记忆…" : r.alive && r.context ? `上下文 ${r.context}%` : "";
+    if (r.handover) {
+      cx.textContent = "正在交接记忆…";
+    } else if (r.alive && r.context) {
+      const pct = Math.min(100, Math.max(4, r.context));
+      cx.innerHTML = `<span class="ctx-bar"><i style="width:${pct}%"></i></span>上下文 ${esc(r.context)}%`;
+    } else {
+      cx.textContent = "";
+    }
     cx.classList.toggle("warn", !!r.handover || (r.rotate_at > 0 && r.context >= r.rotate_at - 10));
     cx.title = r.rotate_at > 0 ? `用到 ${r.rotate_at}% 时，Collie 会把要记住的事写进 memory/，然后换一个新会话` : "自动换会话已关闭（自动化 → 设置）";
     renderRouterModel(r);
@@ -633,10 +676,13 @@
 
     const active = sup.workers.filter((w) => !w.ended);
     if (view === "collie") renderTarget();
-    $("#crew").innerHTML = active.map((w) => {
+    const multiM = runnableMachines().length > 1 || (state.machines || []).some((m) => !m.local);
+    $("#crew").innerHTML = active.length ? `<span class="crew-label">执行中</span>` + active.map((w) => {
       const pane = paneOf(w.name);
-      return `<a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""}><span class="dot ${esc(workerStatus(w))}" title="${esc(STATUS_LABEL[workerStatus(w)] || "")}"></span>${esc(w.name)}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a>`;
-    }).join("");
+      const wWhere = multiM && w.machine ? `<span class="wm">@${esc(machineName(w.machine))}</span>` : "";
+      const tip = [STATUS_LABEL[workerStatus(w)] || workerStatus(w), w.task || ""].filter(Boolean).join(" · ");
+      return `<span class="chip-wrap"><a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} title="${esc(tip)}"><span class="dot ${esc(workerStatus(w))}"></span>${esc(w.name)}${wWhere}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a><button type="button" class="chip-stop" data-stop-worker="${esc(w.name)}" title="停止 ${esc(w.name)}">×</button></span>`;
+    }).join("") : "";
 
     const box = $("#super-thread");
     const scroller = box.parentElement;
@@ -644,69 +690,76 @@
     let html = "", prevRole = "";
     if (!sup.entries.length && !pendingSays.length) {
       html = `<div class="hello"><img src="icon.svg" alt="">
-        <h3>一个入口，管一群 agent</h3>
-        <p>把事情告诉 Collie。它会理解上下文、拆好活，交给 Claude、Codex 或 Antigravity 在你的机器上并行去做，只在需要你决定或验收时出声。</p>
+        <h3>一个总控台，调度所有电脑上的 Agent</h3>
+        <p>直接把目标告诉 Collie。它会结合长期记忆理解上下文、拆解子任务，在你的 Mac、Windows 或开发机上并行调度 Claude、Codex 与 Antigravity，只在需要你拍板或验收时汇报。</p>
         <div class="ideas">
-          <button data-idea="看一下 ~/agent-workspace 里最近改动最多的三个项目，各派一个 agent 检查有没有失败的测试，最后给我一句话总结。">并行检查三个项目的测试</button>
-          <button data-idea="每天早上 9 点帮我看一下各个任务的进展，有卡住的就告诉我。">每天 9 点汇报进展</button>
-          <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">把 GitHub 评论变成任务</button>
+          <button data-idea="看一下最近改动最多的三个项目，各派一个 agent 检查有没有失败的测试，最后给我一句话总结。">并行检查多个仓库的测试与构建状态</button>
+          <button data-idea="每天早上 9 点帮我看一下各台电脑上任务的进展，有卡住的就告诉我。">设置工作日常态化巡检与进度汇报</button>
+          <button data-idea="以后 GitHub 上有人评论 @collie 的 issue，就派一个 agent 去复现，确认后再告诉我。">接入外部 Webhook 自动响应研发事件</button>
         </div></div>`;
     } else {
       let prev = "", lastAt = 0;
-      // What a reply is about shows as a quoted line, unless it is plain
-      // from what is right above: the first answer to your last message, or
-      // a word on the worker whose line it follows.
-      let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0;
+      let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0, lastQuoted = "";
       const quote = (e) => {
         const q = e.re;
         if (!q) return "";
         if (q.entry && q.entry === lastUser && !sinceUser) return "";
         if (q.entry && q.entry === lastCollie && !sinceCollie) return "";
+        if (q.entry && q.entry === lastQuoted) return "";
         if (q.worker && q.worker === lastEvent) return "";
+        if (q.entry) lastQuoted = q.entry;
         const pane = q.worker && paneOf(q.worker), past = q.worker && !pane ? workerHist(q.worker, e.at) : null;
         const attr = q.entry ? `href="#" data-goto="${esc(q.entry)}"` : pane ? `href="#/p/${encodeURIComponent(pane)}"` : past ? `href="#/h/${encodeURIComponent(past.id)}"` : "";
         return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}</a>`;
       };
+      const EV_BADGE = { spawn: "派出", done: "回报", blocked: "待确认", error: "异常" };
       for (const e of chatEntries()) {
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         if (e.role === "event" && workerChatter(e)) continue;
-        // A quiet line with the time when the talk picks up again after a
-        // while (or on a new day); hovering a message shows its exact time.
         const at = +new Date(e.at) || 0;
-        // A new day always gets its line, even before an event (whose own
-        // time has no date); talk after a pause gets one too.
         const talk = e.role === "user" || e.role === "collie";
         const newDay = at && lastAt && new Date(at).toDateString() !== new Date(lastAt).toDateString();
         if (at && (newDay || (talk && (!lastAt || at - lastAt > 10 * 60e3)))) {
           html += `<div class="time-sep">${esc(sepTime(at))}</div>`;
           prev = "";
+          lastQuoted = "";
         }
         if (at) lastAt = at;
         const cont = e.role === "collie" && prev === "collie";
         prev = prevRole = e.role;
-        const tip = at ? ` title="${esc(fullTime(at))}" data-time="${esc(sepTime(at))}"` : "";
         if (e.role === "user") {
           html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
-          lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++;
+          lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++; lastQuoted = "";
         } else if (e.role === "collie") {
           html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${msgActs(e, at)}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
-          // A worker's line opens the session it was about: its record once
-          // that session ended (a name is reused after), else its pane.
           const past = e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
           const pane = !past && e.ref ? paneOf(e.ref) : null;
-          const tag = past ? `a href="#/h/${encodeURIComponent(past.id)}" title="看它的完整记录"` : pane ? `a href="#/p/${encodeURIComponent(pane)}"` : "div";
-          // A spawn line spins only while that worker is still at it; history stays still.
+          const href = past ? `#/h/${encodeURIComponent(past.id)}` : pane ? `#/p/${encodeURIComponent(pane)}` : "";
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
           const busy = w && workerBusy(w);
           const stuck = w && !w.ended && w.status === "blocked";
           const tone = e.tone === "blocked" ? "blocked" : e.tone === "done" ? "done" : e.tone === "spawn" ? (busy ? "working" : stuck ? "blocked" : "unknown") : e.tone === "error" ? "failed" : "unknown";
-          // A spawn line carries its worker's state, in place of a line per change.
-          const state = w ? (w.ended ? "已结束" : busy ? "还在跑" : stuck ? "等你确认" : "") : "";
-          html += `<${tag} class="event ${e.tone === "error" ? "error" : ""}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span>${esc(e.text)}</span>${state ? `<span class="wstate">${state}</span>` : ""}</${tag.split(" ")[0]}>`;
+          const wState = w ? (w.ended ? "已结束" : busy ? "运行中" : stuck ? "待确认" : "") : "";
+          const badge = EV_BADGE[e.tone] || "轨迹";
+          const toneCls = `tone-${esc(e.tone || "info")}${e.tone === "error" ? " error" : ""}`;
+          const isLong = e.tone !== "error" && ((e.text || "").length > 62 || (e.text || "").includes("\n"));
+          const isExp = isLong && expandedEvents.has(e.id);
+          if (e.tone === "error" || isLong || !href) {
+            const tail = `<span class="ev-tail">${wState ? `<span>${wState}</span>` : ""}${href ? `<a class="ev-open" href="${href}" title="查看完整会话">会话 →</a>` : isLong ? `<span>${isExp ? "收起" : "展开"}</span>` : ""}</span>`;
+            html += `<div class="event ${toneCls}${isLong ? " expandable" : ""}${isExp ? " expanded" : ""}" ${isLong && e.id ? `data-ev-id="${esc(e.id)}"` : ""}><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span class="ev-badge">${badge}</span><span class="ev-text">${esc(e.text)}</span>${tail}</div>`;
+          } else {
+            const tail = `<span class="ev-tail">${wState ? `<span>${wState}</span>` : ""}<span class="ev-open">查看 →</span></span>`;
+            html += `<a href="${href}" class="event ${toneCls}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span class="ev-badge">${badge}</span><span class="ev-text">${esc(e.text)}</span>${tail}</a>`;
+          }
         }
+      }
+      if (r.status === "working" || r.status === "starting" || r.status === "dreaming" || pendingSays.length) {
+        const liveLabel = r.status === "starting" ? "正在唤醒 Collie…" : r.status === "dreaming" ? "Collie 正在整理记忆…" : "Collie 正在思考与编排…";
+        const dotSt = collieDot(r.status === "idle" && pendingSays.length ? "working" : r.status);
+        html += `<div class="collie-live"><span class="avatar"><img src="icon.svg" alt=""></span><div class="collie-live-pill"><span class="dot ${esc(dotSt)}"></span><span>${liveLabel}</span></div></div>`;
       }
     }
     // Everything waiting on the human, in one place, answerable right here.
@@ -757,9 +810,29 @@
     </div>`;
   }
 
+  $("#crew")?.addEventListener("click", async (e) => {
+    const stop = e.target.closest("[data-stop-worker]")?.dataset.stopWorker;
+    if (!stop) return;
+    e.preventDefault();
+    if (!confirm(`停止任务「${stop}」？`)) return;
+    try {
+      await api("/api/super/stop", { body: { worker: stop } });
+      toast(`已停止 ${stop}`);
+    } catch (err) { toast(err.message, "attn"); }
+  });
+
   $("#super-thread").addEventListener("click", (e) => {
     const idea = e.target.closest("[data-idea]")?.dataset.idea;
-    if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); }
+    if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); return; }
+    const evRow = e.target.closest(".event.expandable[data-ev-id]");
+    if (evRow && !e.target.closest("a")) {
+      const eid = evRow.dataset.evId;
+      if (expandedEvents.has(eid)) expandedEvents.delete(eid); else expandedEvents.add(eid);
+      evRow.classList.toggle("expanded", expandedEvents.has(eid));
+      const hint = evRow.querySelector(".ev-tail span:last-child");
+      if (hint && !evRow.querySelector(".ev-open")) hint.textContent = expandedEvents.has(eid) ? "收起" : "展开";
+      return;
+    }
     // Answering a stuck agent from here.
     const b = e.target.closest("button"), card = b?.closest(".ask[data-pane]");
     if (!card) return;
@@ -855,6 +928,14 @@
   $("#router-cfg-btn")?.addEventListener("click", () => toggleRouterPop());
   $("#router-model")?.addEventListener("click", (e) => { if (!e.target.closest("[data-act]")) toggleRouterPop(); });
   $("#rq-cancel")?.addEventListener("click", () => toggleRouterPop(false));
+  document.addEventListener("mousedown", (e) => {
+    const pop = $("#router-pop");
+    if (!pop || pop.hidden || pickOpen) return;
+    if (!e.target.closest(".rp-card, #router-cfg-btn, #router-model, .pick-pop, [data-act='router-cfg']")) toggleRouterPop(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#router-pop")?.hidden && !pickOpen) toggleRouterPop(false);
+  });
   $("#router-quick-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target, btn = $("#rq-save");
@@ -1705,17 +1786,14 @@
     // 进行中: needs-you rows are already above. Another app's session that is
     // only open (kept alive in the background, nothing running) stays here,
     // marked, below the busy ones.
+    const matchM = (m) => sideMachine === null || (m || "") === sideMachine;
     const going = (e) => e.live;
-    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked")
+    const panes = state.agents.filter((a) => a.name !== ROUTER && a.status !== "blocked" && matchM(a.machine))
       .map((a) => ({ rank: RANK[a.status] ?? 3, done: a.status === "done", html: itemHTML(a), on: view === "pane" && a.pane_id === current }));
-    const liveExt = ext.filter(going).map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
+    const liveExt = ext.filter((e) => going(e) && matchM(e.machine)).map((e) => ({ rank: RANK[e.status] ?? 3, done: e.status === "done", html: extRow(e), on: view === "ext" && extCur === e.id }));
     const live = [...panes, ...liveExt].sort((x, y) => x.rank - y.rank);
     const busy = live.filter((x) => x.rank <= 1).length;
     $("#live-count").textContent = busy ? `${busy} 个在跑` : live.length || "";
-    // Sessions that are only open (idle, a plain terminal) fold into one row
-    // once there are more than a few, so 最近 stays within reach. One that just
-    // finished has a result to look at, so it stays listed, as does the one on
-    // screen.
     const folds = (x) => x.rank >= 3 && !x.done;
     const idle = live.filter(folds);
     let rows = live;
@@ -1727,13 +1805,13 @@
         <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>${open ? "收起空闲的" : `${hid} 个空闲`}</button></li>` }];
     }
     $("#live-list").innerHTML = rows.map((x) => x.html).join("")
-      || `<li class="empty-hint">没有在跑的会话。点右上角 + 新建，或让 Collie 派一个。</li>`;
+      || `<li class="empty-hint">${sideMachine !== null ? "这台电脑当前没有运行中的会话。" : "暂无运行中的会话。点右上角 + 新建，或直接让 Collie 派活。"}</li>`;
 
     // 最近: newest first; Collie's own sessions are reached from its conversation.
     const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
     const recent = [
-      ...ext.filter((e) => !going(e)).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
-      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({ id: "h:" + h.id, t: new Date(h.ended), html: histRow(h) })),
+      ...ext.filter((e) => !going(e) && matchM(e.machine)).map((e) => ({ id: e.id, t: new Date(e.updated || e.started), html: extRow(e) })),
+      ...hist.filter((h) => !collieRan(h.name) && matchM(h.machine)).map((h) => ({ id: "h:" + h.id, t: new Date(h.ended), html: histRow(h) })),
     ].sort((x, y) => y.t - x.t);
     let shown = extAll ? recent : recent.slice(0, RECENT_N);
     const cur = view === "ext" && extCur && !shown.some((x) => x.id === extCur) && recent.find((x) => x.id === extCur);
@@ -1896,16 +1974,42 @@
     fold: () => store.get("fold", true),
   };
   const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+  const THEME_ICONS = {
+    light: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>',
+    dark: '<svg viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>',
+    system: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor" stroke="none"/></svg>',
+  };
+  function syncShortcutsUI() {
+    const kbd = $("#cmdk-kbd");
+    if (kbd) kbd.textContent = isMac ? "⌘K" : "Ctrl K";
+    const sh = $("#super-send-hint");
+    if (sh) sh.textContent = prefs.sendKey() === "mod" ? (isMac ? "⌘↵ 发送" : "Ctrl↵ 发送") : "↵ 发送";
+  }
   function applyLook() {
     const root = document.documentElement;
     const t = prefs.theme(), x = prefs.text();
     if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
     if (x === "normal") delete root.dataset.text; else root.dataset.text = x;
     const dark = t === "dark" || (t === "system" && darkMQ.matches);
-    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0b0b0c" : "#ffffff"; });
+    $$('meta[name="theme-color"]').forEach((m) => { m.removeAttribute("media"); m.content = dark ? "#0d1016" : "#fcfcfd"; });
+    const tb = $("#theme-btn");
+    if (tb) {
+      tb.innerHTML = THEME_ICONS[t] || THEME_ICONS.system;
+      tb.title = `外观主题：${{ system: "跟随系统", light: "浅色模式", dark: "深色模式" }[t] || "跟随系统"}（点击切换）`;
+    }
+    syncShortcutsUI();
     dispatchEvent(new Event("collie:theme"));
   }
   darkMQ.addEventListener("change", applyLook);
+  $("#theme-btn")?.addEventListener("click", () => {
+    const order = ["system", "light", "dark"];
+    const next = order[(order.indexOf(prefs.theme()) + 1) % order.length];
+    store.set("theme", next);
+    applyLook();
+    if (view === "prefs") renderPrefs();
+    toast(`外观：${{ system: "跟随系统", light: "浅色模式", dark: "深色模式" }[next]}`);
+  });
   applyLook();
 
   function renderPrefs() {
@@ -1948,7 +2052,7 @@
     } else {
       const key = b.closest("[data-pref]").dataset.pref, v = b.dataset.v;
       if (key === "mode2") setMode(v); else store.set(key, v);
-      if (key === "theme" || key === "text") applyLook();
+      if (key === "theme" || key === "text" || key === "sendKey") applyLook();
     }
     renderPrefs();
   });
@@ -1994,14 +2098,15 @@
   }
   checkUpdates();
   setInterval(checkUpdates, 30 * 60 * 1000);
+  let pairOS = /Windows/i.test(navigator.userAgent) ? "win" : "unix";
   // Which agents a computer has: nothing when not known (an older node).
   const agentsTag = (list) => !Array.isArray(list) ? ""
-    : list.length ? `<span title="这台电脑上装了的 agent">${list.map((k) => esc(AGENT_LABEL[k] || k)).join(" · ")}</span>`
-    : `<span class="tag attn" title="找不到 claude、codex、agy 命令：装一个，再重连这台电脑">没装 agent</span>`;
+    : list.length ? `<span class="agent-chips" title="这台电脑已安装的 Agent">${list.map((k) => `<span class="agent-chip">${GLYPHS[k] || ""}<span>${esc(AGENT_LABEL[k] || k)}</span></span>`).join("")}</span>`
+    : `<span class="tag attn" title="找不到 claude、codex、agy 命令：安装后重连这台电脑">未装 Agent</span>`;
   const verTag = (have, latest, cmd) => !have ? "" : isOld(have, latest)
-    ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span>${esc(have)}</span>`;
+    ? `<span class="tag attn" title="${esc("更新：" + cmd)}">${esc(have)} → ${esc(latest)}</span>` : `<span class="mono">${esc(have)}</span>`;
   const updateRow = (have, latest, cmd, note, id, name) => isOld(have, latest)
-    ? `<div class="update-cmd"><p class="pair-hint">有新版本 ${esc(latest)}。<button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}">更新到 ${esc(latest)}</button></p><p class="pair-hint muted">点了没反应的话，在这台电脑上运行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
+    ? `<div class="update-cmd"><p class="pair-hint">发现新版本 <b>${esc(latest)}</b> <button class="btn small primary" data-update="${esc(id)}" data-name="${esc(name)}">一键升级到 ${esc(latest)}</button></p><p class="pair-hint muted">若在线升级未响应，可在该电脑终端执行${note ? "（" + esc(note) + "）" : ""}：</p><div class="code"><span>${esc(cmd)}</span><button class="icon-btn" data-copy="${esc(cmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : "";
 
   async function loadDevices() {
     let r;
@@ -2021,47 +2126,63 @@
     const hubCmd = installCmdFor(r.hub.os, "hub");
     const machines = r.devices.filter((d) => d.kind === "machine");
     const browsers = r.devices.filter((d) => d.kind !== "machine");
-    const addrSel = addrs.length > 1 ? `<label class="addr-pick">用这个地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
+    const addrSel = addrs.length > 1 ? `<label class="addr-pick">使用这个接入地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
     const keepOpen = document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
-    if (keepOpen) return; // don't redraw under an open select or a half-typed form
+    if (keepOpen) return;
     const typed = [...document.querySelectorAll("#add-hub input")].map((i) => i.value);
+    const hubRelay = !r.hub.herdr && (!Array.isArray(r.hub.agents) || r.hub.agents.length === 0);
+    const brainId = sup.router?.alive ? (sup.router.machine || "") : null;
+    const activeCmd = pairOS === "win" ? installWinCmd : pairOS === "cli" ? nodeCmd : installCmd;
 
     $("#devices-body").innerHTML = `
-      <p class="panel-intro">Collie 适合放在一台常开的开发机上当 hub：手机、平板和浏览器只连 hub；你的 Mac、Linux 或 Windows 电脑运行 <code>collie node</code> 主动连上来，hub 就能在上面开 agent、看对话、处理确认。不用开端口，也不需要 SSH。</p>
+      <p class="panel-intro">把 Collie Hub 跑在一台常开的云主机或开发机上：手机、平板与浏览器直接连 Hub；你的 Mac、Windows 或 Linux 电脑通过 <code>collie node</code> 主动接入，无需公网端口或配置 SSH，即可统一调度。</p>
 
       <div class="pair-grid">
         <div class="card pair-card">
           <div class="card-h">连接手机或平板</div>
           <div class="qr-wrap">${pb ? `<img class="qr" alt="配对二维码" src="demo-qr.png?text=${encodeURIComponent(phoneURL)}">` : ""}</div>
-          <p class="pair-hint">用相机扫一下，在浏览器里打开即可，之后可「添加到主屏幕」。<b>${pb ? left(pb) : ""}</b> 内有效，只能用一次。</p>
-          <div class="code"><span>${esc(phoneURL)}</span><button class="icon-btn" data-copy="${esc(phoneURL)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+          <p class="pair-hint">相机扫码在浏览器中打开，随后可「添加到主屏幕」。<b>${pb ? left(pb) : ""}</b> 内有效，单次使用。</p>
+          <div class="code"><span>${esc(phoneURL)}</span><button class="icon-btn" data-copy="${esc(phoneURL)}" title="复制链接"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
           ${addrSel}
         </div>
 
         <div class="card pair-card">
-          <div class="card-h">连接一台电脑</div>
-          <p class="pair-hint">在那台电脑上装好 herdr（编译安装还需 git 和 Go 1.25+），然后运行以作为后台服务常驻：</p>
-          ${pm ? `<p class="pair-hint"><b>macOS / Linux</b>：</p>
-               <div class="code big"><span>${esc(installCmd)}</span><button class="icon-btn" data-copy="${esc(installCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
-               <p class="pair-hint"><b>Windows（PowerShell）</b>：</p>
-               <div class="code big"><span>${esc(installWinCmd)}</span><button class="icon-btn" data-copy="${esc(installWinCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
-               <p class="pair-hint">已经装了 collie 的话：</p>
-               <div class="code"><span>${esc(nodeCmd)}</span><button class="icon-btn" data-copy="${esc(nodeCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
-               <p class="pair-hint"><b>${left(pm)}</b> 内有效，只能用一次。之后它会自动重连。</p>`
-             : `<button class="btn primary" id="new-node-code">生成连接命令</button>`}
-          <p class="pair-hint muted">需要这台电脑能访问上面的地址（同一内网或 VPN）。</p>
+          <div class="card-h">接入一台新电脑</div>
+          <p class="pair-hint">在目标电脑上自动安装并注册后台常驻节点服务（断线自动重连）：</p>
+          ${pm ? `<div class="os-tabs" id="pair-os-tabs">
+                 <button type="button" data-os="unix" class="${pairOS === "unix" ? "on" : ""}">macOS / Linux</button>
+                 <button type="button" data-os="win" class="${pairOS === "win" ? "on" : ""}">Windows PowerShell</button>
+                 <button type="button" data-os="cli" class="${pairOS === "cli" ? "on" : ""}">已装 Collie</button>
+               </div>
+               <div class="code big"><span>${esc(activeCmd)}</span><button class="icon-btn" data-copy="${esc(activeCmd)}" title="复制命令"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+               <p class="pair-hint">配对码在 <b>${left(pm)}</b> 内有效，单次绑定后长期免密重连。</p>`
+             : `<div class="pair-perks">
+                  <div><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>支持 macOS、Windows 与 Linux 全平台原生接入</span></div>
+                  <div><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>节点主动外连 Hub，无需开放入站端口或配置 SSH</span></div>
+                  <div><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>系统级守护进程常驻，休眠唤醒或重启后自动重连</span></div>
+                </div>
+                <button class="btn primary block" id="new-node-code">生成一次性接入命令</button>`}
+          <p class="pair-hint muted">确保目标电脑能访问 ${esc(devAddr)} 即可。</p>
         </div>
       </div>
 
-      <div class="card"><div class="card-h">电脑</div><ul class="rows">
+      <div class="card"><div class="card-h">已接入的电脑与中枢</div><ul class="rows">
         <li class="row dev-row">
-          <span class="dot ${r.hub.herdr ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">hub</span>${r.hub.os ? `<span>${esc(r.hub.os)}</span>` : ""}${verTag(r.hub.version, r.latest, hubCmd)}${agentsTag(r.hub.agents)}${r.hub.herdr ? "" : "<span>没检测到 herdr，这台只当 hub 用</span>"}</div><div class="text mono">${esc(tilde(r.hub.home))}</div>${updateRow(r.hub.version, r.latest, hubCmd, "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}</div>
-          <span class="right">${r.hub.herdr ? "在线" : ""}</span></li>
+          <span class="dev-ico">${osGlyph(r.hub.os, hubRelay)}<span class="dot ${r.hub.herdr || hubRelay ? "online" : "offline"}"></span></span>
+          <div>
+            <div class="meta"><b>${esc(r.hub.name)}</b><span class="tag">${hubRelay ? "Hub 中枢" : "Hub"}</span>${hubRelay ? `<span class="tag relay">云端中继</span>` : ""}${brainId === "" ? `<span class="tag brain">Collie 大脑</span>` : ""}${r.hub.os ? `<span>${esc(r.hub.os)}</span>` : ""}${verTag(r.hub.version, r.latest, hubCmd)}${hubRelay ? `<span>负责消息路由与跨端同步</span>` : agentsTag(r.hub.agents)}</div>
+            <div class="text mono">${esc(tilde(r.hub.home))}</div>
+            ${updateRow(r.hub.version, r.latest, hubCmd, "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}
+          </div>
+          <div class="dev-acts">${r.hub.herdr ? `<button class="btn small" data-launch-on="">+ 新建会话</button>` : `<span class="right">运行中</span>`}</div></li>
         ${machines.map((d) => { const dCmd = installCmdFor(d.os, "node"); return `<li class="row dev-row">
-          <span class="dot ${d.online ? "online" : "offline"}"></span>
-          <div><div class="meta"><b>${esc(d.name)}</b><span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, dCmd)}${d.online ? agentsTag(d.agents) : ""}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div><div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>${updateRow(d.version, r.latest, dCmd, "", d.id, d.name)}</div>
-          <button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></li>`; }).join("")}
+          <span class="dev-ico">${osGlyph(d.os)}<span class="dot ${d.online ? "online" : "offline"}"></span></span>
+          <div>
+            <div class="meta"><b>${esc(d.name)}</b>${brainId === d.id ? `<span class="tag brain">Collie 大脑</span>` : ""}<span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, dCmd)}${d.online ? agentsTag(d.agents) : ""}<span>${d.online ? "在线" : "离线 · 上次 " + when(d.last_seen)}</span></div>
+            <div class="text mono">${esc(d.home ? tilde(d.home) : "")}</div>
+            ${updateRow(d.version, r.latest, dCmd, "", d.id, d.name)}
+          </div>
+          <div class="dev-acts">${d.online ? `<button class="btn small" data-launch-on="${esc(d.id)}">+ 新建会话</button>` : ""}<button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></div></li>`; }).join("")}
       </ul></div>
 
       <div class="card"><div class="card-h">其他 hub</div>
@@ -2131,7 +2252,9 @@
     const b = e.target.closest("button");
     if (!b) return;
     try {
-      if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
+      if (b.dataset.os) { pairOS = b.dataset.os; loadDevices(); }
+      else if (b.dataset.launchOn !== undefined) { openLauncher(b.dataset.launchOn); }
+      else if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
       else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
       else if (b.dataset.update !== undefined) {
         const id = b.dataset.update;
@@ -2787,6 +2910,18 @@
     return ok;
   }
   document.addEventListener("click", async (ev) => {
+    const cc = ev.target.closest("[data-copy-code]");
+    if (cc) {
+      const raw = cc.closest(".codeblock")?.querySelector("code")?.textContent || "";
+      if (await copyText(raw)) {
+        const sp = cc.querySelector("span");
+        cc.classList.add("copied");
+        if (sp) sp.textContent = "已复制 ✓";
+        clearTimeout(cc._t);
+        cc._t = setTimeout(() => { cc.classList.remove("copied"); if (sp) sp.textContent = "复制"; }, 1600);
+      }
+      return;
+    }
     const b = ev.target.closest("[data-copy]");
     if (!b) return;
     const e = sup.entries.find((x) => x.id === b.dataset.copy);
@@ -2877,8 +3012,9 @@
   }
   function mdRender(src) {
     const blocks = [];
-    let text = String(src || "").replace(/```[^\n]*\n([\s\S]*?)(```|$)/g, (_, code) => {
-      blocks.push(`<pre><code>${esc(code.replace(/\n$/, ""))}</code></pre>`);
+    let text = String(src || "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
+      const l = (lang || "").trim().split(/\s+/)[0];
+      blocks.push(`<div class="codeblock"><div class="code-bar"><span class="code-lang">${esc(l || "code")}</span><button type="button" class="code-copy" data-copy-code>${ICON_COPY}<span>复制</span></button></div><pre><code>${esc(code.replace(/\n$/, ""))}</code></pre></div>`);
       return `\u0000${blocks.length - 1}\u0000`;
     });
     text = esc(text);
@@ -3215,7 +3351,7 @@
     $("#l-machine-field").hidden = ms.length < 2;
     if (!ms.some((m) => m.id === pickMachine)) pickMachine = ms[0]?.id || "";
     $("#l-machines").innerHTML = ms.map((m) => `<button type="button" class="${m.id === pickMachine ? "on" : ""}" data-m="${esc(m.id)}">
-      <span class="dot online"></span>${esc(m.name)}${m.local ? "<small>hub</small>" : ""}</button>`).join("");
+      ${osGlyph(m.os)}${esc(m.name)}${m.local ? "<small>hub</small>" : ""}</button>`).join("");
     markKinds();
   }
   // Agents the chosen computer doesn't have can't be picked.
@@ -3251,11 +3387,11 @@
     resetDir();
     suggestName();
   });
-  function openLauncher() {
+  function openLauncher(presetMachine) {
     nameTouched = false;
     $("#launch-error").textContent = "";
     $("#l-prompt").value = "";
-    pickMachine = store.get("machine", "");
+    pickMachine = typeof presetMachine === "string" ? presetMachine : store.get("machine", "");
     renderMachinePick();
     const recent = store.get(recentKey(), []);
     cwdInput.value = recent[0] || "~";
@@ -3266,9 +3402,8 @@
     suggestName();
     browse(cwdInput.value);
     sheet.showModal();
-    if (prefs.notify() && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
   }
-  $("#new-btn").addEventListener("click", openLauncher);
+  $("#new-btn").addEventListener("click", () => openLauncher());
   $$("input[name=kind]").forEach((r) => r.addEventListener("change", suggestName));
   nameInput.addEventListener("input", () => { nameTouched = true; });
   $("#recent").addEventListener("click", (e) => { const d = e.target.closest("button")?.dataset.d; if (d) { cwdInput.value = d; browse(d); } });
@@ -3398,5 +3533,126 @@
     };
     $("#local-app-x").onclick = () => { store.set("local-app-off", true); $("#local-app").hidden = true; };
   }
+  // ───────────────────────────── command palette (⌘K / Ctrl+K)
+  const cmdk = $("#cmdk"), cmdkInput = $("#cmdk-input"), cmdkList = $("#cmdk-list");
+  let cmdkItems = [], cmdkIdx = 0;
+  function buildCmdkItems(q) {
+    const needle = (q || "").trim().toLowerCase();
+    const match = (...parts) => !needle || parts.some((p) => String(p || "").toLowerCase().includes(needle));
+    const groups = [];
+
+    const navActs = [
+      { ico: GLYPHS.collie, title: "和 Collie 对话", sub: "回到主协调对话界面", meta: "视图", run: () => { location.hash = "#/collie"; } },
+      { ico: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>', title: "新建独立 Agent 或终端", sub: "在指定电脑与目录启动会话", meta: "操作", run: () => openLauncher() },
+      ...runnableMachines().map((m) => ({
+        ico: osGlyph(m.os), title: `在 ${m.name} 上新建会话`, sub: `${m.os || "本地"} · ${tilde(m.home || "~")}`, meta: "电脑",
+        run: () => openLauncher(m.id),
+      })),
+      { ico: '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg>', title: "自动化 · 收件箱", sub: "查看触发器与事件队列", meta: "自动化", run: () => { autoTab = "inbox"; store.set("autoTab", "inbox"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.2 2"/></svg>', title: "自动化 · 定时任务", sub: "创建或管理周期提醒与巡检", meta: "自动化", run: () => { autoTab = "timers"; store.set("autoTab", "timers"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
+      { ico: '<svg viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>', title: "自动化 · 长期记忆", sub: "查看或编辑 Collie 的 instructions 与笔记", meta: "自动化", run: () => { autoTab = "memory"; store.set("autoTab", "memory"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>', title: "自动化 · 全局设置", sub: "切换 Collie 大脑、派活默认与飞书通知", meta: "自动化", run: () => { autoTab = "settings"; store.set("autoTab", "settings"); location.hash = "#/auto"; if (view === "auto") openAuto(); } },
+      { ico: OS_GLYPHS.relay, title: "设备与节点连接", sub: "管理接入电脑、配对二维码与版本升级", meta: "视图", run: () => { location.hash = "#/devices"; } },
+      { ico: THEME_ICONS[prefs.theme()] || THEME_ICONS.system, title: "切换外观主题（浅色 / 深色 / 跟随系统）", sub: `当前：${{ system: "跟随系统", light: "浅色", dark: "深色" }[prefs.theme()]}`, meta: "偏好", run: () => $("#theme-btn")?.click() },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1"/></svg>', title: "浏览器偏好设置", sub: "字号、默认视图、发送快捷键与桌面通知", meta: "视图", run: () => { location.hash = "#/prefs"; } },
+    ].filter((x) => match(x.title, x.sub, x.meta));
+
+    const liveItems = [
+      ...state.agents.filter((a) => a.name !== ROUTER).map((a) => ({
+        ico: glyph(a), title: title(a), sub: `${KIND_LABEL[a.kind] || a.kind} · ${machineName(a.machine)} · ${tilde(a.cwd)}`,
+        meta: STATUS_LABEL[a.status] || a.status, dot: a.status,
+        run: () => { location.hash = "#/p/" + encodeURIComponent(a.pane_id); },
+      })),
+      ...ext.filter((e) => e.live).map((e) => ({
+        ico: GLYPHS[e.kind] || GLYPHS.agent, title: extName(e), sub: `${e.app || KIND_LABEL[e.kind] || e.kind} · ${machineName(e.machine)}`,
+        meta: EXT_STATE[e.status] || "运行中", dot: e.status || "unknown",
+        run: () => { location.hash = "#/x/" + encodeURIComponent(e.id); },
+      })),
+      ...state.shells.map((s) => ({
+        ico: GLYPHS.shell, title: s.workspace_label || base(tilde(s.cwd)), sub: `终端 · ${machineName(s.machine)} · ${tilde(s.cwd)}`,
+        meta: "终端", dot: "shell",
+        run: () => { location.hash = "#/p/" + encodeURIComponent(s.pane_id); },
+      })),
+    ].filter((x) => match(x.title, x.sub, x.meta));
+
+    const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
+    const recentItems = [
+      ...ext.filter((e) => !e.live).map((e) => ({
+        t: new Date(e.updated || e.started), ico: GLYPHS[e.kind] || GLYPHS.agent, title: extName(e),
+        sub: `${e.app || KIND_LABEL[e.kind] || e.kind} · ${machineName(e.machine)} · ${tilde(e.cwd)}`, meta: ago(e.updated || e.started),
+        run: () => { location.hash = "#/x/" + encodeURIComponent(e.id); },
+      })),
+      ...hist.filter((h) => !collieRan(h.name)).map((h) => ({
+        t: new Date(h.ended), ico: GLYPHS[h.kind] || GLYPHS.agent, title: histName(h),
+        sub: `${KIND_LABEL[h.kind] || h.kind} · ${machineName(h.machine)} · ${tilde(h.cwd)}`, meta: ago(h.ended),
+        run: () => { location.hash = "#/h/" + encodeURIComponent(h.id); },
+      })),
+    ].sort((a, b) => b.t - a.t).filter((x) => match(x.title, x.sub, x.meta)).slice(0, needle ? 20 : 8);
+
+    if (liveItems.length) groups.push(["进行中的会话", liveItems]);
+    if (navActs.length) groups.push(["导航与快捷操作", navActs]);
+    if (recentItems.length) groups.push(["最近会话", recentItems]);
+    return groups;
+  }
+  function renderCmdk() {
+    const groups = buildCmdkItems(cmdkInput.value);
+    cmdkItems = [];
+    let html = "";
+    for (const [sec, list] of groups) {
+      html += `<div class="cmdk-sec">${esc(sec)}</div>`;
+      for (const it of list) {
+        const idx = cmdkItems.length;
+        cmdkItems.push(it);
+        html += `<button type="button" class="cmdk-item${idx === cmdkIdx ? " on" : ""}" data-ci="${idx}">
+          <span class="ci-ico">${it.ico}</span>
+          <span class="ci-main"><div class="ci-title">${esc(it.title)}</div><div class="ci-sub">${esc(it.sub)}</div></span>
+          <span class="ci-meta">${it.dot ? `<span class="dot ${esc(it.dot)}"></span>` : ""}${esc(it.meta || "")}</span>
+        </button>`;
+      }
+    }
+    cmdkList.innerHTML = html || `<div class="cmdk-empty">没有找到匹配的会话或操作</div>`;
+    cmdkList.querySelector(".cmdk-item.on")?.scrollIntoView({ block: "nearest" });
+  }
+  function openCmdk() {
+    if (!cmdk || !$("#app") || $("#app").hidden) return;
+    if (cmdk.open) { cmdk.close(); return; }
+    closePick();
+    cmdkInput.value = "";
+    cmdkIdx = 0;
+    renderCmdk();
+    cmdk.showModal();
+    cmdkInput.focus();
+  }
+  $("#cmdk-btn")?.addEventListener("click", openCmdk);
+  $("#cmdk-close")?.addEventListener("click", () => cmdk?.close());
+  cmdk?.addEventListener("click", (e) => {
+    if (e.target === cmdk) { cmdk.close(); return; }
+    const b = e.target.closest(".cmdk-item[data-ci]");
+    if (!b) return;
+    const it = cmdkItems[+b.dataset.ci];
+    cmdk.close();
+    it?.run();
+  });
+  cmdkInput?.addEventListener("input", () => { cmdkIdx = 0; renderCmdk(); });
+  cmdk?.addEventListener("keydown", (e) => {
+    if (!cmdkItems.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      cmdkIdx = (cmdkIdx + (e.key === "ArrowDown" ? 1 : -1) + cmdkItems.length) % cmdkItems.length;
+      renderCmdk();
+    } else if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      const it = cmdkItems[cmdkIdx];
+      cmdk.close();
+      it?.run();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      openCmdk();
+    }
+  });
+
   boot();
 })();

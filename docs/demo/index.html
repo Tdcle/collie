@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#fcfcfd" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d1016" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Collie">
@@ -28,11 +28,14 @@
 <!-- ───────────── sign in ───────────── -->
 <section id="login" class="login" hidden>
   <form class="login-card" id="login-form">
-    <img src="icon.svg" alt="" class="login-mark">
+    <div class="login-mark-wrap">
+      <img src="icon.svg" alt="" class="login-mark">
+    </div>
     <h1>Collie</h1>
-    <p class="muted">手机：扫 hub 终端里的二维码，或在已登录的设备上打开「设备 → 连接手机」。<br>也可以输入配对码或访问令牌。</p>
-    <input id="login-token" type="password" autocomplete="current-password" placeholder="配对码或访问令牌" required>
-    <button class="btn primary block" type="submit">进入</button>
+    <p class="login-sub">跨设备的多机 Agent 编排与协作总控台</p>
+    <p class="muted">手机扫 Hub 终端二维码，或在已登录设备的「设备 → 连接手机」中获取配对码；也可直接输入访问令牌。</p>
+    <input id="login-token" type="password" autocomplete="current-password" placeholder="输入 8 位配对码或访问令牌" required>
+    <button class="btn primary block" type="submit">进入控制台</button>
     <p class="login-error" id="login-error"></p>
   </form>
 </section>
@@ -44,12 +47,20 @@
     <header class="side-head">
       <a class="brand" href="#/collie">
         <img src="icon.svg" alt="">
-        <span>Collie</span>
+        <span class="brand-text">Collie</span>
       </a>
-      <button class="icon-btn" id="new-btn" title="新建 Agent">
+      <button class="icon-btn new-session-btn" id="new-btn" title="新建 Agent 或终端">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
       </button>
     </header>
+
+    <div class="side-search">
+      <button type="button" class="cmdk-btn" id="cmdk-btn" title="快速搜索会话、切换电脑或执行操作">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M19.5 19.5l-3.6-3.6"/></svg>
+        <span>搜索会话或跳转…</span>
+        <kbd id="cmdk-kbd">⌘K</kbd>
+      </button>
+    </div>
 
     <nav class="side-nav">
       <a class="nav-item" id="nav-collie" href="#/collie">
@@ -59,14 +70,15 @@
       </a>
       <a class="nav-item" id="nav-auto" href="#/auto">
         <span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6M18 7h2M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/></svg></span>
-        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">收件箱 · 定时 · 接入</div></span>
+        <span class="body"><div class="name">自动化</div><div class="sub" id="nav-auto-sub">收件箱 · 定时 · 记忆 · 设置</div></span>
         <span class="count-pill" id="nav-queue" hidden></span>
       </a>
     </nav>
 
     <div class="side-scroll">
+      <div class="m-filter" id="machine-filter" hidden></div>
       <section class="group" id="attention-group" hidden>
-        <h2>需要你</h2>
+        <h2>需要你处理</h2>
         <ul class="list attn" id="attention"></ul>
       </section>
       <section class="group" id="live-group">
@@ -74,7 +86,7 @@
         <ul class="list" id="live-list"></ul>
       </section>
       <section class="group" id="recent-group" hidden>
-        <h2>最近</h2>
+        <h2>最近会话</h2>
         <ul class="list" id="recent-list"></ul>
       </section>
       <details class="group" id="shell-group">
@@ -84,22 +96,24 @@
     </div>
 
     <div class="local-app" id="local-app" hidden>
-      <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie app 中打开</span></a>
+      <a href="#" id="local-app-open"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 8h18M8 21h8"/></svg><span>在 Collie 应用中打开</span></a>
       <button class="icon-btn" id="local-app-x" title="不再提示"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <footer class="side-foot">
-      <a class="foot-status" href="#/devices" id="nav-devices" title="设备">
-        <span class="conn" id="conn"></span><span class="update-note" id="update-note" hidden>有新版</span><span id="herdr-status" class="muted">connecting…</span>
+      <a class="foot-status" href="#/devices" id="nav-devices" title="管理已连接的电脑与手机">
+        <span class="conn" id="conn"></span><span class="update-note" id="update-note" hidden>有新版</span><span id="herdr-status" class="muted">连接中…</span>
       </a>
-      <a class="icon-btn" href="#/devices" title="设备与连接">
-        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="13" height="10" rx="1.5"/><path d="M7 18h5M9.5 14v4"/><rect x="17" y="9" width="5" height="11" rx="1.2"/></svg>
-      </a>
-      <a class="icon-btn" href="#/prefs" id="nav-prefs" title="偏好设置">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      </a>
-      <button class="icon-btn" id="logout" title="退出">
-        <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>
-      </button>
+      <div class="foot-acts">
+        <button type="button" class="icon-btn" id="theme-btn" title="切换外观主题">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+        <a class="icon-btn" href="#/prefs" id="nav-prefs" title="偏好设置">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </a>
+        <button class="icon-btn" id="logout" title="退出登录">
+          <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>
+        </button>
+      </div>
     </footer>
   </aside>
 
@@ -110,12 +124,26 @@
       <header class="d-head">
         <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
         <div class="d-title">
-          <div class="d-name">Collie <button type="button" class="router-pill" id="router-cfg-btn" title="点这里切换 Collie 自己运行在哪台电脑、用什么模型"><span id="router-kind"></span><span class="rp-sep" id="router-where-sep" hidden>·</span><span id="router-where" hidden></span><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button></div>
-          <div class="d-meta"><span class="status" id="router-status"></span><span class="muted" id="router-model"></span><span class="muted" id="router-queue"></span><span class="muted ctx" id="router-ctx"></span></div>
+          <div class="d-name">
+            <span>Collie</span>
+            <button type="button" class="router-pill" id="router-cfg-btn" title="切换 Collie 自己运行在哪台电脑、使用什么模型">
+              <span id="router-kind"></span><span class="rp-sep" id="router-where-sep" hidden>·</span><span id="router-where" hidden></span>
+              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg>
+            </button>
+          </div>
+          <div class="d-meta">
+            <span class="status" id="router-status"></span>
+            <span class="muted" id="router-model"></span>
+            <span class="muted" id="router-queue"></span>
+            <span class="muted ctx" id="router-ctx"></span>
+          </div>
         </div>
+        <button type="button" class="icon-btn head-term-btn" data-act="router-open" title="查看 Collie 后台终端">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7.5 10l3 2.5-3 2.5M12.5 15h4"/></svg>
+        </button>
         <div class="menu-wrap">
-          <button class="icon-btn" data-menu="collie-menu" title="更多">
-            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          <button class="icon-btn" data-menu="collie-menu" title="更多操作">
+            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
           </button>
           <div class="menu" id="collie-menu" hidden>
             <button data-act="router-cfg">切换 Collie 的模型与电脑</button>
@@ -129,10 +157,13 @@
       </header>
 
       <div class="router-pop" id="router-pop" hidden>
-        <form id="router-quick-form">
+        <form id="router-quick-form" class="rp-card">
           <div class="rp-head">
-            <b>Collie 自己（大脑与总管）</b>
-            <span>负责和你对话、理解意图、拆活与汇报；保存后立即生效。</span>
+            <div class="rp-head-main">
+              <span class="rp-badge">大脑配置</span>
+              <b>Collie 协调中枢</b>
+            </div>
+            <span>负责与你对话、理解意图、拆解任务与汇总结果；保存后立即生效。</span>
           </div>
           <div class="rp-grid">
             <label id="rq-machine-wrap">运行电脑<select name="router_machine" data-title="Collie 自己运行在哪台电脑"></select></label>
@@ -141,7 +172,7 @@
             <label>思考强度<select name="router_effort" data-title="思考强度"></select></label>
           </div>
           <div class="rp-foot">
-            <label class="rp-sync"><input type="checkbox" name="sync_worker"> 顺便同步为「派活默认」</label>
+            <label class="rp-sync"><input type="checkbox" name="sync_worker"> 顺便同步为底部「派活默认」</label>
             <span class="spacer"></span>
             <button type="button" class="btn small" id="rq-cancel">取消</button>
             <button type="submit" class="btn primary small" id="rq-save">保存并生效</button>
@@ -157,21 +188,26 @@
 
       <form class="composer" id="super-composer">
         <div class="cbox">
-          <div class="re-draft" id="re-draft" hidden><span class="re-who">Collie</span><span class="re-t"></span><button type="button" title="不引用了">×</button></div>
+          <div class="re-draft" id="re-draft" hidden><span class="re-who">Collie</span><span class="re-t"></span><button type="button" title="取消引用">×</button></div>
           <div class="files" hidden></div>
-          <textarea id="super-input" rows="1" placeholder="告诉 Collie 你要做什么…" enterkeyhint="send"></textarea>
+          <textarea id="super-input" rows="1" placeholder="告诉 Collie 你要做什么，让它拆解并派给合适的电脑执行…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button type="button" class="icon-btn attach" title="添加图片或文件（支持粘贴与拖拽）">
+              <svg viewBox="0 0 24 24"><path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48"/></svg>
+            </button>
             <div class="chips">
-            <span class="cbar-label" id="cbar-label" title="Collie 派出去执行具体任务时使用的电脑、agent 和模型（会自动记住上次选择）。想改 Collie 自己对话用的模型，点顶部标题旁边的按钮">执行任务</span>
-            <select id="t-machine" data-pick="chip" data-title="执行任务的电脑" title="执行任务的电脑"></select>
-            <select id="t-kind" data-pick="chip" data-title="执行任务的 agent" title="执行任务的 agent"></select>
-            <select id="t-model" data-pick="chip" data-title="执行任务的模型" title="执行任务的模型"></select>
-            <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
-            <button type="button" class="chip-reset" id="t-reset" hidden title="恢复为默认设置">恢复默认</button>
+              <span class="cbar-label" id="cbar-label" title="Collie 派出去执行具体任务时使用的电脑、agent 和模型（自动记住上次选择）。想改 Collie 自己对话用的模型，点击顶部标题旁的胶囊">
+                <svg viewBox="0 0 24 24"><path d="M5 12h13M13 7l5 5-5 5"/></svg>派活至
+              </span>
+              <select id="t-machine" data-pick="chip" data-title="执行任务的电脑" title="执行任务的电脑"></select>
+              <select id="t-kind" data-pick="chip" data-title="执行任务的 agent" title="执行任务的 agent"></select>
+              <select id="t-model" data-pick="chip" data-title="执行任务的模型" title="执行任务的模型"></select>
+              <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
+              <button type="button" class="chip-reset" id="t-reset" hidden title="恢复为默认派活设置">恢复默认</button>
             </div>
             <span class="spacer"></span>
-            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            <span class="send-hint" id="super-send-hint"></span>
+            <button class="send" type="submit" title="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
         <input type="file" multiple hidden>
@@ -182,15 +218,17 @@
     <section class="view" id="v-auto" hidden>
       <header class="d-head">
         <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
-        <div class="d-title"><div class="d-name">自动化</div><div class="d-meta muted">Always-on：事件进来，Collie 决定谁去做</div></div>
+        <div class="d-title"><div class="d-name">自动化</div><div class="d-meta muted">全天候事件中枢：外部消息与定时任务进来，由 Collie 决策与分发</div></div>
       </header>
-      <div class="tabs" id="auto-tabs">
-        <button data-tab="inbox" class="on">收件箱</button>
-        <button data-tab="threads">线程</button>
-        <button data-tab="timers">定时</button>
-        <button data-tab="memory">记忆</button>
-        <button data-tab="hooks">接入</button>
-        <button data-tab="settings">设置</button>
+      <div class="tabs-bar">
+        <div class="tabs" id="auto-tabs">
+          <button data-tab="inbox" class="on">收件箱</button>
+          <button data-tab="threads">线程</button>
+          <button data-tab="timers">定时</button>
+          <button data-tab="memory">记忆</button>
+          <button data-tab="hooks">接入</button>
+          <button data-tab="settings">设置</button>
+        </div>
       </div>
       <div class="auto-body" id="auto-body"></div>
     </section>
@@ -199,7 +237,7 @@
     <section class="view" id="v-devices" hidden>
       <header class="d-head">
         <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
-        <div class="d-title"><div class="d-name">设备</div><div class="d-meta muted">这台 hub 管着哪些电脑，谁能连进来</div></div>
+        <div class="d-title"><div class="d-name">设备与节点</div><div class="d-meta muted">管理接入这台 Hub 的各台电脑、手机与浏览器访问权限</div></div>
       </header>
       <div class="auto-body" id="devices-body"></div>
     </section>
@@ -223,13 +261,13 @@
           <div class="cbar">
             <span class="muted x-hint" id="x-hint"></span>
             <span class="spacer"></span>
-            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            <button class="send" type="submit" title="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
       </form>
       <div class="ext-bar">
         <p id="x-note"></p>
-        <button class="btn small" id="x-forget" hidden>移除</button>
+        <button class="btn small" id="x-forget" hidden>移除记录</button>
         <button class="btn primary small" id="x-takeover">在 herdr 里接管</button>
       </div>
     </section>
@@ -238,7 +276,7 @@
     <section class="view" id="v-prefs" hidden>
       <header class="d-head">
         <a class="icon-btn back" href="#/" title="返回"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></a>
-        <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">只影响这台设备上的这个浏览器</div></div>
+        <div class="d-title"><div class="d-name">偏好设置</div><div class="d-meta muted">仅作用于当前设备上的这个浏览器</div></div>
       </header>
       <div class="auto-body" id="prefs-body"></div>
     </section>
@@ -257,13 +295,13 @@
           <button data-mode="log">日志</button>
         </div>
         <div class="menu-wrap">
-          <button class="icon-btn" data-menu="more-menu" title="更多">
-            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          <button class="icon-btn" data-menu="more-menu" title="更多操作">
+            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
           </button>
           <div class="menu" id="more-menu" hidden>
-            <button data-act="interrupt">中断 (Ctrl-C)</button>
-            <button data-act="shell-here">在这个目录开个终端</button>
-            <button data-act="copy">复制 pane ID</button>
+            <button data-act="interrupt">中断进程 (Ctrl-C)</button>
+            <button data-act="shell-here">在此目录新建终端</button>
+            <button data-act="copy">复制 Pane ID</button>
             <hr>
             <button data-act="close" class="danger">关闭工作区</button>
           </div>
@@ -276,10 +314,10 @@
           <div class="live" id="live" hidden></div>
         </div>
         <div class="screen" id="screen"></div>
-        <div class="screen-hint" id="screen-hint">点终端即可输入</div>
+        <div class="screen-hint" id="screen-hint">点击终端即可直接输入</div>
         <pre class="log" id="log"></pre>
-        <button class="jump" id="jump" hidden><svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
-        <div class="gone" id="gone" hidden>这个 pane 已经关闭。</div>
+        <button class="jump" id="jump" hidden title="滚到底部"><svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
+        <div class="gone" id="gone" hidden>这个工作区窗格已关闭。</div>
       </div>
 
       <div class="keys" id="keys">
@@ -305,12 +343,14 @@
           <div class="files" hidden></div>
           <textarea id="input" rows="1" placeholder="给 agent 发消息…" enterkeyhint="send"></textarea>
           <div class="cbar">
-            <button type="button" class="icon-btn attach" title="添加图片或文件"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-            <button type="button" class="icon-btn kbd-toggle" id="kbd-toggle" title="按键">
+            <button type="button" class="icon-btn attach" title="添加图片或文件">
+              <svg viewBox="0 0 24 24"><path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48"/></svg>
+            </button>
+            <button type="button" class="icon-btn kbd-toggle" id="kbd-toggle" title="快捷按键栏">
               <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>
             </button>
             <span class="spacer"></span>
-            <button class="send" type="submit" title="发送 (Enter)"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+            <button class="send" type="submit" title="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
         <input type="file" multiple hidden>
@@ -336,11 +376,11 @@
 <dialog class="sheet" id="launch">
   <form method="dialog" id="launch-form">
     <header class="sheet-head">
-      <h3 id="launch-title">新建</h3>
+      <h3 id="launch-title">新建独立会话</h3>
       <button class="icon-btn" value="cancel" formnovalidate title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
     <div class="sheet-body">
-      <p class="sheet-note muted" id="launch-note">想让 Collie 拆解并派活？直接在「和 Collie 对话」里说就行。这里是手动启动一个独立的 agent，或开一个终端。</p>
+      <p class="sheet-note muted" id="launch-note">想让 Collie 自动拆解并跨电脑派活？直接在「和 Collie 对话」里发话即可。这里是手动在指定电脑上启动一个独立 Agent 或终端。</p>
       <div class="field">
         <label>类型</label>
         <div class="kinds" id="kinds">
@@ -355,30 +395,30 @@
         </div>
       </div>
       <div class="field" id="l-machine-field" hidden>
-        <label>在哪台电脑上</label>
+        <label>目标电脑</label>
         <div class="machine-pick" id="l-machines"></div>
       </div>
       <div class="field agent-only">
-        <label for="l-model">模型 <span class="muted">可选</span></label>
+        <label for="l-model">模型与思考强度 <span class="muted">可选</span></label>
         <div class="model-row"><select id="l-model"></select><select id="l-effort"></select></div>
       </div>
       <div class="field agent-only">
-        <label for="l-name">名字 <span class="muted">可选</span></label>
-        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="不填就用会话自己的标题" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <small class="muted">想用命令行或让 Collie 按名字找它时再起，小写字母开头，可含数字、- 和 _</small>
+        <label for="l-name">固定代号 <span class="muted">可选</span></label>
+        <input id="l-name" pattern="[a-z][a-z0-9_\-]{0,31}" placeholder="留空则自动使用对话主题命名" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <small class="muted">需要在命令行或让 Collie 按名字寻址它时再填（小写字母开头，可含数字、- 和 _）</small>
       </div>
       <div class="field">
-        <label for="l-cwd">目录</label>
+        <label for="l-cwd">工作目录</label>
         <div class="dir">
           <input id="l-cwd" class="mono" value="~" autocomplete="off" autocapitalize="off" spellcheck="false">
-          <button type="button" class="icon-btn" id="dir-up" title="上一级"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+          <button type="button" class="icon-btn" id="dir-up" title="返回上一级目录"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
         </div>
         <div class="recent" id="recent"></div>
         <ul class="dirs" id="dirs"></ul>
       </div>
       <div class="field agent-only">
-        <label for="l-prompt">第一个任务 <span class="muted">（可选）</span></label>
-        <textarea id="l-prompt" rows="3" placeholder="例如：跑一遍测试，修掉失败的用例"></textarea>
+        <label for="l-prompt">首条任务指令 <span class="muted">可选</span></label>
+        <textarea id="l-prompt" rows="3" placeholder="例如：跑一遍单元测试，定位并修复失败的用例"></textarea>
       </div>
       <p class="form-error" id="launch-error"></p>
     </div>
@@ -387,6 +427,23 @@
       <button class="btn primary" id="launch-go" value="go">启动</button>
     </footer>
   </form>
+</dialog>
+
+<!-- ───────────── command palette (⌘K / Ctrl+K) ───────────── -->
+<dialog class="cmdk" id="cmdk">
+  <div class="cmdk-box">
+    <div class="cmdk-head">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M19.5 19.5l-3.6-3.6"/></svg>
+      <input id="cmdk-input" type="text" placeholder="搜索会话、电脑、设置或快捷操作…" autocomplete="off" spellcheck="false">
+      <button type="button" class="cmdk-esc" id="cmdk-close">Esc</button>
+    </div>
+    <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
+    <div class="cmdk-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+      <span><kbd>↵</kbd> 前往</span>
+      <span><kbd>Esc</kbd> 关闭</span>
+    </div>
+  </div>
 </dialog>
 
 <div class="toasts" id="toasts"></div>
