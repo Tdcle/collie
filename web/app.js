@@ -440,11 +440,11 @@
   const base = (p) => cleanPath(p).replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "~";
   // A cloud Hub with neither herdr nor agents installed is a pure relay server:
   // don't count it as a runnable computer or offer it as an agent execution target.
-  const isAgentlessHub = (m) => !!(m?.local && !localState.ok && Array.isArray(m.agents) && m.agents.length === 0);
-  const runnableMachines = (keepId = "") => (state.machines || [{ id: "", name: "本机", local: true }]).filter((m) => {
+  const isAgentlessHub = (m) => !!(m?.local && !m.online && Array.isArray(m.agents) && m.agents.length === 0);
+  const runnableMachines = (keepId = "") => (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]).filter((m) => {
     if (m.hub) return false;
     if (m.id === keepId && (!isAgentlessHub(m) || !(state.machines || []).some((x) => !x.local))) return true;
-    return m.local ? !isAgentlessHub(m) && state.ok !== false : m.online;
+    return m.local ? !isAgentlessHub(m) && m.online !== false : m.online;
   });
   function title(v) {
     if (!v) return "";
@@ -483,7 +483,7 @@
     $("#shell-count").textContent = state.shells.length || "";
     $("#shell-group").hidden = state.shells.length === 0;
 
-    const online = countMachines.filter((m) => m.local ? state.ok : m.online).length;
+    const online = countMachines.filter((m) => m.local ? m.online !== false && state.ok : m.online).length;
     $("#conn").className = "conn " + (online ? "on" : "off");
     $("#herdr-status").textContent = !online ? (allMachines.some((m) => !m.local) ? `0/${countMachines.length} 台电脑在线` : "herdr 不可用")
       : countMachines.length > 1 || allMachines.some((m) => !m.local) ? `${online}/${countMachines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
