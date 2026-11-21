@@ -118,6 +118,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/router-sync", wrap(s.routerSync))
 	mux.Handle("POST /api/router-sync", wrap(s.routerSync))
+	mux.Handle("POST /api/exec", wrap(s.nodeExec))
 	mux.Handle("GET /api/transcript", wrap(s.getTranscript))
 	mux.Handle("POST /api/seen", wrap(s.seenPane))
 	mux.Handle("GET /api/external", wrap(s.listExternal))

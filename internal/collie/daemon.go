@@ -197,16 +197,19 @@ func daemonSupervisor(name string, subArgs []string) {
 		return false
 	}
 
+	stripOld := func(p string) string {
+		low := strings.ToLower(p)
+		if i := strings.Index(low, ".exe.old"); i > 0 {
+			return p[:i+4]
+		}
+		return strings.TrimSuffix(p, ".old")
+	}
+	exe = stripOld(exe)
+
 	backoff := 2 * time.Second
 	for !stopping() {
 		// Re-resolve exe on every iteration so selfUpdate's replaced binary is picked up.
 		runExe := exe
-		if strings.HasSuffix(strings.ToLower(runExe), ".old") {
-			cand := strings.TrimSuffix(runExe, ".old")
-			if isFile(cand) {
-				runExe = cand
-			}
-		}
 		lf := openRotatedLog(logFile)
 		start := time.Now()
 		cmd := exec.Command(runExe, append([]string{subcmd}, subArgs...)...)
@@ -240,8 +243,18 @@ func daemonSupervisor(name string, subArgs []string) {
 					_ = os.Remove(stopFile)
 					return
 				}
-				// Clean exit (e.g. selfUpdate): restart right away with the new binary.
+				// Clean exit (e.g. selfUpdate): if this supervisor itself was renamed
+				// to .old, hand off supervision to the fresh binary so .old unlocks.
 				if err == nil {
+					if curExe, e := os.Executable(); e == nil && strings.Contains(strings.ToLower(curExe), ".old") && isFile(runExe) {
+						nextCmd := exec.Command(runExe, append([]string{"daemon", "run", name, "--"}, subArgs...)...)
+						nextCmd.Dir = home
+						detachCmd(nextCmd)
+						if nextCmd.Start() == nil {
+							_ = nextCmd.Process.Release()
+							return
+						}
+					}
 					backoff = 2 * time.Second
 					time.Sleep(500 * time.Millisecond)
 					goto nextRun

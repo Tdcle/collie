@@ -19,7 +19,7 @@ import (
 var cliCommands = map[string]func([]string) error{
 	"reply": cliReply, "spawn": cliSpawn, "send": cliSend, "report": cliReport,
 	"subscribe": cliSubscribe, "stop": cliStop, "answer": cliAnswer, "show": cliShow, "list": cliList,
-	"timer": cliTimer, "say": cliSay, "hook": cliHook, "pair": cliPair,
+	"timer": cliTimer, "say": cliSay, "hook": cliHook, "pair": cliPair, "exec": cliExec,
 }
 
 func collieDir() string {
@@ -193,6 +193,11 @@ func cliSay(args []string) error {
 	return err
 }
 
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, " ") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
 func cliSpawn(args []string) error {
 	fs := flag.NewFlagSet("spawn", flag.ExitOnError)
 	kind := fs.String("kind", "", "claude | codex | antigravity (default from settings)")
@@ -202,6 +207,8 @@ func cliSpawn(args []string) error {
 	machine := fs.String("machine", "", "which computer (see `collie list`; default from settings)")
 	model := fs.String("model", "", "model to launch with (default from settings for the default kind)")
 	effort := fs.String("effort", "", "thinking effort: low | medium | high | xhigh | max ...")
+	var extraArgs multiFlag
+	fs.Var(&extraArgs, "arg", "extra flag passed to the agent CLI (repeatable, e.g. -arg -c -arg service_tier=\"fast\")")
 	sub := fs.Bool("subscribe", false, "route later events of --thread straight to this worker")
 	resume := fs.String("resume", "", "a stopped worker to carry on from: its computer, directory and conversation")
 	fs.Parse(args)
@@ -210,6 +217,9 @@ func cliSpawn(args []string) error {
 		return err
 	}
 	body := map[string]any{"kind": *kind, "cwd": *cwd, "name": *name, "task": t, "by": by(), "model": *model, "effort": *effort, "resume": *resume}
+	if len(extraArgs) > 0 {
+		body["args"] = []string(extraArgs)
+	}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "subscribe" {
 			body["subscribe"] = *sub
@@ -226,6 +236,39 @@ func cliSpawn(args []string) error {
 		printResult(b)
 	}
 	return err
+}
+
+func cliExec(args []string) error {
+	fs := flag.NewFlagSet("exec", flag.ExitOnError)
+	machine := fs.String("machine", "", "which computer (see `collie list`)")
+	cwd := fs.String("cwd", "", "working directory on that computer")
+	timeout := fs.Int("timeout", 60, "timeout in seconds (max 180)")
+	fs.Parse(args)
+	cmd, err := textArg(fs)
+	if err != nil {
+		return err
+	}
+	b, err := cliCall("POST", "/api/super/exec", map[string]any{
+		"machine": *machine, "cwd": *cwd, "command": cmd, "timeout_sec": *timeout,
+	})
+	if err != nil {
+		return err
+	}
+	var r execResp
+	if json.Unmarshal(b, &r) == nil {
+		if r.Output != "" {
+			fmt.Print(r.Output)
+			if !strings.HasSuffix(r.Output, "\n") {
+				fmt.Println()
+			}
+		}
+		if r.ExitCode != 0 {
+			return fmt.Errorf("exit status %d", r.ExitCode)
+		}
+		return nil
+	}
+	printResult(b)
+	return nil
 }
 
 func by() string {
@@ -433,10 +476,11 @@ only ever talks to you. You keep the big picture; workers do the work.
 
 ## Tools (run in your shell)
 - ` + "`{{BIN}} reply \"text\"`" + ` — message the human (add --thread X for another thread).
-- ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--thread T] [--name N] \"task brief\"`" + `
+- ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--arg FLAG]... [--thread T] [--name N] \"task brief\"`" + `
   starts a worker asynchronously and returns immediately. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
-  Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them. Use --machine when the human names a
-  computer or the code lives there (cwd is then a path on that computer; "~" is its home).
+  Several computers may be connected; ` + "`{{BIN}} list`" + ` shows them and their installed agents. Use --machine when the human names a
+  computer or the code lives there (cwd is then a path on that computer; "~" is its home; skip ` + "`relay-only`" + ` machines).
+  Use repeatable ` + "`--arg`" + ` when an agent CLI needs extra startup flags (e.g. ` + "`--arg -c --arg 'service_tier=\"fast\"'`" + `).
   Write a complete, self-contained brief: goal, context, constraints, what "done" means.
   When notes/ has something the task can reuse (where the data is, how it was done last
   time, a pitfall), put it in the brief: the note's full path for a worker on this
@@ -457,11 +501,11 @@ only ever talks to you. You keep the big picture; workers do the work.
   directory, so a follow-up on earlier work carries on with everything it knew. Spawn
   fresh for a new job.
 - ` + "`{{BIN}} list`" + ` — workers, threads, timers.
-- ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, worker name).
+- ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, or worker name — for a worker it also includes its recent terminal output across any connected computer).
   Results contain further ids: follow them hop by hop to recall older context.
+- ` + "`{{BIN}} exec [--machine M] [--cwd DIR] [--timeout SEC] \"command\"`" + ` — run a bounded shell command on a connected computer **only** when every coding agent CLI on that computer fails to start or is out of quota (e.g. to upgrade/repair a broken CLI itself or check why agents won't launch). Always delegate normal coding and investigation tasks via ` + "`spawn`" + `.
 - ` + "`{{BIN}} timer add \"every 2h|daily 09:00|weekdays 09:00|weekly mon,thu 09:00|in 30m|at 2026-11-18 09:00\" \"text\" [--to WORKER]`" + `
   schedules a future event (follow-ups, recurring checks); ` + "`timer ls`" + `, ` + "`timer rm ID`" + `.
-- To read a worker's terminal: ` + "`herdr agent read WORKER --source recent-unwrapped --lines 80`" + `.
 
 ## Events
 - Events are batched while you are busy; handle all of them in one turn.

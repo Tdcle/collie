@@ -45,6 +45,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("POST /api/super/dream", s.superDream)
 	api("POST /api/super/router/restart", s.superRestartRouter)
+	api("POST /api/super/exec", s.superExec)
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
 }
 
@@ -336,17 +337,18 @@ func replyLen(s string) int {
 
 func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Kind      string  `json:"kind"`
-		Cwd       string  `json:"cwd"`
-		Task      string  `json:"task"`
-		Thread    string  `json:"thread"`
-		Name      string  `json:"name"`
-		By        string  `json:"by"`
-		Machine   *string `json:"machine"`
-		Model     string  `json:"model"`
-		Effort    string  `json:"effort"`
-		Subscribe *bool   `json:"subscribe"`
-		Resume    string  `json:"resume"` // a stopped worker to carry on from
+		Kind      string   `json:"kind"`
+		Cwd       string   `json:"cwd"`
+		Task      string   `json:"task"`
+		Thread    string   `json:"thread"`
+		Name      string   `json:"name"`
+		By        string   `json:"by"`
+		Machine   *string  `json:"machine"`
+		Model     string   `json:"model"`
+		Effort    string   `json:"effort"`
+		Args      []string `json:"args"`
+		Subscribe *bool    `json:"subscribe"`
+		Resume    string   `json:"resume"` // a stopped worker to carry on from
 	}
 	if !decode(w, r, &body) {
 		return
@@ -398,7 +400,7 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	} else if body.Machine != nil {
 		machine = s.machineByName(*body.Machine)
 	}
-	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, sub, session)
+	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, body.Args, sub, session)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
@@ -544,6 +546,7 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 		s.herdr.Call(r.Context(), "workspace.close", map[string]any{"workspace_id": wk.WorkspaceID}, nil)
 	}
 	sp.mu.Lock()
+	delete(sp.workerAskedAt, wk.Name)
 	wk.Ended, wk.Status = true, "gone"
 	for _, th := range sp.st.Threads {
 		th.Subscribers = remove(th.Subscribers, wk.Name)
@@ -559,6 +562,21 @@ func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(out, "thread ") {
 			if older := threadHistory(s.sup.db, id, 1<<62, 40); len(older) > 15 {
 				out += fmt.Sprintf("  … %d older triggers in history (SQLite)\n", len(older)-15)
+			}
+		} else if strings.HasPrefix(out, "worker ") {
+			s.sup.mu.Lock()
+			wk := s.sup.st.Workers[id]
+			pane := ""
+			if wk != nil {
+				pane = wk.PaneID
+			}
+			s.sup.mu.Unlock()
+			if pane != "" {
+				cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				if rr, err := s.herdr.Read(cctx, pane, "recent_unwrapped", "text", 50); err == nil && strings.TrimSpace(rr.Text) != "" {
+					out += "\nrecent screen:\n" + tailLines(rr.Text, 35) + "\n"
+				}
+				cancel()
 			}
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

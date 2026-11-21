@@ -51,10 +51,11 @@ type Super struct {
 	handover    *handover            // set while the router writes its memory before a fresh session
 	dream       *dreamRun            // set while Collie sleeps and a dream session tidies its memory
 	lastTrust   map[string]time.Time // pane → when its trust dialog was last answered
-	lastScreen  map[string]screenMark
-	transcripts map[string]*transcript
-	noAgent     map[string]time.Time // worker → since when its pane has had no agent in it
-	notifyBuf   []notice
+	lastScreen    map[string]screenMark
+	transcripts   map[string]*transcript
+	noAgent       map[string]time.Time // worker → since when its pane has had no agent in it
+	workerAskedAt map[string]time.Time // worker → when its latest prompt was delivered
+	notifyBuf     []notice
 	notifyAt    time.Time
 	seenAt      time.Time // when a page of Collie was last open in front of you
 	seenURL     string    // where that page was, for the link in a notification
@@ -80,10 +81,11 @@ func newSuper(s *Server, dir string) (*Super, error) {
 	bin = stableBin(bin, dir)
 	sp := &Super{
 		s: s, dir: dir, bin: bin,
-		subs:        map[chan struct{}]bool{},
-		lastScreen:  map[string]screenMark{},
-		transcripts: map[string]*transcript{},
-		noAgent:     map[string]time.Time{},
+		subs:          map[chan struct{}]bool{},
+		lastScreen:    map[string]screenMark{},
+		transcripts:   map[string]*transcript{},
+		noAgent:       map[string]time.Time{},
+		workerAskedAt: map[string]time.Time{},
 	}
 	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
 	if err != nil {
@@ -320,21 +322,29 @@ func (sp *Super) tick(parent context.Context) {
 		a, alive := live[w.Name]
 		if !alive {
 			if w.Status != "starting" && w.Status != "failed" {
+				delete(sp.noAgent, w.Name)
+				delete(sp.workerAskedAt, w.Name)
 				w.Ended, w.Status = true, "gone"
-				sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s exited (its herdr pane is gone).", w.Name), "", "", w.Name)
-				sp.addEntryLocked("event", w.Thread, w.Name+" 已退出", w.Name, "info")
+				for _, t := range sp.st.Triggers {
+					if t.Status == "queued" && len(t.Targets) == 1 && t.Targets[0] == w.Name && t.Source == "system" {
+						t.Status = "ignored"
+					}
+				}
+				dead = append(dead, w)
+				sp.changed()
 			}
 			continue
 		}
-		// No agent in the pane for a while: it failed to start (a broken
-		// install, a bad flag) or quit. Messages for it would wait forever.
+		// No agent in the pane for a few seconds after launch: it failed to start
+		// (a broken config/install, a bad flag) or quit right back to the shell.
 		if a.Kind == "" {
 			since, seen := sp.noAgent[w.Name]
 			if !seen {
 				sp.noAgent[w.Name], since = now, now
 			}
-			if now.Sub(since) > 30*time.Second && now.Sub(w.CreatedAt) > 45*time.Second {
+			if w.Status != "starting" && now.Sub(since) > 5*time.Second && now.Sub(w.CreatedAt) > 6*time.Second {
 				delete(sp.noAgent, w.Name)
+				delete(sp.workerAskedAt, w.Name)
 				w.Ended, w.Status, w.PaneID = true, "failed", a.Pane
 				for _, t := range sp.st.Triggers {
 					if t.Status == "queued" && len(t.Targets) == 1 && t.Targets[0] == w.Name {
@@ -352,6 +362,7 @@ func (sp *Super) tick(parent context.Context) {
 			sp.dirty = true
 		}
 		prev := w.Status
+		asked := sp.workerAskedAt[w.Name]
 		if a.Status != prev {
 			w.Status = a.Status
 			w.PaneID = a.Pane
@@ -359,10 +370,25 @@ func (sp *Super) tick(parent context.Context) {
 			switch {
 			case a.Status == "blocked":
 				fin = append(fin, finished{w, true})
-			case prev == "working" && (a.Status == "done" || a.Status == "idle"):
+			case (prev == "working" || prev == "waiting") && (a.Status == "done" || a.Status == "idle"):
+				delete(sp.workerAskedAt, w.Name)
 				if now.Sub(w.ReportAt) > 90*time.Second {
 					fin = append(fin, finished{w, false})
 				}
+			case !asked.IsZero() && (a.Status == "done" || a.Status == "idle"):
+				// Fast sub-tick turn or immediate API error (e.g. 402 Insufficient Balance in <1s)
+				// that finished before tick() ever observed "working".
+				delete(sp.workerAskedAt, w.Name)
+				if now.Sub(w.ReportAt) > 90*time.Second {
+					fin = append(fin, finished{w, false})
+				}
+			}
+		} else if !asked.IsZero() && (a.Status == "done" || a.Status == "idle") && now.Sub(asked) >= 5*time.Second {
+			// Prompt was delivered, status never left idle/done for 5s+: check for
+			// immediate agent error or fast silent completion.
+			delete(sp.workerAskedAt, w.Name)
+			if now.Sub(w.ReportAt) > 90*time.Second {
+				fin = append(fin, finished{w, false})
 			}
 		}
 	}
@@ -468,6 +494,12 @@ func (sp *Super) rerouteToRouter(target string, list []*Trigger) {
 		return // still launching
 	}
 	for _, t := range list {
+		// Never reroute a worker's own initial system brief ("You are worker X...")
+		// back to Collie Router when X dies before receiving it.
+		if t.Source == "system" && t.From == routerName && len(t.Targets) == 1 && t.Targets[0] == target {
+			t.Status = "ignored"
+			continue
+		}
 		t.Targets = replace(t.Targets, target, routerName)
 	}
 	sp.changed()
@@ -551,6 +583,8 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	}
 	if target == routerName && sp.routerAskedAt.IsZero() {
 		sp.routerAskedAt = time.Now() // a message mid-turn keeps the turn's start
+	} else if target != routerName {
+		sp.workerAskedAt[target] = time.Now()
 	}
 	for _, t := range list {
 		t.Targets = remove(t.Targets, target)
@@ -578,32 +612,49 @@ func indent(s, p string) string {
 // workerSettled turns a worker reaching done/blocked into a router trigger,
 // carrying a short summary from the worker's transcript or screen.
 // workerDead tells the router and the human that a worker's agent isn't
-// running, with what its screen says (usually the error it died with).
+// running (or exited prematurely), reading what its screen says before closing
+// any leftover shell workspace.
 func (sp *Super) workerDead(ctx context.Context, w *Worker) {
 	tail := ""
-	if res, err := sp.s.herdr.Read(ctx, w.PaneID, "recent_unwrapped", "text", 40); err == nil {
-		var keep []string
-		for _, l := range strings.Split(res.Text, "\n") {
-			if l = strings.TrimRight(l, " "); strings.TrimSpace(l) != "" {
-				keep = append(keep, l)
+	if w.PaneID != "" {
+		if res, err := sp.s.herdr.Read(ctx, w.PaneID, "recent_unwrapped", "text", 40); err == nil {
+			var keep []string
+			for _, l := range strings.Split(res.Text, "\n") {
+				if l = strings.TrimRight(l, " \r"); strings.TrimSpace(l) != "" {
+					keep = append(keep, l)
+				}
 			}
+			if len(keep) > 12 {
+				keep = keep[len(keep)-12:]
+			}
+			tail = strings.Join(keep, "\n")
 		}
-		if len(keep) > 12 {
-			keep = keep[len(keep)-12:]
-		}
-		tail = strings.Join(keep, "\n")
+	}
+	// Close the orphaned shell workspace so dead worker panes don't pile up in 终端.
+	if w.WorkspaceID != "" {
+		_ = sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": w.WorkspaceID}, nil)
 	}
 	why := deathReason(tail)
-	if len([]rune(why)) > 160 {
-		why = string([]rune(why)[:160]) + "…"
+	if len([]rune(why)) > 200 {
+		why = string([]rune(why)[:200]) + "…"
 	}
-	log.Printf("worker %s: no agent in its pane %s; marked failed", w.Name, w.PaneID)
+	log.Printf("worker %s: no agent in its pane %s (status=%s); why=%q", w.Name, w.PaneID, w.Status, why)
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
+	if tail == "" && w.Status == "gone" {
+		sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s exited (its herdr pane is gone).", w.Name), "", "", w.Name)
+		sp.addEntryLocked("event", w.Thread, w.Name+" 已退出", w.Name, "info")
+		sp.changed()
+		return
+	}
+	w.Status = "failed"
+	if why != "" {
+		w.Note = why
+	}
 	sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf(
-		"worker %s failed: %s isn't running in its pane (it never started, or it quit), so its task was not delivered. Last lines on its screen:\n%s\nFix the cause or tell the human; spawn a new worker to retry.",
-		w.Name, w.Kind, tail), "", "", w.Name)
-	msg := w.Name + " 的 " + w.Kind + " 没有跑起来（或已退出），任务没发出去"
+		"worker %s failed: %s isn't running in its pane (it never started, or exited early). Last lines on its screen:\n%s\nFix the cause (pass `--arg` flags to `collie spawn`, switch to another agent on that computer, or use `collie exec --machine %s` if no agent CLI on that computer can start) or tell the human.",
+		w.Name, w.Kind, tail, firstNonEmpty(w.Machine, "hub")), "", "", w.Name)
+	msg := w.Name + " 的 " + w.Kind + " 没有跑起来（或异常退出）"
 	if why != "" {
 		msg += "：" + why
 	}
@@ -611,15 +662,34 @@ func (sp *Super) workerDead(ctx context.Context, w *Worker) {
 	sp.changed()
 }
 
-// deathReason picks the line that says why: "Error: …" over a stack frame
-// like "throw new Error(".
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// deathReason picks the line that says why: "Error: …" / "Error loading …" over
+// a stack frame like "throw new Error(".
 func deathReason(screen string) string {
+	lines := strings.Split(screen, "\n")
 	var loose string
-	for _, l := range strings.Split(screen, "\n") {
+	for i, l := range lines {
 		t := strings.TrimSpace(l)
 		low := strings.ToLower(t)
-		if strings.Contains(low, "error:") || strings.HasPrefix(low, "fatal") || strings.Contains(low, "panic:") ||
-			strings.Contains(low, "command not found") || strings.Contains(low, "no such file") {
+		if strings.Contains(low, "error:") || strings.HasPrefix(low, "error ") || strings.HasPrefix(low, "fatal") || strings.Contains(low, "panic:") ||
+			strings.Contains(low, "command not found") || strings.Contains(low, "no such file") || strings.Contains(low, "not recognized as") {
+			// Include one short continuation line (e.g. `in 'service_tier'`) if present,
+			// skipping stack frames (`at ...`) and shell prompts.
+			if i+1 < len(lines) {
+				next := strings.TrimSpace(lines[i+1])
+				nlow := strings.ToLower(next)
+				if next != "" && !strings.HasPrefix(nlow, "at ") && !strings.HasPrefix(nlow, "ps ") &&
+					!strings.HasPrefix(nlow, "(base)") && !strings.HasPrefix(nlow, "node.js ") &&
+					!strings.HasSuffix(next, ">") && !strings.HasSuffix(next, "$") && len(next) < 80 {
+					return t + " " + next
+				}
+			}
 			return t
 		}
 		if loose == "" && strings.Contains(low, "error") {
@@ -650,11 +720,26 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 		return
 	}
 	if msg := sp.workerAgentError(ctx, w, summary); msg != "" {
-		// Its agent stopped it (out of quota, logged out, the API down):
-		// the turn ended, the work did not.
+		// Its agent stopped it (out of quota/balance, logged out, the API down):
+		// the turn ended, the work did not. If it never produced any work at all,
+		// close its unusable workspace and mark it failed so it doesn't linger.
+		noWorkDone := w.LastReport == "" && (summary == "" || summary == "(no output captured)" || strings.Contains(summary, msg))
+		wsToClose := ""
+		if noWorkDone {
+			w.Ended, w.Status, w.Note = true, "failed", msg
+			wsToClose = w.WorkspaceID
+		}
 		sp.ingestLocked("worker", w.Thread, w.Name,
-			fmt.Sprintf("worker %s stopped on an error from its agent, not because it was done:\n%s\nLast message before it:\n%s\nIf this is a usage limit, a login or an outage, it won't get better by itself soon: hand the job to another kind of agent (spawn a fresh one with the brief and what this one got done; --resume only works with the same agent), then tell the human in one line what happened and who carries on.", w.Name, msg, summary), "", "", w.Name)
+			fmt.Sprintf("worker %s stopped on an error from its agent, not because it was done:\n%s\nLast message before it:\n%s\nIf this is a usage/balance limit, a login or an outage, it won't get better by itself soon: hand the job to another kind of agent (or if every agent CLI on %s fails to start/authenticate, use `collie exec --machine %s` to repair the CLI or tell the human), then tell the human in one line what happened.", w.Name, msg, summary, firstNonEmpty(w.Machine, "hub"), firstNonEmpty(w.Machine, "hub")), "", "", w.Name)
 		sp.addEntryLocked("event", w.Thread, w.Name+" 出错了："+msg, w.Name, "error")
+		sp.changed()
+		if wsToClose != "" {
+			go func(ws string) {
+				cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = sp.s.herdr.Call(cctx, "workspace.close", map[string]any{"workspace_id": ws}, nil)
+			}(wsToClose)
+		}
 		return
 	}
 	sp.ingestLocked("worker", w.Thread, w.Name,
@@ -665,7 +750,7 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 // workerQuotaRe is an agent CLI saying it can't go on: a usage limit, the
 // login, the API. Narrower than agentErrRe: a worker's screen is full of its
 // work, and "error:" there is mostly the work's own.
-var workerQuotaRe = regexp.MustCompile(`(?i)(usage limit|limit reached|hit your( \w+)? limit|reached your( \w+)? limit|quota exceeded|exceeded your( current)? quota|resource.?exhausted|daily limit|rate.?limit(ed)?\b|credit balance|out of credits|please run /login|not logged in|invalid api key|api error|overloaded|unexpected status \d{3}|try again (at|in) )`)
+var workerQuotaRe = regexp.MustCompile(`(?i)(usage limit|limit reached|hit your( \w+)? limit|reached your( \w+)? limit|quota exceeded|exceeded your( current)? quota|insufficient[_ ]balance|insufficient[_ ]quota|payment required|resource.?exhausted|daily limit|rate.?limit(ed)?\b|credit balance|out of credits|please run /login|not logged in|invalid api key|authentication[_ ]error|api error|overloaded|unexpected status \d{3}|model .* (not found|does not exist|is not supported)|try again (at|in) )`)
 
 // workerAgentError reads the bottom of a worker's terminal after a turn:
 // what its agent printed when it gave up, or "". A line that is also in its
@@ -950,7 +1035,7 @@ func (sp *Super) resumeFrom(name string) (*Worker, error) {
 	return &c, nil
 }
 
-func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, subscribe bool, resume string) (*Worker, <-chan error, error) {
+func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, extraArgs []string, subscribe bool, resume string) (*Worker, <-chan error, error) {
 	if machine == "" {
 		if lm := sp.s.herdr.Machines()[0]; len(lm.Agents) == 0 && !lm.Online {
 			// Local hub has neither herdr nor agents: fall back to the first online node.
@@ -1048,7 +1133,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	w.Run = &[2]string{model, effort}
 	ask := sp.st.Settings.AskPermissions
 	sp.mu.Unlock()
-	wargs := withBypass(modelArgs(kind, model, effort), kind, ask)
+	wargs := append(withBypass(modelArgs(kind, model, effort), kind, ask), extraArgs...)
 
 	// started answers whoever is still waiting on the spawn (superSpawn waits
 	// a few seconds): a failure it hears it can say at once, as the spawn's
@@ -1150,6 +1235,7 @@ func (sp *Super) Report(name, text string) error {
 	if w == nil {
 		return fmt.Errorf("unknown worker %s", name)
 	}
+	delete(sp.workerAskedAt, name)
 	w.LastReport, w.ReportAt = text, time.Now()
 	sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
 	sp.addEntryLocked("event", w.Thread, name+" 回报："+clip(text, 160), name, "done")
@@ -1425,14 +1511,24 @@ func (sp *Super) List() string {
 	b.WriteString("machines (pass the name to `collie spawn -machine`):\n")
 	for _, m := range sp.s.herdr.Machines() {
 		state := "online"
-		if !m.Local && !m.Online {
+		have := m.Agents
+		if m.Local {
+			have = localAgents(sp.s.home, false)
+			if !m.Online && len(have) == 0 {
+				state = "relay-only"
+			}
+		} else if !m.Online {
 			state = "offline"
 		}
 		id := m.ID
 		if m.Local {
 			id = "hub"
 		}
-		fmt.Fprintf(&b, "  %-14s %-8s %s  home=%s\n", id, state, m.Name, m.Home)
+		ag := "none"
+		if len(have) > 0 {
+			ag = strings.Join(have, ",")
+		}
+		fmt.Fprintf(&b, "  %-14s %-11s %s  agents=%s  home=%s\n", id, state, m.Name, ag, m.Home)
 	}
 	b.WriteString("workers:\n")
 	names := make([]string, 0, len(sp.st.Workers))

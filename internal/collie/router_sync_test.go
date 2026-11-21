@@ -63,3 +63,22 @@ func TestIsHTTPSReqForwardedProto(t *testing.T) {
 		t.Fatalf("X-Forwarded-Proto: https should be detected as HTTPS")
 	}
 }
+
+func TestWorkerFastFailureDetection(t *testing.T) {
+	claudeScreen := "❯ [collie] 1 new event\n\n● API Error: 402 Insufficient Balance (request_id: e5212276)\n\n✻ Crunched for 0s\n❯ "
+	gotStop := agentStopLine(claudeScreen, "(no output captured)")
+	if gotStop != "API Error: 402 Insufficient Balance (request_id: e5212276)" {
+		t.Fatalf("agentStopLine 402 = %q", gotStop)
+	}
+
+	codexCrash := "(base) PS C:\\Users\\26422> codex -m gpt-6-astra\nError loading config.toml: unknown variant `default`, expected `fast` or `flex`\nin `service_tier`\n(base) PS C:\\Users\\26422>"
+	gotDeath := deathReason(codexCrash)
+	if gotDeath != "Error loading config.toml: unknown variant `default`, expected `fast` or `flex` in `service_tier`" {
+		t.Fatalf("deathReason = %q", gotDeath)
+	}
+
+	res, err := runLocalShellCommand(t.Context(), t.TempDir(), "", "echo hello-exec", 10)
+	if err != nil || res.ExitCode != 0 || res.Output == "" {
+		t.Fatalf("runLocalShellCommand = %+v, err=%v", res, err)
+	}
+}

@@ -46,7 +46,7 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 		}
 		var body []byte
 		switch {
-		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync":
+		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec":
 			machine = r.URL.Query().Get("machine")
 		case r.URL.Path == "/api/agents" && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
