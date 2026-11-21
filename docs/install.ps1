@@ -1,4 +1,4 @@
-# Collie Windows installer — https://github.com/Tdcle/collie
+﻿# Collie Windows installer — https://github.com/Tdcle/collie
 #
 #   安装 collie 命令：
 #     powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1)))"
