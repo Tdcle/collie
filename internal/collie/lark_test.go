@@ -1,6 +1,11 @@
 package collie
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,3 +131,72 @@ func TestCollieQuote(t *testing.T) {
 		t.Error("only Collie's messages are quoted")
 	}
 }
+
+func TestFeishuBotWebhookAndTestNotifyEndpoint(t *testing.T) {
+	var received []map[string]any
+	feishuSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		received = append(received, m)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"msg":"success"}`))
+	}))
+	defer feishuSrv.Close()
+
+	// Treat our local test server as a feishu.cn webhook URL via query marker? Wait:
+	// webhookSend checks host substring; test both generic fallback AND feishu card JSON directly:
+	ns := []notice{{
+		tone:     "done",
+		title:    "Win · 论文返修 · 已完成",
+		text:     formatSessionNoticeText("![局部图](<C:/Users/26422/SFD-Net 2/fig.png>)\n\n已完成修改，打开 [Visio 原稿](<C:/Users/26422/SFD-Net 2/fig.vsdx>) 查看。"),
+		re:       &Quote{Who: "你", Text: "修改右下角流程图"},
+		hash:     "/#/x/cx-01a20149%40wlc",
+		btnLabel: "打开会话",
+	}}
+	cardJSON := larkCard(ns, "https://101.200.80.58")
+	for _, want := range []string{
+		`"Win · 论文返修 · 已完成"`,
+		`"template":"green"`,
+		`"打开会话"`,
+		`"https://101.200.80.58/#/x/cx-01a20149%40wlc"`,
+		"`局部图`",
+		"`Visio 原稿`",
+		"↩ 你：修改右下角流程图",
+	} {
+		if !strings.Contains(cardJSON, want) {
+			t.Fatalf("expected card JSON to contain %s, got:\n%s", want, cardJSON)
+		}
+	}
+
+	// Verify /api/super/notify/test sends immediately even while Seen is active and auto-saves webhook!
+	dir := t.TempDir()
+	srv := &Server{herdr: newHerdr("", "hub", dir), home: dir, publicURLs: []string{"https://101.200.80.58"}}
+	sp, err := newSuper(srv, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sp.db.Close()
+	srv.sup = sp
+	sp.Seen("https://101.200.80.58") // user is looking right at Settings page!
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"notify_webhook": feishuSrv.URL,
+		"notify_lark":    false,
+		"notify_level":   "normal",
+		"url":            "https://101.200.80.58",
+	})
+	req := httptest.NewRequest("POST", "/api/super/notify/test", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+	srv.superTestNotify(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200 from superTestNotify, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(received) != 1 {
+		t.Fatalf("expected 1 webhook delivery during test, got %d", len(received))
+	}
+	if sp.st.Settings.NotifyWebhook != feishuSrv.URL || sp.st.Settings.NotifyLevel != "normal" {
+		t.Fatalf("expected superTestNotify to auto-persist webhook & level, got %+v", sp.st.Settings)
+	}
+}
+

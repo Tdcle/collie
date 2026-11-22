@@ -156,7 +156,7 @@ func defaultState(home string) *State {
 		},
 		Settings: Settings{
 			RouterKind: "claude", WorkerKind: "claude", WorkerCwd: home,
-			NotifyLevel: "quiet", StallMinutes: 12, ReplyChars: 200,
+			NotifyLevel: "normal", StallMinutes: 12, ReplyChars: 200,
 		},
 	}
 }

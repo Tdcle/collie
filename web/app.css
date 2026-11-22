@@ -1782,6 +1782,16 @@ select.picked { display: none; }
 .set-adv > summary::before { content: "›"; display: inline-block; margin-right: 6px; transition: transform .15s; }
 .set-adv[open] > summary::before { transform: rotate(90deg); }
 .set-adv[open] > label { margin-top: 10px; }
+.notify-test-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  padding-top: 12px; margin-top: 2px;
+  border-top: 1px dashed var(--line);
+  font-size: 12.5px;
+}
+.notify-test-bar .ok-txt { color: var(--ok, #16a34a); font-weight: 500; }
+.notify-test-bar .err-txt { color: var(--err, #dc2626); font-weight: 500; }
+.notify-test-bar .attn-txt { color: var(--attn); font-weight: 500; }
+
 .set-actions {
   display: flex; align-items: center; gap: 10px;
   margin-top: 2px; padding: 13px 18px;

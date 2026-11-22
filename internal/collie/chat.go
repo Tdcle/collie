@@ -1430,13 +1430,21 @@ func (s *Server) lastMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.herdr.Call(r.Context(), "agent.get", map[string]any{"target": id}, &info) == nil {
 		if tr := s.transcriptFor("last:"+id, id, info.Agent, map[string]*transcript{}); tr != nil {
+			tr.openTail()
 			tr.update()
 			msgs := tr.view()
+			var reply, userQ string
 			for i := len(msgs) - 1; i >= 0; i-- {
-				if msgs[i].Kind == "assistant" {
-					writeJSON(w, 200, map[string]any{"text": msgs[i].Text})
-					return
+				if reply == "" && msgs[i].Kind == "assistant" {
+					reply = msgs[i].Text
+				} else if reply != "" && msgs[i].Kind == "user" {
+					userQ = msgs[i].Text
+					break
 				}
+			}
+			if reply != "" {
+				writeJSON(w, 200, map[string]any{"text": reply, "user": userQ})
+				return
 			}
 		}
 	}

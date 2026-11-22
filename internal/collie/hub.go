@@ -46,6 +46,10 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 		}
 		var body []byte
 		var agentProjectID string
+		var extSentID string
+		if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/send") && strings.HasPrefix(r.URL.Path, "/api/external/") {
+			extSentID = r.PathValue("id")
+		}
 		switch {
 		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec", r.URL.Path == "/api/codex/lock":
 			machine = r.URL.Query().Get("machine")
@@ -54,17 +58,32 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 			var b struct {
 				Machine   string `json:"machine"`
 				ProjectID string `json:"project_id"`
+				Thread    string `json:"thread"`
 			}
 			json.Unmarshal(body, &b)
 			machine = b.Machine
 			agentProjectID = b.ProjectID
+			if r.URL.Path == "/api/codex/send" && strings.TrimSpace(b.Thread) != "" {
+				extSentID = join("cx-"+strings.TrimSpace(b.Thread), machine)
+			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
 		case r.URL.Path == "/api/state":
 			machine = ""
 		}
 		if machine == "" {
+			if extSentID != "" && s.sup != nil {
+				s.sup.noteExternalSent(extSentID)
+			}
 			h(w, r)
 			return
+		}
+		if extSentID != "" && s.sup != nil {
+			s.sup.noteExternalSent(extSentID)
+			remoteExternal.Lock()
+			if c := remoteExternal.m[machine]; c != nil {
+				c.at = time.Time{}
+			}
+			remoteExternal.Unlock()
 		}
 		s.forwardWithProject(w, r, machine, path, body, agentProjectID)
 	}

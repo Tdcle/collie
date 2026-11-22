@@ -437,12 +437,25 @@
     }
   }
 
-  // Tell the hub a page of Collie is in front of you: it holds back
-  // notifications while you can see them here.
-  const seen = () => { if (!document.hidden && document.hasFocus()) api("/api/super/seen", { body: { url: location.origin } }).catch(() => {}); };
-  setInterval(seen, 30e3);
+  // Tell the hub whether a page of Collie is actively in front of you: it holds
+  // back notifications while you are looking, and pushes as soon as you switch away.
+  let awayTimer = null;
+  const seen = () => {
+    clearTimeout(awayTimer);
+    if (!document.hidden && document.hasFocus()) {
+      api("/api/super/seen", { body: { url: location.origin, away: false } }).catch(() => {});
+    } else {
+      awayTimer = setTimeout(() => {
+        if (document.hidden || !document.hasFocus()) {
+          api("/api/super/seen", { body: { url: location.origin, away: true } }).catch(() => {});
+        }
+      }, 1500);
+    }
+  };
+  setInterval(() => { if (!document.hidden && document.hasFocus()) seen(); }, 30e3);
   document.addEventListener("visibilitychange", seen);
   addEventListener("focus", seen);
+  addEventListener("blur", seen);
 
   function normSup(s) { s.entries ||= []; s.workers ||= []; s.router ||= { status: "asleep" }; return s; }
   const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
@@ -2114,12 +2127,16 @@
       <section class="card set-sec">
         <header>
           <span class="set-ico"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
-          <div class="set-head-txt"><h4>外部消息通知</h4><p>当你不在网页前时，通过飞书机器人或自定义群 Webhook 推送任务汇报与待确认提醒。</p></div>
+          <div class="set-head-txt"><h4>外部消息通知</h4><p>当你离开网页时，自动通过飞书推送 Collie 总控汇报以及各项目独立会话的任务完成、待确认与异常提醒。</p></div>
         </header>
         <div class="set-grid">
           <label class="check span3"><input type="checkbox" name="notify_lark" ${s.notify_lark ? "checked" : ""}> 使用 Hub 上的 lark-cli 发送飞书私聊提醒<small id="lark-who" class="muted">· 正在检测 Hub 上的 lark-cli 状态…</small></label>
-          <label>群机器人 Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"><small>支持飞书 / Lark 群机器人或 Slack Incoming Webhook</small></label>
-          <label>推送触发时机<select name="notify_level" data-title="推送触发时机"><option value="quiet" ${s.notify_level === "quiet" ? "selected" : ""} data-sub="仅在任务阻塞、需要确认或报错时推送">仅在需要你介入时</option><option value="normal" ${s.notify_level === "normal" ? "selected" : ""} data-sub="包含任务完成后的总结汇报">包含任务完成汇报</option></select><small>当前浏览器前台打开 Collie 页面时自动静音免打扰</small></label>
+          <label>群机器人 Webhook<input name="notify_webhook" value="${esc(s.notify_webhook || "")}" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…"><small>支持飞书 / Lark 群自定义机器人（发送带直达按钮的交互卡片）或 Slack Webhook</small></label>
+          <label>推送触发时机<select name="notify_level" data-title="推送触发时机"><option value="normal" ${(s.notify_level === "normal" || (!s.notify_webhook && !s.notify_lark)) ? "selected" : ""} data-sub="任务跑完、需要确认或报错时均推送飞书卡片">包含任务完成与需介入提醒</option><option value="quiet" ${(s.notify_level === "quiet" && (s.notify_webhook || s.notify_lark)) ? "selected" : ""} data-sub="平时静默，仅在任务阻塞待确认或报错时推送">仅在需要你介入时</option></select><small>当前浏览器前台打开 Collie 页面时自动静音免打扰</small></label>
+        </div>
+        <div class="notify-test-bar">
+          <button type="button" class="btn small" data-act="test-notify">发送测试通知</button>
+          <span class="muted" id="notify-test-msg">填好飞书群机器人 Webhook 后可直接点击测试（成功将自动保存通知配置）</span>
         </div>
       </section>
 
@@ -2249,6 +2266,32 @@
       box.querySelector(".mem-tools").hidden = memEditing;
       if (memEditing) box.querySelector("textarea").focus();
       else { $("#panel-body")._memSig = ""; loadPanel("memory"); }
+      return;
+    }
+    if (t.dataset.act === "test-notify") {
+      const f = $("#settings-form");
+      const msgEl = $("#notify-test-msg");
+      const webhook = f?.notify_webhook?.value.trim() || "";
+      const useLark = !!f?.notify_lark?.checked;
+      const level = f?.notify_level?.value || "normal";
+      const orig = t.textContent;
+      t.disabled = true;
+      t.textContent = "发送中…";
+      if (msgEl) { msgEl.textContent = "正在向飞书发送测试卡片…"; msgEl.className = "muted"; }
+      try {
+        const res = await api("/api/super/notify/test", {
+          body: { notify_webhook: webhook, notify_lark: useLark, notify_level: level, url: location.origin },
+        });
+        const okMsg = res.warning ? `测试已部分送达（${res.warning}）` : "✓ 测试通知已送达飞书，通知配置已自动保存";
+        if (msgEl) { msgEl.textContent = okMsg; msgEl.className = res.warning ? "attn-txt" : "ok-txt"; }
+        toast(res.warning ? okMsg : "测试通知已送达飞书");
+      } catch (err) {
+        if (msgEl) { msgEl.textContent = "发送失败：" + err.message; msgEl.className = "err-txt"; }
+        toast(err.message, "attn");
+      } finally {
+        t.disabled = false;
+        t.textContent = orig;
+      }
       return;
     }
     if (t.dataset.act === "dream-now") {

@@ -58,9 +58,20 @@ type Super struct {
 	noAgent       map[string]time.Time // worker → since when its pane has had no agent in it
 	workerAskedAt map[string]time.Time // worker → when its latest prompt was delivered
 	notifyBuf     []notice
-	notifyAt    time.Time
-	seenAt      time.Time // when a page of Collie was last open in front of you
-	seenURL     string    // where that page was, for the link in a notification
+	notifyAt      time.Time
+	seenAt        time.Time // when a page of Collie was last open in front of you
+	seenURL       string    // where that page was, for the link in a notification
+	paneWatch     map[string]string
+	panePrimed    map[string]bool
+	extWatch      map[string]extWatchSnap
+	extPrimed     map[string]bool
+	extSentAt     map[string]time.Time
+	sessionScanAt time.Time
+}
+
+type extWatchSnap struct {
+	status  string
+	updated time.Time
 }
 
 type screenMark struct {
@@ -88,6 +99,11 @@ func newSuper(s *Server, dir string) (*Super, error) {
 		transcripts:   map[string]*transcript{},
 		noAgent:       map[string]time.Time{},
 		workerAskedAt: map[string]time.Time{},
+		paneWatch:     map[string]string{},
+		panePrimed:    map[string]bool{},
+		extWatch:      map[string]extWatchSnap{},
+		extPrimed:     map[string]bool{},
+		extSentAt:     map[string]time.Time{},
 	}
 	db, err := openDB(filepath.Join(dir, "herd.db")) // ~/.collie/collie.db belongs to another app
 	if err != nil {
@@ -473,8 +489,9 @@ func (sp *Super) tick(parent context.Context) {
 	sp.checkHandover(ctx, live, len(deliveries[routerName]) > 0)
 	sp.checkDream(ctx, live, len(deliveries[routerName]) > 0)
 
-	// 5. Watchdog.
+	// 5. Watchdog & standalone session notifications.
 	sp.watchdog(ctx, live, routerAlive)
+	sp.watchStandaloneSessions(ctx)
 }
 
 // fromHuman keeps what the human said in the chat.
@@ -1431,6 +1448,9 @@ func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote) {
 type notice struct {
 	tone, text string
 	re         *Quote
+	title      string
+	hash       string
+	btnLabel   string
 }
 
 // quoteLine is a Quote as one line: "你：首页加一个暗色模式…".
@@ -1506,6 +1526,9 @@ func humanText(t string) string {
 }
 
 func (n notice) label() string {
+	if n.title != "" {
+		return n.title
+	}
 	switch n.tone {
 	case "blocked":
 		return "Collie · 需要你"
@@ -1539,6 +1562,48 @@ func (sp *Super) Seen(url string) {
 	sp.mu.Unlock()
 }
 
+// SeenAway marks that the active Collie browser tab lost focus or was hidden,
+// so tasks finishing right after you switch away still send notifications.
+func (sp *Super) SeenAway(url string) {
+	sp.mu.Lock()
+	sp.seenAt = time.Time{}
+	if url != "" && sp.seenURL == "" {
+		sp.seenURL = url
+	}
+	sp.mu.Unlock()
+}
+
+func (sp *Super) noteExternalSent(extID string) {
+	if extID == "" {
+		return
+	}
+	sp.mu.Lock()
+	if sp.extSentAt == nil {
+		sp.extSentAt = map[string]time.Time{}
+	}
+	sp.extSentAt[extID] = time.Now()
+	sp.mu.Unlock()
+}
+
+func isLoopbackURL(u string) bool {
+	low := strings.ToLower(u)
+	return strings.Contains(low, "://127.0.0.1") || strings.Contains(low, "://localhost") || strings.Contains(low, "://[::1]")
+}
+
+func (sp *Super) notifyBaseURLLocked() string {
+	if sp.seenURL != "" && !isLoopbackURL(sp.seenURL) {
+		return strings.TrimRight(sp.seenURL, "/")
+	}
+	if sp.s != nil {
+		for _, u := range sp.s.publicURLs {
+			if u = strings.TrimSpace(u); u != "" {
+				return strings.TrimRight(u, "/")
+			}
+		}
+	}
+	return strings.TrimRight(sp.seenURL, "/")
+}
+
 // sendNotifications paces outgoing notifications: messages are coalesced and
 // sent at most every 20 seconds, and not at all while you are looking at
 // Collie (you see them there).
@@ -1549,39 +1614,314 @@ func (sp *Super) sendNotifications() {
 		return
 	}
 	notices := sp.notifyBuf
-	text := noticesText(notices)
-	url, toLark := sp.st.Settings.NotifyWebhook, sp.st.Settings.NotifyLark
+	webhookURL, toLark := sp.st.Settings.NotifyWebhook, sp.st.Settings.NotifyLark
 	looking := time.Since(sp.seenAt) < 75*time.Second
-	link := sp.seenURL
+	base := sp.notifyBaseURLLocked()
 	sp.notifyBuf, sp.notifyAt = nil, time.Now()
 	sp.mu.Unlock()
 	if looking {
 		return
 	}
 	if toLark {
-		if link != "" {
-			link += "/#/collie"
-		}
-		if err := larkSend(notices, link); err != nil {
+		if err := larkSend(notices, base); err != nil {
 			log.Printf("notify lark: %v", err)
 		}
 	}
-	if url == "" {
+	if webhookURL != "" {
+		if err := webhookSend(webhookURL, notices, base); err != nil {
+			log.Printf("notify webhook: %v", err)
+		}
+	}
+}
+
+func (sp *Super) machineLabel(id string) string {
+	if id == "" || sp.s == nil {
+		return ""
+	}
+	for _, m := range sp.s.herdr.Machines() {
+		if m.ID == id && m.Name != "" {
+			return m.Name
+		}
+	}
+	return id
+}
+
+func (sp *Super) manyMachines() bool {
+	if sp.s == nil {
+		return false
+	}
+	return len(sp.s.herdr.Machines()) > 1
+}
+
+func userQuoteOrNil(userText string) *Quote {
+	clean := humanText(userText)
+	if clean == "" {
+		return nil
+	}
+	return &Quote{Who: "你", Text: clean}
+}
+
+func (sp *Super) paneLastReply(ctx context.Context, paneID string) (reply, userQ string) {
+	if sp.s == nil || paneID == "" {
+		return "", ""
+	}
+	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if pane, machine := split(paneID); machine != "" {
+		if c, err := sp.s.herdr.Client(machine); err == nil {
+			req, _ := http.NewRequestWithContext(qctx, "GET", "http://node/api/panes/"+url.PathEscape(pane)+"/last", nil)
+			if resp, err := c.Do(req); err == nil {
+				var out struct {
+					Text string `json:"text"`
+					User string `json:"user"`
+				}
+				json.NewDecoder(resp.Body).Decode(&out)
+				resp.Body.Close()
+				return out.Text, out.User
+			}
+		}
+		return "", ""
+	}
+	var info struct {
+		Agent agentDetail `json:"agent"`
+	}
+	if sp.s.herdr.Call(qctx, "agent.get", map[string]any{"target": paneID}, &info) == nil {
+		if tr := sp.s.transcriptFor("notify:"+paneID, paneID, info.Agent, map[string]*transcript{}); tr != nil {
+			tr.openTail()
+			tr.update()
+			msgs := tr.view()
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if reply == "" && msgs[i].Kind == "assistant" {
+					reply = msgs[i].Text
+				} else if reply != "" && msgs[i].Kind == "user" {
+					userQ = msgs[i].Text
+					break
+				}
+			}
+			if reply != "" {
+				return reply, userQ
+			}
+		}
+	}
+	if res, err := sp.s.herdr.Read(qctx, paneID, "detection", "text", 0); err == nil {
+		return tailLines(res.Text, 10), ""
+	}
+	return "", ""
+}
+
+func (sp *Super) externalLastReply(ctx context.Context, extID string) (reply, userQ string) {
+	if sp.s == nil || extID == "" {
+		return "", ""
+	}
+	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	local, machine := split(extID)
+	if machine != "" {
+		if c, err := sp.s.herdr.Client(machine); err == nil {
+			req, _ := http.NewRequestWithContext(qctx, "GET", "http://node/api/external/"+url.PathEscape(local)+"/last", nil)
+			if resp, err := c.Do(req); err == nil {
+				var out struct {
+					Text string `json:"text"`
+					User string `json:"user"`
+				}
+				json.NewDecoder(resp.Body).Decode(&out)
+				resp.Body.Close()
+				return out.Text, out.User
+			}
+		}
+		return "", ""
+	}
+	if e := sp.s.viewableByID(local); e != nil && e.path != "" {
+		tr := sp.s.newChainedTranscript(e.path, e.format)
+		tr.openTail()
+		tr.update()
+		msgs := tr.view()
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if reply == "" && msgs[i].Kind == "assistant" {
+				reply = msgs[i].Text
+			} else if reply != "" && msgs[i].Kind == "user" {
+				userQ = msgs[i].Text
+				break
+			}
+		}
+	}
+	return reply, userQ
+}
+
+// watchStandaloneSessions monitors non-worker project/standalone sessions across
+// both herdr panes and external/app-server conversations, queueing notifications
+// when a session finishes a turn or blocks waiting for confirmation.
+func (sp *Super) watchStandaloneSessions(ctx context.Context) {
+	if sp.s == nil {
 		return
 	}
-	body, _ := json.Marshal(map[string]any{
-		"msg_type": "text", "content": map[string]string{"text": text}, // Feishu/Lark bot
-		"text": text, // Slack-style
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	if resp, err := http.DefaultClient.Do(req); err != nil {
-		log.Printf("notify: %v", err)
-	} else {
-		resp.Body.Close()
+	sp.mu.Lock()
+	enabled := sp.st.Settings.NotifyWebhook != "" || sp.st.Settings.NotifyLark
+	level := sp.st.Settings.NotifyLevel
+	due := time.Since(sp.sessionScanAt) >= 4*time.Second
+	if enabled && due {
+		sp.sessionScanAt = time.Now()
 	}
+	sp.mu.Unlock()
+	if !enabled || !due {
+		return
+	}
+
+	many := sp.manyMachines()
+	metaSnap := sp.s.sessionMetaSnapshot()
+	findMeta := func(kind, machine, session, fallback string) *SessionMeta {
+		if ck := canonicalSessionKey(kind, machine, session); ck != "" {
+			if m := metaSnap[ck]; m != nil {
+				return m
+			}
+		}
+		if fallback != "" {
+			return metaSnap[fallback]
+		}
+		return nil
+	}
+
+	// 1. Standalone herdr panes (excluding router and Collie-spawned workers).
+	st := sp.s.state(ctx)
+	var newNotices []notice
+	if st.OK {
+		sp.mu.Lock()
+		seenMachines := map[string]bool{}
+		for _, a := range st.Agents {
+			seenMachines[a.Machine] = true
+			if a.Name == routerName {
+				continue
+			}
+			if w := sp.st.Workers[a.Name]; w != nil && !w.Ended {
+				continue
+			}
+			meta := findMeta(a.Kind, a.Machine, a.Session, "p:"+a.PaneID)
+			if meta != nil && meta.Deleted {
+				continue
+			}
+			if !sp.panePrimed[a.Machine] {
+				sp.paneWatch[a.PaneID] = a.Status
+				continue
+			}
+			prev, ok := sp.paneWatch[a.PaneID]
+			sp.paneWatch[a.PaneID] = a.Status
+
+			name := strings.TrimSpace(a.Topic)
+			if meta != nil && strings.TrimSpace(meta.Title) != "" {
+				name = strings.TrimSpace(meta.Title)
+			}
+			if name == "" {
+				name = firstNonEmpty(strings.TrimSpace(a.WorkspaceLabel), firstNonEmpty(a.Name, a.Kind))
+			}
+			prefix := name
+			if many && a.Machine != "" {
+				prefix = sp.machineLabel(a.Machine) + " · " + name
+			}
+			hash := "/#/p/" + url.PathEscape(a.PaneID)
+
+			if a.Status == "blocked" && (!ok || prev != "blocked") {
+				sp.mu.Unlock()
+				reply, userQ := sp.paneLastReply(ctx, a.PaneID)
+				sp.mu.Lock()
+				body := formatSessionNoticeText(reply)
+				if strings.TrimSpace(reply) == "" {
+					body = "该会话正在等待你的确认或输入，请打开会话查看。"
+				}
+				newNotices = append(newNotices, notice{
+					tone: "blocked", title: prefix + " · 需要你确认",
+					text: body, re: userQuoteOrNil(userQ), hash: hash, btnLabel: "打开会话",
+				})
+			} else if ok && (prev == "working" || prev == "starting") && (a.Status == "done" || a.Status == "idle") && level == "normal" {
+				sp.mu.Unlock()
+				reply, userQ := sp.paneLastReply(ctx, a.PaneID)
+				sp.mu.Lock()
+				newNotices = append(newNotices, notice{
+					tone: "done", title: prefix + " · 已完成",
+					text: formatSessionNoticeText(reply), re: userQuoteOrNil(userQ), hash: hash, btnLabel: "打开会话",
+				})
+			}
+		}
+		for m := range seenMachines {
+			sp.panePrimed[m] = true
+		}
+		sp.mu.Unlock()
+	}
+
+	// 2. External / Desktop / Shared-daemon sessions (e.g. Codex app-server sessions).
+	extList := sp.s.collectAllExternal(true)
+	sp.mu.Lock()
+	seenExtMachines := map[string]bool{"": true}
+	for _, m := range sp.s.herdr.Machines() {
+		if !m.Local && m.Online {
+			seenExtMachines[m.ID] = true
+		}
+	}
+	for _, e := range extList {
+		meta := findMeta(e.Kind, e.Machine, e.Session, "x:"+e.ID)
+		if meta != nil && meta.Deleted {
+			continue
+		}
+		curSt := "idle"
+		if e.Live {
+			curSt = firstNonEmpty(e.Status, "working")
+		}
+		if !sp.extPrimed[e.Machine] {
+			sp.extWatch[e.ID] = extWatchSnap{status: curSt, updated: e.Updated}
+			continue
+		}
+		prev, ok := sp.extWatch[e.ID]
+		sp.extWatch[e.ID] = extWatchSnap{status: curSt, updated: e.Updated}
+
+		sentAt, wasSent := sp.extSentAt[e.ID]
+		if wasSent && time.Since(sentAt) > 30*time.Minute {
+			delete(sp.extSentAt, e.ID)
+			wasSent = false
+		}
+		if curSt == "working" && wasSent {
+			delete(sp.extSentAt, e.ID)
+		}
+
+		name := strings.TrimSpace(e.Title)
+		if meta != nil && strings.TrimSpace(meta.Title) != "" {
+			name = strings.TrimSpace(meta.Title)
+		}
+		if name == "" && e.Cwd != "" {
+			name = baseOfPath(e.Cwd)
+		}
+		if name == "" {
+			name = e.Kind
+		}
+		prefix := name
+		if many && e.Machine != "" {
+			prefix = sp.machineLabel(e.Machine) + " · " + name
+		}
+		hash := "/#/x/" + url.PathEscape(e.ID)
+
+		fastCompleted := wasSent && curSt == "idle" && e.Updated.After(sentAt.Add(-2*time.Second)) && (!ok || e.Updated.After(prev.updated))
+		if curSt == "blocked" && (!ok || prev.status != "blocked") {
+			delete(sp.extSentAt, e.ID)
+			newNotices = append(newNotices, notice{
+				tone: "blocked", title: prefix + " · 需要你确认",
+				text: "该会话正在等待你的确认或输入，请打开会话处理。", hash: hash, btnLabel: "打开会话",
+			})
+		} else if ((ok && prev.status == "working" && (curSt == "idle" || curSt == "done")) || fastCompleted) && level == "normal" {
+			delete(sp.extSentAt, e.ID)
+			sp.mu.Unlock()
+			reply, userQ := sp.externalLastReply(ctx, e.ID)
+			sp.mu.Lock()
+			newNotices = append(newNotices, notice{
+				tone: "done", title: prefix + " · 已完成",
+				text: formatSessionNoticeText(reply), re: userQuoteOrNil(userQ), hash: hash, btnLabel: "打开会话",
+			})
+		}
+	}
+	for m := range seenExtMachines {
+		sp.extPrimed[m] = true
+	}
+	if len(newNotices) > 0 {
+		sp.notifyBuf = append(sp.notifyBuf, newNotices...)
+	}
+	sp.mu.Unlock()
 }
 
 // ---------------------------------------------------------------- recall

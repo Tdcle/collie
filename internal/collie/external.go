@@ -500,26 +500,32 @@ func (s *Server) viewableByID(id string) *External {
 
 // listExternal answers for this machine; the hub adds every connected node's.
 func (s *Server) listExternal(w http.ResponseWriter, r *http.Request) {
-	list := s.externalSessions()
 	if s.node {
-		writeJSON(w, 200, map[string]any{"sessions": list})
+		writeJSON(w, 200, map[string]any{"sessions": s.externalSessions()})
 		return
 	}
-	all := append([]*External{}, list...)
+	writeJSON(w, 200, map[string]any{"sessions": s.collectAllExternal(false)})
+}
+
+func (s *Server) collectAllExternal(forceFresh bool) []*External {
+	all := append([]*External{}, s.externalSessions()...)
+	if s.node {
+		return all
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, m := range s.herdr.Machines() {
 		if m.Local || !m.Online {
 			continue
 		}
-		// Answer from the last copy and refresh it behind the scenes: the
-		// link to a computer can take a good part of a second each way.
-		if cached, fresh := remoteExternal.get(m.ID); cached != nil {
-			all = append(all, cached...)
-			if !fresh {
-				go s.refreshRemoteExternal(m)
+		if !forceFresh {
+			if cached, fresh := remoteExternal.get(m.ID); cached != nil {
+				all = append(all, cached...)
+				if !fresh {
+					go s.refreshRemoteExternal(m)
+				}
+				continue
 			}
-			continue
 		}
 		wg.Add(1)
 		go func(m Machine) {
@@ -532,7 +538,29 @@ func (s *Server) listExternal(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 	sortSessions(all)
-	writeJSON(w, 200, map[string]any{"sessions": all})
+	return all
+}
+
+func (s *Server) externalLastMessage(w http.ResponseWriter, r *http.Request) {
+	e := s.viewableByID(r.PathValue("id"))
+	if e == nil || e.path == "" {
+		writeJSON(w, 404, map[string]any{"error": "not found"})
+		return
+	}
+	tr := s.newChainedTranscript(e.path, e.format)
+	tr.openTail()
+	tr.update()
+	msgs := tr.view()
+	var reply, userQ string
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if reply == "" && msgs[i].Kind == "assistant" {
+			reply = msgs[i].Text
+		} else if reply != "" && msgs[i].Kind == "user" {
+			userQ = msgs[i].Text
+			break
+		}
+	}
+	writeJSON(w, 200, map[string]any{"text": reply, "user": userQ})
 }
 
 // remoteExternal is the hub's last copy of each computer's session list.

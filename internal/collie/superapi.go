@@ -40,6 +40,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/settings", s.superSaveSettings)
 	api("POST /api/super/seen", s.superSeen)
 	api("GET /api/super/lark", s.superLark)
+	api("POST /api/super/notify/test", s.superTestNotify)
 	api("GET /api/super/earlier", s.superEarlier)
 	api("GET /api/super/memory", s.superMemory)
 	api("POST /api/super/memory", s.superSaveMemory)
@@ -714,7 +715,8 @@ func (s *Server) superSettings(w http.ResponseWriter, r *http.Request) {
 // the notifications' link.
 func (s *Server) superSeen(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URL string `json:"url"`
+		URL  string `json:"url"`
+		Away bool   `json:"away"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -722,8 +724,98 @@ func (s *Server) superSeen(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(body.URL, "http://") && !strings.HasPrefix(body.URL, "https://") || len(body.URL) > 200 {
 		body.URL = ""
 	}
-	s.sup.Seen(body.URL)
+	if body.Away {
+		s.sup.SeenAway(body.URL)
+	} else {
+		s.sup.Seen(body.URL)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) superTestNotify(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		NotifyWebhook *string `json:"notify_webhook"`
+		NotifyLark    *bool   `json:"notify_lark"`
+		NotifyLevel   string  `json:"notify_level"`
+		URL           string  `json:"url"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	sp := s.sup
+	sp.mu.Lock()
+	webhookURL := sp.st.Settings.NotifyWebhook
+	if body.NotifyWebhook != nil {
+		webhookURL = strings.TrimSpace(*body.NotifyWebhook)
+	}
+	toLark := sp.st.Settings.NotifyLark
+	if body.NotifyLark != nil {
+		toLark = *body.NotifyLark
+	}
+	base := sp.notifyBaseURLLocked()
+	if strings.HasPrefix(body.URL, "http://") || strings.HasPrefix(body.URL, "https://") {
+		if base == "" || (!isLoopbackURL(body.URL)) {
+			base = strings.TrimRight(strings.TrimSpace(body.URL), "/")
+		}
+	}
+	sp.mu.Unlock()
+
+	if webhookURL == "" && !toLark {
+		writeJSON(w, 400, map[string]any{"error": "请先填写飞书群机器人 Webhook 地址（或勾选 lark-cli 私聊提醒）"})
+		return
+	}
+
+	ns := []notice{{
+		tone:     "done",
+		title:    "Collie · 测试通知已连通",
+		text:     "飞书通知连接正常。\n当你切走或关闭 Collie 网页时，**Collie 总控汇报**与**各项目独立会话**的任务完成、待确认和报错提醒都会自动推送到这里。",
+		hash:     "/#/collie",
+		btnLabel: "打开 Collie",
+	}}
+
+	var errs []string
+	sentCount := 0
+	if toLark {
+		if err := larkSend(ns, base); err != nil {
+			errs = append(errs, "lark-cli："+err.Error())
+		} else {
+			sentCount++
+		}
+	}
+	if webhookURL != "" {
+		if err := webhookSend(webhookURL, ns, base); err != nil {
+			errs = append(errs, err.Error())
+		} else {
+			sentCount++
+		}
+	}
+	if len(errs) > 0 && sentCount == 0 {
+		writeJSON(w, 400, map[string]any{"error": strings.Join(errs, "；")})
+		return
+	}
+
+	// Persist notification settings automatically on successful test so the user's
+	// newly entered webhook works right away even before clicking the bottom Save button.
+	sp.mu.Lock()
+	if body.NotifyWebhook != nil {
+		sp.st.Settings.NotifyWebhook = webhookURL
+	}
+	if body.NotifyLark != nil {
+		sp.st.Settings.NotifyLark = toLark
+	}
+	if body.NotifyLevel == "normal" || body.NotifyLevel == "quiet" {
+		sp.st.Settings.NotifyLevel = body.NotifyLevel
+	}
+	sp.dirty = true
+	sp.changed()
+	sp.mu.Unlock()
+	sp.flush()
+
+	out := map[string]any{"ok": true, "saved": true}
+	if len(errs) > 0 {
+		out["warning"] = strings.Join(errs, "；")
+	}
+	writeJSON(w, 200, out)
 }
 
 // superEarlier is Collie's chat before a given entry, a page at a time,
