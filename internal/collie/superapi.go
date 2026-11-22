@@ -191,12 +191,13 @@ func (s *Server) superEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Text    string `json:"text"`
-		Machine string `json:"machine"` // where to dispatch this time, "" = the default
-		Kind    string `json:"kind"`
-		Model   string `json:"model"`
-		Effort  string `json:"effort"`
-		Re      string `json:"re"` // a message of Collie's this answers
+		Text     string `json:"text"`
+		Machine  string `json:"machine"`  // one-off dispatch computer override; "" = auto
+		Kind     string `json:"kind"`     // one-off dispatch agent override; "" = auto
+		Model    string `json:"model"`    // one-off dispatch model override; "" = auto
+		Effort   string `json:"effort"`   // one-off dispatch effort override; "" = auto
+		Override bool   `json:"override"` // true when selected via one-off composer bar
+		Re       string `json:"re"`       // a message of Collie's this answers
 	}
 	if !decode(w, r, &body) || strings.TrimSpace(body.Text) == "" {
 		if strings.TrimSpace(body.Text) == "" {
@@ -204,22 +205,37 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	matchedProjs := s.matchProjectsInText(body.Text)
+	machines := s.allMachines()
+	mByID := map[string]*Machine{}
+	for i := range machines {
+		m := &machines[i]
+		mByID[m.ID] = m
+	}
+
 	sp := s.sup
 	sp.mu.Lock()
 	re := sp.collieQuoteLocked(body.Re)
 	e := sp.addEntryReLocked("user", mainThread, body.Text, "", "", re)
-	// The composer's "派到" chip: a one-off choice the router should honour.
 	text := body.Text
 	if re != nil { // which of your messages they mean: Collie need not guess
 		text = "[In reply to what you said earlier: \"" + clip(re.Text, 300) + "\"]\n" + text
 	}
 	st := sp.st.Settings
-	pickedM := s.machineByName(body.Machine)
-	pickedLocal := body.Machine == "local" || body.Machine == "hub"
-	if body.Kind == "agy" { // the composer's name for it
-		body.Kind = "antigravity"
+	rawMachine := strings.TrimSpace(body.Machine)
+	if rawMachine == "auto" {
+		rawMachine = ""
 	}
-	_, known := kinds[body.Kind]
+	pickedM := s.machineByName(rawMachine)
+	pickedLocal := rawMachine == "local" || rawMachine == "hub"
+	rawKind := strings.TrimSpace(body.Kind)
+	if rawKind == "auto" {
+		rawKind = ""
+	}
+	if rawKind == "agy" { // the composer's name for it
+		rawKind = "antigravity"
+	}
+	_, known := kinds[rawKind]
 
 	// First-wake auto-adoption: if Collie itself has never replied yet (or its
 	// currently configured machine/agent cannot run) and the human explicitly
@@ -247,8 +263,8 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 				changed = true
 			}
 		}
-		if known && kinds[body.Kind] != kinds[st.RouterKind] {
-			st.RouterKind = body.Kind
+		if known && kinds[rawKind] != kinds[st.RouterKind] {
+			st.RouterKind = rawKind
 			st.RouterModel = ""
 			st.RouterEffort = ""
 			if m := strings.TrimSpace(body.Model); m != "" && modelNameRe.MatchString(m) {
@@ -259,8 +275,8 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 			}
 			changed = true
 		}
-		if known && kinds[body.Kind] != kinds[st.WorkerKind] {
-			st.WorkerKind = body.Kind
+		if known && kinds[rawKind] != kinds[st.WorkerKind] {
+			st.WorkerKind = rawKind
 			changed = true
 		}
 		if changed {
@@ -269,32 +285,55 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Tier 1: Surface matched sidebar projects directly in the trigger so Collie
+	// immediately knows which computer and directory hold the project named in text.
+	if len(matchedProjs) > 0 {
+		var pLines []string
+		for _, p := range matchedProjs {
+			mid := p.Machine
+			mName, mState := "hub", "online"
+			if m := mByID[p.Machine]; m != nil {
+				mName = m.Name
+				if !m.Local && !m.Online {
+					mState = "offline"
+				} else if m.Local && !m.Online && len(localAgents(s.home, false)) == 0 {
+					mState = "relay-only"
+				}
+			} else if mid != "" {
+				mName, mState = mid, "offline"
+			}
+			if mid == "" {
+				mid = "hub"
+			}
+			line := fmt.Sprintf("- %q: machine=%s (%s, %s), cwd=%q", p.Name, mid, mName, mState, p.Cwd)
+			if p.Kind != "" {
+				line += ", default_agent=" + p.Kind
+			}
+			pLines = append(pLines, line)
+		}
+		text += "\n\n[Project context matched from sidebar (Tier 1 — if the human is referring to this project, dispatch to its computer and cwd):\n" + strings.Join(pLines, "\n") + "]"
+	}
+
+	// Tier 2: Explicit one-off override chosen in the composer for this turn only.
 	var hint []string
 	if pickedM != "" || pickedLocal {
-		if pickedM != st.WorkerMachine {
-			name := "hub"
-			if pickedM != "" {
-				name = pickedM
-			}
-			hint = append(hint, "--machine "+name)
+		name := "hub"
+		if pickedM != "" {
+			name = pickedM
 		}
+		hint = append(hint, "--machine "+name)
 	}
-	if known && kinds[body.Kind] != kinds[st.WorkerKind] {
-		hint = append(hint, "--kind "+body.Kind)
+	if known {
+		hint = append(hint, "--kind "+rawKind)
 	}
-	// Model choices only differ from the defaults for the default kind.
-	defModel, defEffort := "", ""
-	if !known || kinds[body.Kind] == kinds[st.WorkerKind] {
-		defModel, defEffort = st.WorkerModel, st.WorkerEffort
-	}
-	if m := strings.TrimSpace(body.Model); m != "" && m != defModel && modelNameRe.MatchString(m) {
+	if m := strings.TrimSpace(body.Model); m != "" && modelNameRe.MatchString(m) {
 		hint = append(hint, "--model "+m)
 	}
-	if e := strings.TrimSpace(body.Effort); e != "" && e != defEffort && modelNameRe.MatchString(e) {
-		hint = append(hint, "--effort "+e)
+	if ef := strings.TrimSpace(body.Effort); ef != "" && modelNameRe.MatchString(ef) {
+		hint = append(hint, "--effort "+ef)
 	}
 	if len(hint) > 0 {
-		text += "\n\n[The human picked where this runs: spawn with " + strings.Join(hint, " ") + "]"
+		text += "\n\n[One-off dispatch target selected in composer for this message (Tier 2): spawn with " + strings.Join(hint, " ") + " — unless the human's message text above explicitly targets a different computer or a project located on another computer (Tier 1), in which case follow that project/computer.]"
 	}
 	t := sp.ingestLocked("chat", mainThread, "you", text, "", "", e.ID)
 	sp.mu.Unlock()
@@ -415,12 +454,20 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 		sub = *body.Subscribe
 	}
 	machine := s.sup.settings().WorkerMachine
+	explicitMachine := false
 	if session != "" {
 		machine = *body.Machine // an id already
-	} else if body.Machine != nil {
-		machine = s.machineByName(*body.Machine)
+		explicitMachine = true
+	} else if body.Machine != nil && strings.TrimSpace(*body.Machine) != "" && strings.TrimSpace(*body.Machine) != "auto" {
+		rawM := strings.TrimSpace(*body.Machine)
+		machine = s.machineByName(rawM)
+		if machine == "" && rawM != "hub" && rawM != "local" {
+			writeJSON(w, 400, map[string]any{"error": fmt.Sprintf("unknown machine %q (see `collie list`)", rawM)})
+			return
+		}
+		explicitMachine = true
 	}
-	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, body.Args, sub, session)
+	wk, started, err := s.sup.Spawn(body.Kind, body.Cwd, body.Task, body.Thread, body.Name, body.By, machine, body.Model, body.Effort, body.Args, sub, session, explicitMachine)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
@@ -1138,7 +1185,7 @@ func (s *Server) machineByName(n string) string {
 	if n == "" || n == "hub" || n == "local" {
 		return ""
 	}
-	for _, m := range s.herdr.Machines() {
+	for _, m := range s.allMachines() {
 		if m.ID == n || strings.EqualFold(m.Name, n) {
 			return m.ID
 		}

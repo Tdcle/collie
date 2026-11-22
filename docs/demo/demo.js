@@ -366,10 +366,10 @@
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.46", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
-        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.46", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.47", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.47", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.46", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.46",
+      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.47", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.47",
     });
     if (p === "/api/sessions/model" && method === "POST") {
       const a = agents.find((x) => x.pane_id === body.pane_id);

@@ -1085,21 +1085,126 @@ func (sp *Super) resumeFrom(name string) (*Worker, error) {
 	return &c, nil
 }
 
-func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, extraArgs []string, subscribe bool, resume string) (*Worker, <-chan error, error) {
-	if machine == "" {
-		if lm := sp.s.herdr.Machines()[0]; len(lm.Agents) == 0 && !lm.Online {
-			// Local hub has neither herdr nor agents: fall back to the first online node.
-			for _, rm := range sp.s.herdr.Machines()[1:] {
-				if rm.Online && (rm.Agents == nil || len(rm.Agents) > 0) {
-					machine = rm.ID
-					break
-				}
+func (sp *Super) machineCanRun(m *Machine, wantKind string) (bool, string) {
+	if m == nil || !m.Online {
+		return false, ""
+	}
+	have := m.Agents
+	if m.Local {
+		have = localAgents(sp.s.home, false)
+		if len(have) == 0 {
+			return false, ""
+		}
+	} else if have != nil && len(have) == 0 {
+		return false, ""
+	}
+	if wantKind != "" {
+		canon, ok := kinds[wantKind]
+		if !ok {
+			return false, ""
+		}
+		if have != nil && !slices.Contains(have, canon) {
+			return false, ""
+		}
+		return true, wantKind
+	}
+	if have == nil {
+		return true, "codex"
+	}
+	for _, cand := range []string{"codex", "claude", "agy", "gemini"} {
+		if slices.Contains(have, cand) {
+			return true, cand
+		}
+	}
+	return false, ""
+}
+
+// resolveAutoWorkerTarget implements Tiers 3 & 4 of dispatch routing when
+// `--machine` was omitted: prefer the configured default worker computer when
+// online & capable, and automatically fall back to another online computer
+// when the default computer is offline or lacks the requested agent.
+func (sp *Super) resolveAutoWorkerTarget(requestedKind string) (machineID, resolvedKind string) {
+	sp.mu.Lock()
+	defM := sp.st.Settings.WorkerMachine
+	defK := sp.st.Settings.WorkerKind
+	routerM := sp.st.Settings.RouterMachine
+	sp.mu.Unlock()
+
+	wantK := requestedKind
+	if wantK == "" {
+		wantK = defK
+	}
+	if wantK == "" {
+		wantK = "codex"
+	}
+
+	// Tier 4: Settings default computer if online and capable.
+	if dm, err := sp.s.herdr.machine(defM); err == nil {
+		if ok, rk := sp.machineCanRun(dm, wantK); ok {
+			return dm.ID, rk
+		}
+	}
+
+	// Tier 3: Live availability fallback across connected computers.
+	// Order candidates: remote work machines first (prioritizing RouterMachine if set), then Hub.
+	all := sp.s.herdr.Machines()
+	var cands []*Machine
+	if routerM != "" {
+		for i := range all {
+			if all[i].ID == routerM {
+				cands = append(cands, &all[i])
 			}
+		}
+	}
+	for i := range all {
+		if !all[i].Local && all[i].ID != routerM {
+			cands = append(cands, &all[i])
+		}
+	}
+	for i := range all {
+		if all[i].Local {
+			cands = append(cands, &all[i])
+		}
+	}
+
+	for _, m := range cands {
+		if ok, rk := sp.machineCanRun(m, wantK); ok {
+			return m.ID, rk
+		}
+	}
+	if requestedKind == "" {
+		for _, m := range cands {
+			if ok, rk := sp.machineCanRun(m, ""); ok {
+				return m.ID, rk
+			}
+		}
+	}
+	return defM, wantK
+}
+
+func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort string, extraArgs []string, subscribe bool, resume string, explicitMachine ...bool) (*Worker, <-chan error, error) {
+	isExplicit := len(explicitMachine) > 0 && explicitMachine[0]
+	if !isExplicit && resume == "" {
+		autoM, autoK := sp.resolveAutoWorkerTarget(kind)
+		machine = autoM
+		if kind == "" {
+			kind = autoK
 		}
 	}
 	m, err := sp.s.herdr.machine(machine)
 	if err != nil {
+		for _, km := range sp.s.allMachines() {
+			if km.ID == machine && !km.Local && !km.Online {
+				return nil, nil, fmt.Errorf("machine %s (%s) is currently offline", km.Name, km.ID)
+			}
+		}
 		return nil, nil, fmt.Errorf("machine %q is not connected", machine)
+	}
+	if !m.Local && !m.Online {
+		return nil, nil, fmt.Errorf("machine %s (%s) is currently offline", m.Name, m.ID)
+	}
+	if m.Local && !m.Online && len(localAgents(sp.s.home, false)) == 0 {
+		return nil, nil, fmt.Errorf("hub is relay-only (no local herdr/agents); pick an online computer from `collie list`")
 	}
 	sp.mu.Lock()
 	if kind == "" {
@@ -1107,7 +1212,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 	}
 	if _, ok := kinds[kind]; !ok {
 		sp.mu.Unlock()
-		return nil, nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity)", kind)
+		return nil, nil, fmt.Errorf("unknown kind %q (claude, codex, antigravity, gemini)", kind)
 	}
 	// Say so now, while the router can still pick another computer or kind.
 	have := m.Agents
@@ -1118,8 +1223,12 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.mu.Unlock()
 		return nil, nil, fmt.Errorf("%s has no %s installed (it has: %s); pick another computer or kind", m.Name, kind, strings.Join(append(have, "none")[:max(len(have), 1)], ", "))
 	}
-	if cwd == "" && (m.ID == sp.st.Settings.WorkerMachine || (m.Local && sp.st.Settings.WorkerMachine == "")) {
-		cwd = sp.st.Settings.WorkerCwd
+	if cwd == "" {
+		if m.ID == sp.st.Settings.WorkerMachine || (m.Local && sp.st.Settings.WorkerMachine == "") {
+			cwd = sp.st.Settings.WorkerCwd
+		} else {
+			cwd = "~"
+		}
 	}
 	if thread == "" {
 		thread = mainThread
@@ -1968,11 +2077,16 @@ func (sp *Super) Show(id string) (string, bool) {
 }
 
 func (sp *Super) List() string {
+	projs := sp.s.snapshotProjects()
+	machines := sp.s.allMachines()
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	var b strings.Builder
-	b.WriteString("machines (pass the name to `collie spawn -machine`):\n")
-	for _, m := range sp.s.herdr.Machines() {
+	b.WriteString("machines (pass the id or name to `collie spawn -machine`):\n")
+	mByID := map[string]*Machine{}
+	for i := range machines {
+		m := &machines[i]
+		mByID[m.ID] = m
 		state := "online"
 		have := m.Agents
 		if m.Local {
@@ -1992,6 +2106,35 @@ func (sp *Super) List() string {
 			ag = strings.Join(have, ",")
 		}
 		fmt.Fprintf(&b, "  %-14s %-11s %s  agents=%s  home=%s\n", id, state, m.Name, ag, m.Home)
+	}
+	b.WriteString("projects (pinned workspaces; use their machine and cwd when the human refers to them):\n")
+	if len(projs) == 0 {
+		b.WriteString("  (none)\n")
+	} else {
+		for _, p := range projs {
+			mid := p.Machine
+			mName, mState := "hub", "online"
+			if m := mByID[p.Machine]; m != nil {
+				mName = m.Name
+				if m.Local {
+					if !m.Online && len(localAgents(sp.s.home, false)) == 0 {
+						mState = "relay-only"
+					}
+				} else if !m.Online {
+					mState = "offline"
+				}
+			} else if mid != "" {
+				mName, mState = mid, "offline"
+			}
+			if mid == "" {
+				mid = "hub"
+			}
+			pk := p.Kind
+			if pk == "" {
+				pk = "default"
+			}
+			fmt.Fprintf(&b, "  %-22q machine=%s (%s, %s)  kind=%s  cwd=%s\n", p.Name, mid, mName, mState, pk, p.Cwd)
+		}
 	}
 	b.WriteString("workers:\n")
 	names := make([]string, 0, len(sp.st.Workers))

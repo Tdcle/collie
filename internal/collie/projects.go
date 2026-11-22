@@ -584,6 +584,59 @@ func (s *Server) purgeMachineData(machine string) {
 	}
 }
 
+// snapshotProjects returns value copies of all registered projects for safe
+// lock-free inspection by Router prompts, `collie list`, and project matching.
+func (s *Server) snapshotProjects() []*Project {
+	if s == nil {
+		return nil
+	}
+	projectStore.Lock()
+	s.loadProjectsLocked()
+	out := make([]*Project, 0, len(projectStore.list))
+	for _, p := range projectStore.list {
+		if p == nil {
+			continue
+		}
+		cp := *p
+		out = append(out, &cp)
+	}
+	projectStore.Unlock()
+	return out
+}
+
+// matchProjectsInText finds pinned projects explicitly mentioned by name (or cwd)
+// in a user's message so Collie immediately knows which computer and directory
+// hold that project without guessing.
+func (s *Server) matchProjectsInText(text string) []*Project {
+	low := strings.ToLower(strings.TrimSpace(text))
+	if low == "" {
+		return nil
+	}
+	all := s.snapshotProjects()
+	seen := map[string]bool{}
+	var out []*Project
+	for _, p := range all {
+		name := strings.TrimSpace(p.Name)
+		cwd := strings.TrimSpace(p.Cwd)
+		matched := false
+		if name != "" && name != "主目录" && len([]rune(name)) >= 2 && strings.Contains(low, strings.ToLower(name)) {
+			matched = true
+		} else if len(cwd) >= 4 && cwd != "~" && strings.Contains(low, strings.ToLower(cwd)) {
+			matched = true
+		}
+		if !matched {
+			continue
+		}
+		dedupKey := p.Machine + "|" + normProjectCwdKey(cwd)
+		if seen[dedupKey] {
+			continue
+		}
+		seen[dedupKey] = true
+		out = append(out, p)
+	}
+	return out
+}
+
 // pruneOrphanMachineState cleans up any leftover kv records for machines that
 // are no longer in Auth.devices (e.g. deleted by an older Collie version).
 func (s *Server) pruneOrphanMachineState() {

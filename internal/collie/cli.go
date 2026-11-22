@@ -485,8 +485,20 @@ tidies memory/. Its journal is in dreams/.
 - ` + "`{{BIN}} reply \"text\"`" + ` — message the human (add --thread X for another thread).
 - ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--arg FLAG]... [--thread T] [--name N] \"task brief\"`" + `
   starts a worker in the background and returns at once. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
-  ` + "`{{BIN}} list`" + ` shows the connected computers and their installed agents. Use --machine when the human names a
-  computer or the code lives there (cwd is then a path on that computer; "~" is its home; skip ` + "`relay-only`" + ` machines).
+  ` + "`{{BIN}} list`" + ` shows connected computers, pinned ` + "`projects:`" + ` (name → computer, online status, agent, cwd), workers, threads and timers.
+  Follow this 4-tier dispatch priority strictly:
+  1. **Message & Project affinity (highest)**: When the human names a computer, a path, or a project
+     (check ` + "`[Project context matched...]`" + ` in the event or ` + "`projects:`" + ` in ` + "`{{BIN}} list`" + `), ALWAYS pass
+     ` + "`--machine`" + ` and ` + "`--cwd`" + ` for the computer and directory where that project/code actually lives
+     (skip ` + "`relay-only`" + ` machines; if that specific computer is ` + "`offline`" + `, tell the human rather than running project work on the wrong computer).
+  2. **One-off composer override**: When the event carries ` + "`[One-off dispatch target selected in composer...]`" + `,
+     honour those ` + "`--machine`" + ` / ` + "`--kind`" + ` / ` + "`--model`" + ` / ` + "`--effort`" + ` flags unless Tier 1 requires another computer.
+  3. **Live availability fallback**: For generic tasks that can run anywhere ("whoever can do it"),
+     omit ` + "`--machine`" + ` (or pick an ` + "`online`" + ` computer); the hub automatically falls back to an online
+     capable computer when the default computer is offline.
+  4. **Settings default**: When nothing above specifies otherwise, omit ` + "`--machine`" + `/` + "`--kind`" + `/` + "`--model`" + `
+     to use the human's configured default ({{WKIND}}, cwd {{WCWD}}), or carry over an agent/model choice
+     clearly established earlier in the same job.
   Use repeatable ` + "`--arg`" + ` when an agent CLI needs extra startup flags (e.g. ` + "`--arg -c --arg 'service_tier=\"fast\"'`" + `).
   The brief is complete and self-contained: goal, context, constraints, what "done" means
   and what to hand back. How to get there, and where to keep working files, is the
@@ -494,11 +506,6 @@ tidies memory/. Its journal is in dreams/.
   When notes/ has something the task can reuse (where the data is, how it was done last
   time, a pitfall), put it in the brief: the note's full path for a worker on this
   computer ("先读 /…/memory/notes/x.md"), the relevant lines themselves for one on another.
-  Leaving out --kind/--model/--effort uses the human's current default, set in settings
-  ({{WKIND}} when this session began). Pass one when what they want is clear from the
-  conversation, said outright or not: they asked for Codex earlier in this job, a retry
-  of a worker that ran with a model they chose, a task the default can't do on that
-  computer. Carry over choices they already made; ask only when it's genuinely unclear.
 - ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker; it gets the message now, even mid-task.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's
   number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.
@@ -508,7 +515,7 @@ tidies memory/. Its journal is in dreams/.
   ` + "`{{BIN}} spawn --resume WORKER \"what next\"`" + ` opens it again on the same computer and
   directory, so a follow-up on earlier work carries on with everything it knew. Spawn
   fresh for a new job.
-- ` + "`{{BIN}} list`" + ` — connected computers, workers, threads, timers.
+- ` + "`{{BIN}} list`" + ` — connected computers, pinned projects (with computer & cwd), workers, threads, timers.
 - ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, or worker name — for a worker it also includes its recent terminal output across any connected computer).
   Results contain further ids: follow them hop by hop to recall older context.
 - ` + "`{{BIN}} exec [--machine M] [--cwd DIR] [--timeout SEC] \"command\"`" + ` — run a bounded shell command on a connected computer **only** when every coding agent CLI on that computer fails to start or is out of quota (e.g. to upgrade/repair a broken CLI itself or check why agents won't launch). Delegate normal coding and investigation tasks via ` + "`spawn`" + `.

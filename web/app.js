@@ -1189,8 +1189,31 @@
 
   // "执行任务": where dispatched work runs. Remembers your last chosen computer,
   // agent, model, and effort across reloads, falling back to 自动化 → 设置 defaults.
-  let target = store.get("dispatchTarget", null), targetDefault = null;
-  const saveTarget = () => store.set("dispatchTarget", target && Object.keys(target).length ? target : null);
+  // Clear any legacy sticky dispatchTarget from earlier versions: Collie's
+  // composer now defaults to automatic routing ("自动派活"), and manual choices
+  // apply only to the single outgoing message before resetting back to Auto.
+  store.set("dispatchTarget", null);
+  let overrideOpen = false, target = null, targetDefault = null;
+  let chipSeq = 0;
+
+  function resolveSuperUploadMachine(draftText = "") {
+    if (overrideOpen && target?.machine) {
+      return target.machine === "local" ? "" : target.machine;
+    }
+    const low = String(draftText || "").trim().toLowerCase();
+    if (low) {
+      const hit = (state.projects || []).find((p) => {
+        const nm = String(p.name || "").trim();
+        if (!nm || nm === "主目录" || nm.length < 2) return false;
+        if (!low.includes(nm.toLowerCase())) return false;
+        const mObj = (state.machines || []).find((m) => m.id === (p.machine || ""));
+        return !p.machine || mObj?.online;
+      });
+      if (hit) return hit.machine || "";
+    }
+    return sup.router?.machine || targetDefault?.machine || preferredWorkMachine("") || "";
+  }
+
   async function renderTarget(fresh) {
     if (!targetDefault || fresh) {
       try {
@@ -1198,128 +1221,148 @@
         targetDefault = { machine: s.worker_machine || "", kind: s.worker_kind === "antigravity" ? "agy" : s.worker_kind || "claude", model: s.worker_model || "", effort: s.worker_effort || "" };
       } catch { targetDefault ||= { machine: "", kind: "claude", model: "", effort: "" }; }
     }
-    const effDefaultMachine = targetDefault.machine || preferredWorkMachine("");
-    let ms = runnableMachines((target && target.machine) ?? effDefaultMachine);
+    const autoPill = $("#t-auto-pill"), labelEl = $("#cbar-label"), resetBtn = $("#t-reset");
+    const mSel = $("#t-machine"), kSel = $("#t-kind"), modSel = $("#t-model"), effSel = $("#t-effort");
+    if (!mSel || !kSel || !modSel || !effSel) return;
+
+    if (!overrideOpen) {
+      if (autoPill) autoPill.hidden = false;
+      if (labelEl) labelEl.hidden = true;
+      if (resetBtn) resetBtn.hidden = true;
+      for (const s of [mSel, kSel, modSel, effSel]) { s.hidden = true; syncPick(s); }
+      return;
+    }
+
+    if (autoPill) autoPill.hidden = true;
+    if (labelEl) labelEl.hidden = false;
+    if (resetBtn) resetBtn.hidden = false;
+
+    const cur = target || { machine: "", kind: "", model: "", effort: "" };
+    let ms = runnableMachines(cur.machine === "local" ? "" : cur.machine);
     if (!ms.length) ms = state.machines || [{ id: "", name: "本机", local: true }];
-    // Ensure target machine and agent are valid on available computers.
-    let t = targetNow();
-    if (!targetDefault.machine && !(target && "machine" in target) && effDefaultMachine) {
-      t.machine = effDefaultMachine;
-    }
-    if (!ms.some((m) => m.id === t.machine)) {
-      t.machine = ms[0]?.id || "";
-    }
-    const have = ms.find((m) => m.id === t.machine)?.agents;
-    if (Array.isArray(have) && have.length && !have.includes(t.kind)) {
-      const fallback = ["codex", "claude", "agy", "gemini"].find((k) => have.includes(k));
-      if (fallback) t.kind = fallback;
-    }
+
     const fill = (sel, html) => { if (sel._html !== html) { sel._html = html; sel.innerHTML = html; } };
-    const mSel = $("#t-machine"), kSel = $("#t-kind");
-    fill(mSel, ms.map((m) => `<option value="${esc(m.id)}" data-os="${osKey(m.os)}"
-      data-sub="${m.local ? "hub" : m.os || ""}${m.id === targetDefault.machine ? " · 默认" : ""}" ${m.id === t.machine ? "selected" : ""}>${esc(m.name)}</option>`).join(""));
-    fill(kSel, [["claude", "Claude"], ["codex", "Codex"], ["agy", "Antigravity"], ["gemini", "Gemini"]].map(([k, l]) => {
+    const mVal = cur.machine || "";
+    let mHtml = `<option value="" data-short="自动电脑" data-sub="按涉及的项目或当前在线电脑自动判断" ${mVal === "" ? "selected" : ""}>自动选择电脑</option>`;
+    mHtml += ms.map((m) => {
+      const val = m.local ? "local" : m.id;
+      const sub = [m.local ? "hub" : m.os || "", m.id === targetDefault.machine ? "默认偏好" : ""].filter(Boolean).join(" · ");
+      return `<option value="${esc(val)}" data-os="${osKey(m.os)}" data-short="${esc(m.name)}" data-sub="${esc(sub)}" ${val === mVal ? "selected" : ""}>${esc(m.name)}</option>`;
+    }).join("");
+    fill(mSel, mHtml);
+    mSel.value = mVal;
+    mSel.hidden = false;
+    syncPick(mSel);
+    mSel._pick?.classList.toggle("changed", Boolean(mVal));
+
+    const pickedMObj = mVal ? ms.find((m) => (m.local ? "local" : m.id) === mVal) : null;
+    const have = pickedMObj?.agents;
+    let kVal = cur.kind || "";
+    if (kVal && Array.isArray(have) && have.length && !have.includes(kVal)) {
+      kVal = "";
+      cur.kind = "";
+      cur.model = "";
+      cur.effort = "";
+    }
+    let kHtml = `<option value="" data-short="自动 Agent" data-sub="按项目配置或默认偏好自动选择" ${kVal === "" ? "selected" : ""}>自动选择 Agent</option>`;
+    kHtml += [["codex", "Codex"], ["claude", "Claude"], ["agy", "Antigravity"], ["gemini", "Gemini"]].map(([k, l]) => {
       const missing = Array.isArray(have) && !have.includes(k);
-      const sub = [missing ? "这台电脑没装" : "", k === targetDefault.kind ? "默认" : ""].filter(Boolean).join(" · ");
-      return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${sub}"` : ""} ${missing && k !== t.kind ? "disabled" : ""} ${k === t.kind ? "selected" : ""}>${l}</option>`;
-    }).join(""));
-    mSel.value = t.machine; kSel.value = t.kind;
-    mSel.hidden = ms.length < 2;
-    syncPick(mSel); syncPick(kSel);
-    mSel._pick?.classList.toggle("changed", t.machine !== effDefaultMachine);
-    kSel._pick?.classList.toggle("changed", t.kind !== targetDefault.kind);
-    renderModelChips(t);
+      const sub = [missing ? "该电脑未安装" : "", k === targetDefault.kind ? "默认偏好" : ""].filter(Boolean).join(" · ");
+      return `<option value="${k}" data-glyph="${k}" data-short="${KIND_LABEL[k]}" ${sub ? `data-sub="${esc(sub)}"` : ""} ${missing ? "disabled" : ""} ${k === kVal ? "selected" : ""}>${l}</option>`;
+    }).join("");
+    fill(kSel, kHtml);
+    kSel.value = kVal;
+    kSel.hidden = false;
+    syncPick(kSel);
+    kSel._pick?.classList.toggle("changed", Boolean(kVal));
+
+    renderModelChips(cur);
   }
-  // Default model/effort for a given target: uses Settings default when on the
-  // default agent, or your last remembered model for that agent@machine.
-  const modelDefaults = (t) => t.kind === targetDefault.kind ? { model: targetDefault.model, effort: targetDefault.effort } : { model: "", effort: "" };
-  const modelNow = (t) => {
-    const d = modelDefaults(t);
-    const mem = getSavedModel(t.kind, t.machine);
-    return {
-      model: t.model !== undefined ? t.model : (mem?.model ?? d.model),
-      effort: t.effort !== undefined ? t.effort : (mem?.effort ?? d.effort),
-      d,
-    };
-  };
-  let chipSeq = 0;
+
   async function renderModelChips(resolvedT) {
-    const seq = ++chipSeq, t = resolvedT || targetNow(), { model, effort, d } = modelNow(t);
-    const mSel = $("#t-model"), eSel = $("#t-effort");
-    const info = await modelsFor(t.kind, t.machine);
-    if (seq !== chipSeq) return;
+    const seq = ++chipSeq;
+    const modSel = $("#t-model"), effSel = $("#t-effort");
+    if (!modSel || !effSel) return;
+    const t = resolvedT || target || { machine: "", kind: "", model: "", effort: "" };
+    if (!overrideOpen || !t.kind) {
+      modSel.hidden = true; effSel.hidden = true;
+      syncPick(modSel); syncPick(effSel);
+      return;
+    }
+    const queryM = t.machine === "local" ? "" : (t.machine || targetDefault?.machine || preferredWorkMachine("") || "");
+    const info = await modelsFor(t.kind, queryM).catch(() => ({ models: [], efforts: [] }));
+    if (seq !== chipSeq || !overrideOpen || !target?.kind) return;
     const list = [...(info.models || [])];
+    const model = t.model || "";
+    const effort = t.effort || "";
     if (model && !list.some((m) => m.id === model)) list.unshift({ id: model });
     const short = (id) => id.split("/").pop();
-    const mark = (v, dv) => (v === dv ? " · 默认" : "");
     const defShort = info.default ? short(info.default) : "默认模型";
-    let html = `<option value="" data-short="${esc(defShort)}" data-sub="${esc(info.default ? "现在是 " + info.default + (d.model === "" ? " · 默认" : "") : "agent 自己的设置")}">默认${info.default ? "（" + esc(short(info.default)) + "）" : ""}</option>`;
-    html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc((m.label && m.label !== m.id ? m.id : "") + mark(m.id, d.model))}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
-    if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
-    mSel.value = model;
+    let html = `<option value="" data-short="${esc(defShort)}" data-sub="${esc(info.default ? "默认（" + info.default + "）" : "使用默认模型")}" ${!model ? "selected" : ""}>默认${info.default ? "（" + esc(short(info.default)) + "）" : ""}</option>`;
+    html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc(m.label && m.label !== m.id ? m.id : "")}" ${m.id === model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
+    if (modSel._html !== html) { modSel._html = html; modSel.innerHTML = html; }
+    modSel.value = model;
+    modSel.hidden = false;
+
     const cur = list.find((m) => m.id === model);
     const effs = cur?.efforts?.length ? cur.efforts : (info.efforts || []);
     const eff = effs.includes(effort) ? effort : "";
-    const defE = d.effort || info.default_effort || "";
-    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="${esc(d.effort ? "派活默认" : "agent 自己的设置")}">默认（${esc(EFFORT_LABEL[defE] || defE || "agent 自己定")}）</option>`;
+    const defE = info.default_effort || "";
+    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="默认思考强度" ${!eff ? "selected" : ""}>默认${defE ? "（" + esc(EFFORT_LABEL[defE] || defE) + "）" : ""}</option>`;
     ehtml += effs.map((e) => `<option value="${esc(e)}" data-short="思考 · ${esc(EFFORT_LABEL[e] || e)}" data-sub="${esc(e)}" ${e === eff ? "selected" : ""}>${esc(EFFORT_LABEL[e] || e)}</option>`).join("");
-    if (eSel._html !== ehtml) { eSel._html = ehtml; eSel.innerHTML = ehtml; }
-    eSel.value = eff === d.effort ? "" : eff;
-    eSel.hidden = effs.length === 0;
-    syncPick(mSel); syncPick(eSel);
-    const mChanged = model !== d.model;
-    const eChanged = eff !== d.effort && eff !== "";
-    mSel._pick?.classList.toggle("changed", mChanged);
-    eSel._pick?.classList.toggle("changed", eChanged);
-    const effDefM = targetDefault.machine || preferredWorkMachine("");
-    const anyChanged = t.machine !== effDefM || t.kind !== targetDefault.kind || mChanged || eChanged;
-    const resetBtn = $("#t-reset");
-    if (resetBtn) resetBtn.hidden = !anyChanged;
+    if (effSel._html !== ehtml) { effSel._html = ehtml; effSel.innerHTML = ehtml; }
+    effSel.value = eff;
+    effSel.hidden = effs.length === 0;
+
+    syncPick(modSel); syncPick(effSel);
+    modSel._pick?.classList.toggle("changed", Boolean(model));
+    effSel._pick?.classList.toggle("changed", Boolean(eff));
   }
-  const pick = (o) => { target = { ...(target || {}), ...o }; saveTarget(); };
+
+  const pick = (o) => { target = { ...(target || { machine: "", kind: "", model: "", effort: "" }), ...o }; };
+  $("#t-auto-pill")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    overrideOpen = true;
+    target = { machine: "", kind: "", model: "", effort: "" };
+    renderTarget().then(() => {
+      const mSel = $("#t-machine");
+      if (mSel && !mSel.hidden) openPick(mSel);
+    });
+  });
   $("#t-machine").addEventListener("change", (e) => {
-    const m = e.target.value, k = $("#t-kind").value;
-    const mem = getSavedModel(k, m);
-    pick({ machine: m, model: mem?.model, effort: mem?.effort });
+    pick({ machine: e.target.value });
     renderTarget();
   });
   $("#t-kind").addEventListener("change", (e) => {
-    const k = e.target.value, m = $("#t-machine").value;
-    const mem = getSavedModel(k, m);
-    pick({ kind: k, model: mem?.model, effort: mem?.effort });
+    const k = e.target.value;
+    const m = (target?.machine === "local" ? "" : target?.machine) || "";
+    const mem = k ? getSavedModel(k, m) : null;
+    pick({ kind: k, model: mem?.model || "", effort: mem?.effort || "" });
     renderTarget();
   });
   $("#t-model").addEventListener("change", (e) => {
-    const t = targetNow();
     const m = e.target.value;
-    const { effort } = modelNow(t);
-    saveLastModel(t.kind, t.machine, m, effort);
-    pick({ machine: t.machine, kind: t.kind, model: m });
-    renderModelChips();
+    if (target?.kind) {
+      const mach = target.machine === "local" ? "" : (target.machine || "");
+      saveLastModel(target.kind, mach, m, target.effort || "");
+    }
+    pick({ model: m });
+    renderModelChips(target);
   });
   $("#t-effort").addEventListener("change", (e) => {
-    const t = targetNow();
-    const { model } = modelNow(t);
-    const ef = e.target.value || modelDefaults(t).effort;
-    saveLastModel(t.kind, t.machine, model, ef);
-    pick({ machine: t.machine, kind: t.kind, effort: ef });
-    renderModelChips();
+    const ef = e.target.value;
+    if (target?.kind) {
+      const mach = target.machine === "local" ? "" : (target.machine || "");
+      saveLastModel(target.kind, mach, target.model || "", ef);
+    }
+    pick({ effort: ef });
+    renderModelChips(target);
   });
   $("#t-reset")?.addEventListener("click", () => {
+    overrideOpen = false;
     target = null;
-    saveTarget();
-    const map = { ...(store.get("lastModel", {}) || {}) };
-    if (targetDefault) delete map[modelMemKey(targetDefault.kind, targetDefault.machine)];
-    store.set("lastModel", map);
     renderTarget();
   });
-  const targetNow = () => {
-    const d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
-    const t = { ...d };
-    for (const [k, v] of Object.entries(target || {})) if (v !== undefined) t[k] = v;
-    if (target && "kind" in target && t.kind !== d.kind) { t.model = target.model; t.effort = target.effort; }
-    return t;
-  };
 
   // Quoting one of Collie's messages: it rides along with what you send next.
   let replyTo = null;
@@ -1339,20 +1382,12 @@
   });
 
   bindComposer($("#super-composer"), $("#super-input"), async (text) => {
-    // Send whatever differs from Settings defaults (including remembered model/computer choices).
-    const t = targetNow(), p = target || {}, d = targetDefault || { machine: "", kind: "claude", model: "", effort: "" };
-    let ms = runnableMachines(t.machine);
-    if (ms.length && !ms.some((m) => m.id === t.machine)) t.machine = ms[0].id;
-    const have = ms.find((m) => m.id === t.machine)?.agents;
-    if (Array.isArray(have) && have.length && !have.includes(t.kind)) {
-      const fb = ["codex", "claude", "agy", "gemini"].find((k) => have.includes(k));
-      if (fb) t.kind = fb;
-    }
-    const { model, effort, d: md } = modelNow(t);
-    const sendMachine = ("machine" in p || t.machine !== d.machine) ? (t.machine || "local") : "";
-    const sendKind = ("kind" in p || t.kind !== d.kind) ? t.kind : "";
-    const sendModel = ("model" in p || sendKind || model !== md.model) ? model : "";
-    const sendEffort = ("effort" in p || sendKind || effort !== md.effort) ? effort : "";
+    const ov = overrideOpen && target ? { ...target } : null;
+    const sendMachine = ov?.machine || "";
+    const sendKind = ov?.kind || "";
+    const sendModel = sendKind ? (ov?.model || "") : "";
+    const sendEffort = sendKind ? (ov?.effort || "") : "";
+    const hasOverride = Boolean(sendMachine || sendKind || sendModel || sendEffort);
     const re = replyTo;
     setReply(null);
     // Your message shows at once; the hub's copy takes its place when it arrives.
@@ -1361,22 +1396,32 @@
     renderSuper(true);
     let r;
     try {
-      r = await api("/api/super/say", { body: { text, re: re?.entry || "",
-      machine: sendMachine,
-      kind: sendKind,
-      model: sendModel,
-      effort: sendEffort } });
+      r = await api("/api/super/say", { body: {
+        text,
+        re: re?.entry || "",
+        machine: sendMachine,
+        kind: sendKind,
+        model: sendModel,
+        effort: sendEffort,
+        override: hasOverride,
+      } });
     } catch (err) {
       pendingSays.splice(pendingSays.indexOf(mine), 1);
       if (re && !replyTo) setReply(sup.entries.find((x) => x.id === re.entry));
       renderSuper(true);
       throw err;
     }
+    // Single-use override: reset back to automatic dispatch right after sending!
+    if (overrideOpen) {
+      overrideOpen = false;
+      target = null;
+      renderTarget();
+    }
     // The hub's copy may already be here (its push beat the reply): swap now.
     mine.id = r?.entry || "";
     if (!mine.id || sup.entries.some((e) => e.id === mine.id)) { pendingSays.splice(pendingSays.indexOf(mine), 1); renderSuper(true); }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
-  }, () => targetNow().machine);
+  }, (draftText) => resolveSuperUploadMachine(draftText));
 
   // ───────────────────────────── panel views (执行轨迹 / 长期记忆 / 定时任务 / 外部触发 / 设置)
   let traceTab = store.get("traceTab", "flow");     // "flow" | "events"
@@ -2123,7 +2168,7 @@
       <section class="card set-sec">
         <header>
           <span class="set-ico"><svg viewBox="0 0 24 24"><path d="M5 12h13M13 7l5 5-5 5"/><rect x="3" y="4" width="4" height="16" rx="1.5"/></svg></span>
-          <div class="set-head-txt"><h4>默认派活目标</h4><p>Collie 派子 Agent 执行具体任务时的默认配置；你也可随时在聊天框底部快捷切换，或直接在对话中指定电脑与模型。</p></div>
+          <div class="set-head-txt"><h4>默认派活偏好（兜底默认）</h4><p>当对话未提及特定电脑上的项目、且输入框处于「自动派活」时优先使用的默认电脑与 Agent；若默认电脑离线会自动切至其他在线电脑。</p></div>
         </header>
         <div class="set-grid three">
           <label>Agent<select name="worker_kind" data-title="派活默认用">${kindOpts(s.worker_kind)}</select></label>
@@ -4467,9 +4512,21 @@
   // Files go to the machine where the agent runs, then their paths ride
   // along in the message (agents read images and files by path).
   const fmtSize = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  function uploadFileToMachine(file, name, m) {
+    const up = routeReq(`/api/uploads?name=${encodeURIComponent(name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
+    return fetch(up.url, {
+      method: "POST", body: file, credentials: up.hub ? "omit" : "same-origin",
+      headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
+    }).then(async (res) => {
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || res.statusText);
+      return d.path;
+    });
+  }
   function bindFiles(form, machine) {
     const box = $(".files", form), picker = $('input[type="file"]', form);
     form._files = [];
+    form._machine = machine;
     const draw = () => {
       box.hidden = !form._files.length;
       box.innerHTML = form._files.map((f, i) => `<span class="file ${f.err ? "err" : f.path ? "" : "busy"}" title="${esc(f.err || f.path || "上传中…")}">
@@ -4478,18 +4535,13 @@
         <button type="button" data-rm="${i}" title="移除">×</button></span>`).join("");
     };
     const add = (list) => {
+      const taVal = $("textarea", form)?.value || "";
       for (const file of list) {
-        const f = { name: file.name || "粘贴的图片.png", size: file.size, thumb: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" };
-        const m = machine();
-        const up = routeReq(`/api/uploads?name=${encodeURIComponent(f.name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
-        f.done = fetch(up.url, {
-          method: "POST", body: file, credentials: up.hub ? "omit" : "same-origin",
-          headers: up.hub ? { Authorization: "Bearer " + up.hub.token } : {},
-        }).then(async (res) => {
-          const d = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(d.error || res.statusText);
-          f.path = d.path;
-        }).catch((err) => { f.err = err.message; toast(`${f.name}：${err.message}`, "attn"); }).finally(draw);
+        const f = { name: file.name || "粘贴的图片.png", size: file.size, rawFile: file, thumb: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" };
+        const m = machine(taVal);
+        f.machine = m;
+        f.done = uploadFileToMachine(file, f.name, m).then((p) => { f.path = p; })
+          .catch((err) => { f.err = err.message; toast(`${f.name}：${err.message}`, "attn"); }).finally(draw);
         form._files.push(f);
       }
       draw();
@@ -4522,6 +4574,15 @@
     if (!files.length) return text;
     await Promise.all(files.map((f) => f.done));
     if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
+    const desiredM = form._machine ? form._machine(text) : undefined;
+    if (desiredM !== undefined) {
+      await Promise.all(files.map(async (f) => {
+        if (f.rawFile && f.machine !== desiredM) {
+          f.path = await uploadFileToMachine(f.rawFile, f.name, desiredM);
+          f.machine = desiredM;
+        }
+      }));
+    }
     return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
   }
   // Images a Collie or agent message points at (including Markdown file links)

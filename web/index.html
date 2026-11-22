@@ -226,15 +226,20 @@
             <button type="button" class="icon-btn attach" title="添加图片或文件（支持粘贴与拖拽）">
               <svg viewBox="0 0 24 24"><path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48"/></svg>
             </button>
-            <div class="chips">
-              <span class="cbar-label" id="cbar-label" title="Collie 派出去执行具体任务时使用的电脑、agent 和模型（自动记住上次选择）。想改 Collie 自己对话用的模型，点击顶部标题旁的胶囊">
-                <svg viewBox="0 0 24 24"><path d="M5 12h13M13 7l5 5-5 5"/></svg>派活至
+            <div class="chips" id="super-dispatch-chips">
+              <button type="button" class="dispatch-auto-pill" id="t-auto-pill" title="默认由 Collie 根据涉及的项目、电脑在线状态与默认偏好自动决定派给谁；点击可为本次任务单次指定电脑或模型">
+                <svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>
+                <span>自动派活</span>
+                <small>指定本次…</small>
+              </button>
+              <span class="cbar-label override-active" id="cbar-label" hidden title="仅对即将发送的这一条消息生效，发送后自动恢复「自动派活」">
+                <svg viewBox="0 0 24 24"><path d="M5 12h13M13 7l5 5-5 5"/></svg>本次指定
               </span>
-              <select id="t-machine" data-pick="chip" data-title="执行任务的电脑" title="执行任务的电脑"></select>
-              <select id="t-kind" data-pick="chip" data-title="执行任务的 agent" title="执行任务的 agent"></select>
-              <select id="t-model" data-pick="chip" data-title="执行任务的模型" title="执行任务的模型"></select>
-              <select id="t-effort" data-pick="chip" data-title="思考强度" title="思考强度"></select>
-              <button type="button" class="chip-reset" id="t-reset" hidden title="恢复为默认派活设置">恢复默认</button>
+              <select id="t-machine" data-pick="chip" data-title="本次执行电脑" title="本次执行电脑" hidden></select>
+              <select id="t-kind" data-pick="chip" data-title="本次执行 Agent" title="本次执行 Agent" hidden></select>
+              <select id="t-model" data-pick="chip" data-title="本次执行模型" title="本次执行模型" hidden></select>
+              <select id="t-effort" data-pick="chip" data-title="本次思考强度" title="本次思考强度" hidden></select>
+              <button type="button" class="chip-reset" id="t-reset" hidden title="取消本次指定，恢复自动派活">× 自动</button>
             </div>
             <span class="spacer"></span>
             <span class="send-hint" id="super-send-hint"></span>
