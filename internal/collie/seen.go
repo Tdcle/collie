@@ -1,7 +1,9 @@
 package collie
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -48,14 +50,22 @@ func (sp *seenPanes) mark(pane string) {
 	sp.at[pane] = time.Now()
 }
 
-// seenPane: the page has this pane open in front of you.
+// seenPane: the page has this pane (or Codex session) open in front of you.
 func (s *Server) seenPane(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Pane string `json:"pane"`
+		Pane    string `json:"pane"`
+		Kind    string `json:"kind"`
+		Machine string `json:"machine"`
+		Session string `json:"session"`
 	}
-	if !decode(w, r, &body) || body.Pane == "" {
+	if !decode(w, r, &body) {
 		return
 	}
-	s.seen.mark(body.Pane)
+	if body.Pane != "" {
+		s.seen.mark(body.Pane)
+	}
+	if kinds[body.Kind] == "codex" && strings.TrimSpace(body.Session) != "" {
+		go s.markCodexReadOn(context.Background(), body.Machine, strings.TrimSpace(body.Session))
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

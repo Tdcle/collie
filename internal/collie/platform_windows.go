@@ -103,6 +103,10 @@ func stopProcess(pid int) bool {
 	return !alive(pid)
 }
 
+func interruptProcess(_ int) error {
+	return nil
+}
+
 // isFileLockedByOtherProcess checks whether a lock file on Windows is held
 // exclusively (or without write sharing) by another running process.
 func isFileLockedByOtherProcess(path string) bool {

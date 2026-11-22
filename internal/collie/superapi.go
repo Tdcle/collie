@@ -46,6 +46,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/memory", s.superSaveMemory)
 	api("POST /api/super/dream", s.superDream)
 	api("POST /api/super/router/restart", s.superRestartRouter)
+	api("POST /api/super/router/interrupt", s.superInterruptRouter)
 	api("POST /api/super/exec", s.superExec)
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
 }
@@ -937,6 +938,30 @@ func (s *Server) superSaveSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) superRestartRouter(w http.ResponseWriter, r *http.Request) {
 	s.sup.RestartRouter(r.Context())
 	writeJSON(w, 202, map[string]any{"ok": true})
+}
+
+func (s *Server) superInterruptRouter(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	sp := s.sup
+	live, _ := sp.liveAgents(ctx)
+	a, ok := live[routerName]
+	if !ok || a.Pane == "" {
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	_ = s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": a.Pane, "keys": []string{"esc"}}, nil)
+	local, m := split(a.Pane)
+	sess := s.herdr.SessionOf(local)
+	if sess == "" {
+		if ps := s.titlesFor(m, ctx)[local]; ps.Session != "" {
+			sess = ps.Session
+		}
+	}
+	if kinds[a.Kind] == "codex" && sess != "" {
+		_ = s.stopCodexTurn(ctx, m, sess)
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // ---------------------------------------------------------------- webhooks

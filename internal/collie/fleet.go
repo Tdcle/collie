@@ -743,7 +743,11 @@ func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
 	}
 	switch info.Agent.Status {
 	case "idle", "done":
-	case "working", "blocked":
+	case "working":
+		// Allow mid-turn steering / follow-up queueing inside interactive TUI panes
+		// (Codex TUI steers active turns, Claude Code / Gemini CLI queue the human's
+		// follow-up prompt) as long as no modal approval menu is currently up.
+	case "blocked":
 		return &HerdrError{Code: "agent_blocked", Message: "agent is " + info.Agent.Status}
 	default:
 		return err // still starting: let the caller retry

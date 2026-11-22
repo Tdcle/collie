@@ -114,6 +114,21 @@ func (s *Server) agyAppSend(ctx context.Context, conversation, text string) erro
 	return nil
 }
 
+// agyAppInterrupt cancels an in-progress Antigravity desktop cascade turn.
+func (s *Server) agyAppInterrupt(ctx context.Context, conversation string) error {
+	ls := agyDesktopServer()
+	if ls == nil {
+		return errors.New("Antigravity 桌面端当前未连接")
+	}
+	if _, err := ls.call(ctx, "CancelCascadeInvocation", map[string]any{"cascadeId": conversation}); err != nil {
+		if _, err2 := ls.call(ctx, "CancelCascadeSteps", map[string]any{"cascadeId": conversation}); err2 != nil {
+			return fmt.Errorf("Antigravity 未能中止任务：%w", err)
+		}
+	}
+	forgetDesktopRows()
+	return nil
+}
+
 // findAgyHub reads the file the app (2.34 and later) writes for local
 // clients: ~/.gemini/antigravity/daemon/hub_<port>.json with the server's
 // pid, plain-HTTP port and token. Works across macOS, Linux, and Windows.

@@ -408,11 +408,23 @@
   // it as idle everywhere (herdr itself only counts its own terminal).
   const seenAt = new Map();
   function markSeen(v) {
-    if (v.status !== "done" || document.hidden || Date.now() - (seenAt.get(v.pane_id) || 0) < 3000) return;
+    if (!v || document.hidden || Date.now() - (seenAt.get(v.pane_id) || 0) < 3000) return;
+    if (v.status !== "done" && !(v.kind === "codex" && v.session)) return;
     seenAt.set(v.pane_id, Date.now());
-    api("/api/seen", { body: { pane: v.pane_id } }).catch(() => {});
+    api("/api/seen", { body: { pane: v.pane_id, kind: v.kind || "", machine: v.machine || "", session: v.session || "" } }).catch(() => {});
   }
-  document.addEventListener("visibilitychange", () => { if (view === "pane" && find(current)) markSeen(find(current)); });
+  function markExtSeen(e) {
+    if (!e || e.kind !== "codex" || !e.session || document.hidden) return;
+    if (e.live && e.status === "working") return;
+    const key = "x:" + e.id;
+    if (Date.now() - (seenAt.get(key) || 0) < 3000) return;
+    seenAt.set(key, Date.now());
+    api("/api/seen", { body: { kind: e.kind, machine: e.machine || "", session: e.session } }).catch(() => {});
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (view === "pane" && find(current)) markSeen(find(current));
+    if (view === "ext" && extCur && !extCur.startsWith("h:")) markExtSeen(ext.find((x) => x.id === extCur));
+  });
 
   function notifyTransitions(next) {
     for (const a of next.agents) {
@@ -845,6 +857,8 @@
     }
     const st = $("#router-status");
     const showLive = !r.replied && (r.status === "working" || r.status === "starting" || r.status === "dreaming" || pendingSays.length > 0);
+    const superStop = $("#super-stop");
+    if (superStop) superStop.hidden = !(r.alive && (r.status === "working" || r.status === "starting"));
     st.className = "status " + collieDot(r.status);
     st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`;
     st.hidden = showLive && Boolean(sup.entries.length || pendingSays.length);
@@ -2401,6 +2415,9 @@
     $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
     const ab = $("#ext-archive-btn");
     if (ab) ab.textContent = meta?.archived ? "移出归档" : "归档会话";
+    if ($("#x-stop-btn")) $("#x-stop-btn").hidden = true;
+    if ($("#x-stop")) $("#x-stop").hidden = true;
+    if ($("#ext-menu-interrupt")) $("#ext-menu-interrupt").hidden = true;
     const canResume = !!(h && on && h.session && RESUME[h.kind]);
     $("#x-composer").hidden = !h;
     $("#x-input").disabled = !canResume;
@@ -2807,10 +2824,14 @@
       $("#x-tag").hidden = true;
       $("#x-input").disabled = true;
       $("#x-send").disabled = true;
+      if ($("#x-stop-btn")) $("#x-stop-btn").hidden = true;
+      if ($("#x-stop")) $("#x-stop").hidden = true;
+      if ($("#ext-menu-interrupt")) $("#ext-menu-interrupt").hidden = true;
       if ($("#x-chips")) $("#x-chips").hidden = true;
       if (!gone) extSoon();
       return;
     }
+    markExtSeen(e);
     const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
     const on = extOnline(e);
     $("#x-name").textContent = extName(e);
@@ -2831,15 +2852,22 @@
     }
 
     const busyElsewhere = !!(e.live && !e.can_send && (e.status === "working" || e.status === "blocked"));
+    const extWorkingNow = !!(on && !gone && e.live && e.status === "working");
+    const canInterruptExt = !!(extWorkingNow && (e.can_send || e.pid > 0 || e.kind === "agy"));
+    if ($("#x-stop-btn")) $("#x-stop-btn").hidden = !canInterruptExt;
+    if ($("#x-stop")) $("#x-stop").hidden = !canInterruptExt;
+    if ($("#ext-menu-interrupt")) $("#ext-menu-interrupt").hidden = !canInterruptExt;
     const canChat = !!(on && !busyElsewhere && (e.can_send || e.can_take_over || e.session));
     $("#x-composer").hidden = false;
     $("#x-input").disabled = !canChat;
     $("#x-send").disabled = !canChat;
     $("#x-input").placeholder = !on ? `${machineName(e.machine)} 当前离线，上线后可直接继续对话…`
       : busyElsewhere ? (e.status === "blocked" ? `正在 ${e.app || "原窗口"} 等待确认（当前回合仍由桌面端持有，可在桌面端直接回复，或等当前回合停下后在此回复）…` : `正在 ${e.app || "原窗口"} 中执行，当前步骤完成后即可直接发消息…`)
+      : extWorkingNow ? (e.kind === "codex" ? "任务执行中，可直接输入补充指令插话（实时注入当前回合）…" : "任务执行中，可直接输入补充消息（自动排队跟进）…")
       : "输入消息继续对话…";
     $("#x-hint").textContent = canChat && e.machine ? machineName(e.machine) : "";
     renderExtChips(e.kind, e.machine, e.run, canChat && !e.hub, "x:" + e.id);
+    if ($("#x-thread")?._redraw) $("#x-thread")._redraw();
   }
   bindComposer($("#x-composer"), $("#x-input"), async (text) => {
     if (!text.trim()) return;
@@ -3325,6 +3353,8 @@
     const busy = v.status === "working" || v.status === "starting";
     const stopBtn = $("#d-stop-btn");
     if (stopBtn) stopBtn.hidden = !busy;
+    const composerStop = $("#d-stop");
+    if (composerStop) composerStop.hidden = !busy;
     const menuInt = $("#menu-interrupt");
     if (menuInt) menuInt.hidden = !busy;
     const ms = state.machines || [];
@@ -3336,7 +3366,10 @@
     $("#d-cwd").textContent = (ms.length > 1 ? machineName(v.machine) + " · " : "") + cwd;
     renderWorkerModel(v);
     renderPaneChips(v);
-    $("#input").placeholder = `给 ${KIND_LABEL[v.kind] || v.kind || "Agent"} 发消息…`;
+    $("#input").placeholder = busy
+      ? (v.kind === "codex" ? `正在执行，可直接输入补充指令向 ${KIND_LABEL[v.kind] || v.kind} 插话…` : `正在执行，可直接输入补充消息给 ${KIND_LABEL[v.kind] || v.kind || "Agent"}…`)
+      : `给 ${KIND_LABEL[v.kind] || v.kind || "Agent"} 发消息…`;
+    if ($("#thread")?._redraw) $("#thread")._redraw();
   }
 
   let dChipSeq = 0, dSwitching = false;
@@ -3618,87 +3651,192 @@
     input.value = b.dataset.text;
     form.requestSubmit();
   });
+  function isThreadActivelyWorking(el) {
+    if (el.id === "thread") {
+      const v = find(current);
+      if (v && (v.status === "working" || v.status === "starting")) return true;
+      return lastLive?.status === "working";
+    }
+    if (el.id === "x-thread" && extCur && !extCur.startsWith("h:")) {
+      const e = ext.find((x) => x.id === extCur);
+      return !!(e && e.live && e.status === "working");
+    }
+    return false;
+  }
+
+  function renderToolRunHTML(run, start, open) {
+    const row = (t, k) => {
+      const cls = t.error ? "err" : (t.output ? "" : "pending");
+      return `<details class="tool ${cls}" data-i="${k}" ${open.has(String(k)) ? "open" : ""}>`
+        + `<summary><span class="tname">${esc(t.name)}</span><span class="targ">${esc(t.input)}</span></summary>`
+        + (t.output ? `<pre>${esc(t.output)}</pre>` : "") + `</details>`;
+    };
+    if (run.length <= 3 || !prefs.fold()) {
+      return `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
+    }
+    const key = "run" + start;
+    const names = [...new Set(run.map((t) => t.name))].slice(0, 4).join("、");
+    const errs = run.filter((t) => t.error).length;
+    return `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>`
+      + `<summary><span class="n">${run.length} 个步骤</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span></summary>`
+      + `<div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>`
+      + `</details>${row(run[run.length - 1], start + run.length - 1)}</div>`;
+  }
+
+  function renderProcessItemsHTML(procItems, open) {
+    let out = "", p = 0;
+    while (p < procItems.length) {
+      if (procItems[p].m.kind === "tool") {
+        const s = p;
+        const run = [];
+        while (p < procItems.length && procItems[p].m.kind === "tool") {
+          run.push(procItems[p].m);
+          p++;
+        }
+        out += renderToolRunHTML(run, procItems[s].idx, open);
+      } else {
+        const pm = procItems[p].m;
+        const rCls = pm.phase === "reasoning" ? " reasoning" : "";
+        out += `<div class="msg-note${rCls}">${md(pm.text)}${imagesIn(pm.text)}</div>`;
+        p++;
+      }
+    }
+    return out;
+  }
+
   function drawThread(msgs, el = $("#thread"), empty = "还没有对话。发一条消息开始吧。") {
     // Just opened: start at the latest message.
     const was = el._fresh || nearBottom(el) || !el.childElementCount;
     if (msgs.length) el._fresh = false;
-    const open = new Set($$("details.tool[open], details.toolrun[open]", el).map((d) => d.dataset.i));
+    const open = new Set($$("details.tool[open], details.toolrun[open], details.turn-proc[open]", el).map((d) => d.dataset.i));
     if (!msgs.length) { el.innerHTML = `<div class="thread-empty">${empty}</div>`; el._sig = ""; el._blocks = null; return; }
+    const threadWorking = isThreadActivelyWorking(el);
     const blocks = [];
     let html = "", i = 0;
-    const cut = () => { blocks.push(html); html = ""; };
-    while (i < msgs.length) {
-      const m = msgs[i];
-      if (m.kind === "tool") {
-        // A run of tool calls reads as one quiet line; long runs fold away,
-        // keeping only the latest step in view.
-        const start = i;
-        while (i < msgs.length && msgs[i].kind === "tool") i++;
-        const run = msgs.slice(start, i);
-        const row = (t, k) => {
-          const cls = t.error ? "err" : (t.output ? "" : "pending");
-          return `<details class="tool ${cls}" data-i="${k}" ${open.has(String(k)) ? "open" : ""}>`
-            + `<summary><span class="tname">${esc(t.name)}</span><span class="targ">${esc(t.input)}</span></summary>`
-            + (t.output ? `<pre>${esc(t.output)}</pre>` : "") + `</details>`;
-        };
-        if (run.length <= 3 || !prefs.fold()) {
-          html += `<div class="tools">${run.map((t, k) => row(t, start + k)).join("")}</div>`;
-          cut();
-          continue;
-        }
-        const key = "run" + start;
-        const names = [...new Set(run.map((t) => t.name))].slice(0, 4).join("、");
-        const errs = run.filter((t) => t.error).length;
-        html += `<div class="tools"><details class="toolrun" data-i="${key}" ${open.has(key) ? "open" : ""}>
-          <summary><span class="n">${run.length} 个步骤</span><span class="targ">${esc(names)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span></summary>
-          <div class="toolrun-body">${run.slice(0, -1).map((t, k) => row(t, start + k)).join("")}</div>
-        </details>${row(run[run.length - 1], i - 1)}</div>`;
-        cut();
-        continue;
-      }
-      if (m.kind === "ask" && m.name === "recap") {
+    const cut = () => { if (html) { blocks.push(html); html = ""; } };
+
+    const emitAsk = (m, idx) => {
+      if (m.name === "recap") {
         html += `<div class="recap-note">${esc(m.input)}</div>`;
         cut();
-        i++;
-        continue;
+        return;
       }
-      if (m.kind === "ask") {
-        // A question to you: AskUserQuestion is answered in the app it runs
-        // in; end-of-turn / Codex async question options send their label as a reply.
-        const later = msgs.slice(i + 1).some((x) => x.kind === "user");
-        const replyable = m.name === "wrap_up" || m.name === "request_user_input_async";
-        const open = replyable ? !later && !m.output : !m.output && !later;
-        const form = el.closest("section.view")?.querySelector("form.composer:not([hidden])");
-        const canReplyHere = replyable && !/\n2\.\s/.test(m.text || "") && (!form || !form.querySelector("textarea")?.disabled);
-        const opts = (m.options || []).map((o) => canReplyHere && open
-          ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
-          : `<span class="opt">${esc(o)}</span>`).join("");
-        const whereHint = open && !canReplyHere
-          ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
-            ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
-            : m.name === "request_user_input_async"
-              ? `<div class="where">${form && !form.querySelector("textarea")?.disabled ? "在下方输入框直接回复即可继续" : "可在电脑端 Codex 直接回答，或等当前后台步骤停下后在此回复"}</div>`
-              : el.id === "thread" ? "" : `<div class="where">在电脑上的会话里回答</div>`)
-          : "";
-        html += `<div class="ask-card ${open ? "open" : ""}">`
-          + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
-          + `<div class="q"><span class="dot ${open ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
-          + (opts ? `<div class="opts">${opts}</div>` : "")
-          + (m.output ? `<div class="answer">${esc(m.output)}</div>` : whereHint)
-          + `</div>`;
+      const later = msgs.slice(idx + 1).some((x) => x.kind === "user");
+      const replyable = m.name === "wrap_up" || m.name === "request_user_input_async";
+      const isOpen = replyable ? !later && !m.output : !m.output && !later;
+      const form = el.closest("section.view")?.querySelector("form.composer:not([hidden])");
+      const canReplyHere = replyable && !/\n2\.\s/.test(m.text || "") && (!form || !form.querySelector("textarea")?.disabled);
+      const opts = (m.options || []).map((o) => canReplyHere && isOpen
+        ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
+        : `<span class="opt">${esc(o)}</span>`).join("");
+      const whereHint = isOpen && !canReplyHere
+        ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
+          ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
+          : m.name === "request_user_input_async"
+            ? `<div class="where">${form && !form.querySelector("textarea")?.disabled ? "在下方输入框直接回复即可继续" : "可在电脑端 Codex 直接回答，或等当前后台步骤停下后在此回复"}</div>`
+            : el.id === "thread" ? "" : `<div class="where">在电脑上的会话里回答</div>`)
+        : "";
+      html += `<div class="ask-card ${isOpen ? "open" : ""}">`
+        + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
+        + `<div class="q"><span class="dot ${isOpen ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
+        + (opts ? `<div class="opts">${opts}</div>` : "")
+        + (m.output ? `<div class="answer">${esc(m.output)}</div>` : whereHint)
+        + `</div>`;
+      cut();
+    };
+
+    const flushProcessGroup = (procItems, startIdx, isLiveGroup) => {
+      if (!procItems.length) return;
+      if (isLiveGroup || !prefs.fold()) {
+        html += `<div class="turn-live-proc">${renderProcessItemsHTML(procItems, open)}</div>`;
+        cut();
+        return;
+      }
+      const key = "proc" + startIdx;
+      const toolList = procItems.filter((x) => x.m.kind === "tool").map((x) => x.m);
+      const noteCount = procItems.length - toolList.length;
+      const errs = toolList.filter((t) => t.error).length;
+      const toolNames = [...new Set(toolList.map((t) => t.name))].slice(0, 4).join("、");
+      const metaParts = [];
+      if (noteCount) metaParts.push(`${noteCount} 段思路`);
+      if (toolList.length) metaParts.push(`${toolList.length} 个工具调用${toolNames ? "（" + toolNames + "）" : ""}`);
+      const subSummary = metaParts.join(" · ");
+      html += `<details class="turn-proc" data-i="${key}" ${open.has(key) ? "open" : ""}>`
+        + `<summary><svg class="tp-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="tp-title">思考与执行过程</span>`
+        + (subSummary ? `<span class="tp-sub">${esc(subSummary)}${errs ? ` · <b class="errs">${errs} 个出错</b>` : ""}</span>` : "")
+        + `</summary><div class="turn-proc-body">${renderProcessItemsHTML(procItems, open)}</div></details>`;
+      cut();
+    };
+
+    while (i < msgs.length) {
+      if (msgs[i].kind === "user") {
+        const m = msgs[i];
+        html += `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>`;
         cut();
         i++;
         continue;
       }
-      if (m.kind === "user") {
-        html += `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>`;
-      } else {
-        const rendered = md(m.text);
-        const extraImgs = imagesIn(m.text);
-        html += `<div class="msg assistant">${rendered}${extraImgs}</div>`;
+      // One agent turn segment (all consecutive non-user items up to the next user message).
+      const segStart = i;
+      let segEnd = i;
+      while (segEnd < msgs.length && msgs[segEnd].kind !== "user") segEnd++;
+      const isLastSeg = segEnd === msgs.length;
+      const segHasFinal = msgs.slice(segStart, segEnd).some((x) => x.kind === "assistant" && x.phase === "final_answer");
+      const segWorking = isLastSeg && threadWorking && !segHasFinal;
+
+      // Determine the final conclusion message of this turn (if any):
+      // 1) Explicit Codex `phase === "final_answer"`
+      // 2) For Claude/Agy/Gemini (no phase field): once the turn is settled (!segWorking),
+      //    the last non-process assistant message is the conclusion, while any earlier
+      //    assistant narration before tool calls folds into the reasoning/execution drawer.
+      let finalIdx = -1;
+      for (let k = segEnd - 1; k >= segStart; k--) {
+        if (msgs[k].kind === "assistant" && msgs[k].phase === "final_answer") {
+          finalIdx = k;
+          break;
+        }
       }
-      cut();
-      i++;
+      if (finalIdx < 0 && !segWorking) {
+        for (let k = segEnd - 1; k >= segStart; k--) {
+          const mk = msgs[k];
+          if (mk.kind === "assistant" && mk.phase !== "commentary" && mk.phase !== "reasoning") {
+            finalIdx = k;
+            break;
+          }
+        }
+      }
+
+      let procBuf = [];
+      let procStart = segStart;
+      for (let k = segStart; k < segEnd; k++) {
+        const mk = msgs[k];
+        if (mk.kind === "ask") {
+          flushProcessGroup(procBuf, procStart, segWorking);
+          procBuf = [];
+          emitAsk(mk, k);
+          continue;
+        }
+        const isFinal = k === finalIdx || (mk.kind === "assistant" && mk.phase === "final_answer");
+        const isProc = !isFinal && (
+          mk.kind === "tool"
+          || mk.phase === "commentary"
+          || mk.phase === "reasoning"
+          || (mk.kind === "assistant" && (segWorking || finalIdx > k))
+        );
+        if (isProc) {
+          if (!procBuf.length) procStart = k;
+          procBuf.push({ m: mk, idx: k });
+          continue;
+        }
+        flushProcessGroup(procBuf, procStart, segWorking);
+        procBuf = [];
+        const rendered = md(mk.text);
+        const extraImgs = imagesIn(mk.text);
+        html += `<div class="msg assistant">${rendered}${extraImgs}</div>`;
+        cut();
+      }
+      flushProcessGroup(procBuf, procStart, segWorking);
+      i = segEnd;
     }
     if (el._loadingEarlier) blocks.unshift(`<div class="earlier-row">加载中…</div>`);
     const sig = blocks.join("");
@@ -3749,7 +3887,11 @@
 
   let lastLive = null;
   function drawLive(l) {
+    const prevLiveSt = lastLive?.status;
     lastLive = l;
+    if (prevLiveSt !== l.status && $("#thread")?._redraw) {
+      $("#thread")._redraw();
+    }
     $("#thread").classList.toggle("asking", l.status === "blocked" && !!l.approval);
     const box = $("#live");
     const th = $("#thread");
@@ -4762,7 +4904,23 @@
     const act = e.target.closest("[data-act]")?.dataset.act;
     if (!act) return;
     try {
-      if (act === "interrupt") { sendKeys(["ctrl+c"]); toast("已发送中断信号"); }
+      if (act === "interrupt") {
+        if (!current) return;
+        await api(paneURL(current, "interrupt"), { body: {} });
+        toast("已中止当前任务");
+      }
+      if (act === "interrupt-ext") {
+        if (!extCur || extCur.startsWith("h:")) return;
+        await api(`/api/external/${encodeURIComponent(extCur)}/interrupt`, { body: {} });
+        const cur = ext.find((x) => x.id === extCur);
+        if (cur) { cur.status = "idle"; cur.live = false; renderExt(); renderExtHead(); }
+        toast("已中止当前任务");
+        setTimeout(() => loadExternal().catch(() => {}), 800);
+      }
+      if (act === "interrupt-router") {
+        await api("/api/super/router/interrupt", { body: {} });
+        toast("已中止 Collie 当前处理");
+      }
       if (act === "sess-rename") promptRenameSession(resolveSessionTarget());
       if (act === "sess-project") openAssignSessionProject(resolveSessionTarget());
       if (act === "sess-archive") await toggleArchiveSession(resolveSessionTarget());

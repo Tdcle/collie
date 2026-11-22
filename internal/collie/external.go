@@ -557,7 +557,7 @@ func (s *Server) externalLastMessage(w http.ResponseWriter, r *http.Request) {
 	msgs := tr.view()
 	var reply, userQ string
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if reply == "" && (msgs[i].Kind == "assistant" || msgs[i].Kind == "ask") {
+		if reply == "" && ((msgs[i].Kind == "assistant" && msgs[i].Phase != "reasoning") || msgs[i].Kind == "ask") {
 			reply = formatMessageSummary(msgs[i])
 		} else if reply != "" && msgs[i].Kind == "user" {
 			userQ = msgs[i].Text
@@ -737,11 +737,16 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 		if e.desktop && isCodexApp(e.App) && s.codexDaemonSock() != "" {
 			if !running {
 				canSend = true
+			} else if s.codexDaemonHas(e.Session) {
+				canSend = true
 			} else if e.via == "bg" {
 				canSend = false
 			}
 		}
 		return live, st, canSend
+	}
+	if e.Kind == "codex" && e.Session != "" && (e.path == "" || !codexTurnRunning(e.path)) {
+		go s.codexMarkThreadRead(context.Background(), e.Session)
 	}
 	if e.desktop && e.Kind == "codex" && e.path != "" {
 		if live, st, cs := codexLiveState(e.path); live || cs != lastCanSend {
@@ -768,9 +773,13 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 			if e.desktop && e.Kind == "codex" && e.path != "" {
 				live, st, cs := codexLiveState(e.path)
 				if st != lastExtSt || cs != lastCanSend {
+					prevSt := lastExtSt
 					lastExtSt, lastCanSend = st, cs
 					_ = send("status", map[string]any{"live": live, "status": st, "can_send": cs})
 					beat = time.Now()
+					if prevSt == "working" && st != "working" && e.Session != "" {
+						go s.codexMarkThreadRead(context.Background(), e.Session)
+					}
 				}
 			}
 		}

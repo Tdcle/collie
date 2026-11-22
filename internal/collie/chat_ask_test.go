@@ -95,3 +95,47 @@ func TestQueuedCommand(t *testing.T) {
 		t.Fatalf("%+v %+v", tr.msgs[0], tr.msgs[len(tr.msgs)-1])
 	}
 }
+
+func TestCodexPhaseSeparationAndReasoningSummary(t *testing.T) {
+	dir := t.TempDir()
+	rollout := filepath.Join(dir, "rollout-phase.jsonl")
+
+	lines := []string{
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"帮我检查部署状态"}]}}`,
+		`{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"**Checking systemd units**"}]}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"我先查看一下服务器上的服务状态。"}]}}`,
+		`{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"systemctl status collie-hub\"}","call_id":"c1"}}`,
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"active (running)"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"服务运行正常，当前处于 active 状态。"}]}}`,
+	}
+	if err := os.WriteFile(rollout, []byte(joinLines(lines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := newTranscript(rollout, "codex")
+	tr.openTail()
+	msgs := tr.view()
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[1].Phase != "reasoning" || msgs[1].Text != "**Checking systemd units**" {
+		t.Fatalf("expected reasoning summary message, got %+v", msgs[1])
+	}
+	if msgs[2].Phase != "commentary" || msgs[2].Text != "我先查看一下服务器上的服务状态。" {
+		t.Fatalf("expected commentary phase on intermediate assistant message, got %+v", msgs[2])
+	}
+	if msgs[3].Kind != "tool" || msgs[3].Output != "active (running)" {
+		t.Fatalf("expected tool step, got %+v", msgs[3])
+	}
+	if msgs[4].Phase != "final_answer" || msgs[4].Text != "服务运行正常，当前处于 active 状态。" {
+		t.Fatalf("expected final_answer phase on conclusion message, got %+v", msgs[4])
+	}
+}
+
+func joinLines(ls []string) string {
+	out := ""
+	for _, l := range ls {
+		out += l + "\n"
+	}
+	return out
+}

@@ -112,6 +112,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/file", wrap(s.readFile))
 	mux.Handle("POST /api/agents", wrap(s.launchAgent))
 	mux.Handle("POST /api/agents/{target}/prompt", wrap(s.promptAgent))
+	mux.Handle("POST /api/panes/{id}/interrupt", wrap(s.interruptPane))
 	mux.Handle("GET /api/panes/{id}/stream", wrap(s.streamPane))
 	mux.Handle("GET /api/panes/{id}/chat", wrap(s.streamChat))
 	mux.Handle("GET /api/panes/{id}/earlier", wrap(s.paneEarlier))
@@ -137,9 +138,11 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/external/{id}/last", wrap(s.externalLastMessage))
 	mux.Handle("POST /api/external/{id}/takeover", wrap(s.takeOverExternal))
 	mux.Handle("POST /api/external/{id}/send", wrap(s.sendExternal))
+	mux.Handle("POST /api/external/{id}/interrupt", wrap(s.interruptExternal))
 	mux.Handle("GET /api/codex/lock", wrap(s.checkCodexLock))
 	mux.Handle("POST /api/codex/send", wrap(s.sendCodexSession))
 	mux.Handle("POST /api/codex/interrupt", wrap(s.interruptCodex))
+	mux.Handle("POST /api/codex/read", wrap(s.markCodexReadNode))
 	mux.Handle("POST /api/external/{id}/reveal", wrap(s.revealExternal))
 }
 
@@ -334,7 +337,11 @@ func (s *Server) state(ctx context.Context) PaneState {
 			v.Name = v.WorkspaceLabel
 		}
 		if v.IsAgent {
+			prevSt := v.Status
 			v.Status = s.seen.status(p.ID, v.Status)
+			if prevSt == "done" && v.Status == "idle" && v.Kind == "codex" && v.Session != "" {
+				go s.markCodexReadOn(context.Background(), v.Machine, v.Session)
+			}
 		}
 		if v.IsAgent && s.waiting(p.ID, v.Status) {
 			v.Status = "waiting"
@@ -551,6 +558,48 @@ func (s *Server) promptAgent(w http.ResponseWriter, r *http.Request) {
 	if err := s.herdr.Prompt(r.Context(), r.PathValue("target"), body.Text); err != nil {
 		fail(w, err)
 		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// interruptPane stops the currently running turn inside a herdr pane without
+// closing the workspace or losing conversation history.
+func (s *Server) interruptPane(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+
+	var info struct {
+		Agent agentDetail `json:"agent"`
+	}
+	kind, sess := "", ""
+	if s.herdr.Call(ctx, "agent.get", map[string]any{"target": id}, &info) == nil && info.Agent.Agent != nil {
+		kind = kinds[*info.Agent.Agent]
+	}
+	if ps := s.titlesFor("", ctx)[id]; ps.Session != "" {
+		sess = ps.Session
+	}
+	if sess == "" {
+		sess = s.herdr.SessionOf(id)
+	}
+
+	// Send Esc first (clean TUI turn cancel for Claude Code, Codex TUI, Gemini, Agy).
+	_ = s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": id, "keys": []string{"esc"}}, nil)
+	if kind == "codex" && sess != "" {
+		// Codex turns also live in the shared app-server daemon.
+		_ = s.codexInterrupt(ctx, sess)
+	}
+	if kind == "" {
+		// Plain shell pane: send Ctrl-C.
+		_ = s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": id, "keys": []string{"ctrl+c"}}, nil)
+	} else {
+		time.Sleep(250 * time.Millisecond)
+		var check struct {
+			Agent agentDetail `json:"agent"`
+		}
+		if s.herdr.Call(ctx, "agent.get", map[string]any{"target": id}, &check) == nil && check.Agent.Status == "working" {
+			_ = s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": id, "keys": []string{"esc", "ctrl+c"}}, nil)
+		}
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

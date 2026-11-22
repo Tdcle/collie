@@ -47,13 +47,22 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 		var body []byte
 		var agentProjectID string
 		var extSentID string
-		if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/send") && strings.HasPrefix(r.URL.Path, "/api/external/") {
-			extSentID = r.PathValue("id")
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/external/") && (strings.HasSuffix(r.URL.Path, "/send") || strings.HasSuffix(r.URL.Path, "/interrupt")) {
+			if strings.HasSuffix(r.URL.Path, "/send") {
+				extSentID = r.PathValue("id")
+			}
+			if machine != "" {
+				remoteExternal.Lock()
+				if c := remoteExternal.m[machine]; c != nil {
+					c.at = time.Time{}
+				}
+				remoteExternal.Unlock()
+			}
 		}
 		switch {
 		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec", r.URL.Path == "/api/codex/lock":
 			machine = r.URL.Query().Get("machine")
-		case (r.URL.Path == "/api/agents" || r.URL.Path == "/api/codex/send") && r.Method == "POST":
+		case (r.URL.Path == "/api/agents" || r.URL.Path == "/api/codex/send" || r.URL.Path == "/api/codex/interrupt" || r.URL.Path == "/api/codex/read") && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 			var b struct {
 				Machine   string `json:"machine"`

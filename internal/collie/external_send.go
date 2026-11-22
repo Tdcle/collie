@@ -448,6 +448,116 @@ func (s *Server) codexBgSend(ctx context.Context, thread, text, model, effort st
 	return s.codexDaemonSend(ctx, thread, text, model, effort, true)
 }
 
+var codexCollieStarted struct {
+	sync.Mutex
+	m map[string]time.Time
+}
+
+func noteCollieCodexTurn(thread string) {
+	if thread == "" {
+		return
+	}
+	codexCollieStarted.Lock()
+	if codexCollieStarted.m == nil {
+		codexCollieStarted.m = map[string]time.Time{}
+	}
+	codexCollieStarted.m[thread] = time.Now()
+	for k, t := range codexCollieStarted.m {
+		if time.Since(t) > 6*time.Hour {
+			delete(codexCollieStarted.m, k)
+		}
+	}
+	codexCollieStarted.Unlock()
+}
+
+func consumeCollieCodexTurn(thread string) bool {
+	codexCollieStarted.Lock()
+	defer codexCollieStarted.Unlock()
+	if t, ok := codexCollieStarted.m[thread]; ok {
+		delete(codexCollieStarted.m, thread)
+		return time.Since(t) <= 6*time.Hour
+	}
+	return false
+}
+
+// codexMarkThreadRead clears `first_unread_turn` in Codex's shared app-server
+// (`thread_read_receipts`) so turns executed or viewed from Collie do not leave
+// a stuck unread/completed indicator in Codex Desktop App.
+func (s *Server) codexMarkThreadRead(ctx context.Context, thread string) {
+	thread = strings.TrimSpace(thread)
+	if thread == "" {
+		return
+	}
+	sock := s.codexDaemonSock()
+	if sock == "" {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	c, err := dialCodex(rctx, sock)
+	if err != nil {
+		return
+	}
+	defer c.close()
+	var read struct {
+		ReadState *struct {
+			FirstUnread json.RawMessage `json:"firstUnread"`
+			Revision    string          `json:"revision"`
+		} `json:"readState"`
+	}
+	if err := c.call("thread/read", map[string]any{"threadId": thread, "includeTurns": false}, &read); err != nil {
+		return
+	}
+	if read.ReadState == nil || read.ReadState.Revision == "" {
+		return
+	}
+	fu := strings.TrimSpace(string(read.ReadState.FirstUnread))
+	if fu == "" || fu == "null" {
+		return
+	}
+	_ = c.call("thread/readState/update", map[string]any{
+		"threadId":         thread,
+		"expectedRevision": read.ReadState.Revision,
+		"operation":        map[string]any{"type": "read"},
+	}, nil)
+}
+
+func (s *Server) watchCodexBgTurnCompletion(thread, path string) {
+	go func() {
+		// Wait briefly for the turn to appear in the rollout, then wait until it finishes.
+		deadline := time.Now().Add(45 * time.Minute)
+		sawRunning := false
+		for i := 0; time.Now().Before(deadline); i++ {
+			time.Sleep(1200 * time.Millisecond)
+			if path == "" {
+				path, _ = s.findCodexRolloutSingle(thread)
+			}
+			running := path != "" && codexTurnRunning(path)
+			if running {
+				sawRunning = true
+				continue
+			}
+			if sawRunning || i >= 3 {
+				if consumeCollieCodexTurn(thread) {
+					s.codexMarkThreadRead(context.Background(), thread)
+				}
+				// Unsubscribe once idle so the shared daemon releases the thread-writer-lock
+				// and the Desktop App can also open it freely.
+				if sock := s.codexDaemonSock(); sock != "" {
+					uctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+					if c, err := dialCodex(uctx, sock); err == nil {
+						_ = c.call("thread/unsubscribe", map[string]any{"threadId": thread}, nil)
+						c.close()
+					}
+					cancel()
+				}
+				s.invalidateExternalCaches()
+				return
+			}
+		}
+	}()
+}
+
 func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effort string, idle bool) error {
 	sock := s.codexDaemonSock()
 	if sock == "" {
@@ -485,6 +595,7 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 	}
 	var read struct {
 		Thread struct {
+			Path  string `json:"path"`
 			Turns []struct {
 				ID     string `json:"id"`
 				Status string `json:"status"`
@@ -500,7 +611,12 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 	}
 	input := []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}
 	if running != "" {
-		return c.call("turn/steer", map[string]any{"threadId": thread, "input": input, "expectedTurnId": running}, nil)
+		noteCollieCodexTurn(thread)
+		if err := c.call("turn/steer", map[string]any{"threadId": thread, "input": input, "expectedTurnId": running}, nil); err != nil {
+			return err
+		}
+		s.invalidateExternalCaches()
+		return nil
 	}
 	turnParams := map[string]any{"threadId": thread, "input": input}
 	if model != "" {
@@ -510,18 +626,23 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 		turnParams["effort"] = effort
 	}
 	if !headless {
+		noteCollieCodexTurn(thread)
 		if err := c.call("turn/start", turnParams, nil); err != nil {
 			return err
 		}
+		s.watchCodexBgTurnCompletion(thread, read.Thread.Path)
 		s.invalidateExternalCaches()
 		return nil
 	}
 	turnParams["approvalPolicy"] = "never"
+	noteCollieCodexTurn(thread)
 	if err := c.call("turn/start", turnParams, nil); err != nil {
 		return err
 	}
-	// Let go, so the daemon closes the thread (and its lock) once it is idle.
-	c.call("thread/unsubscribe", map[string]any{"threadId": thread}, nil)
+	// Keep the thread loaded while its turn runs so mid-turn steering (`turn/steer`)
+	// and task interruption (`turn/interrupt`) work from Collie; watchCodexBgTurnCompletion
+	// marks the turn read and unsubscribes automatically as soon as it finishes.
+	s.watchCodexBgTurnCompletion(thread, read.Thread.Path)
 	s.invalidateExternalCaches()
 	return nil
 }
@@ -542,15 +663,19 @@ func (s *Server) invalidateExternalCaches() {
 func (s *Server) codexInterrupt(ctx context.Context, thread string) error {
 	sock := s.codexDaemonSock()
 	if sock == "" {
-		return nil // no daemon: the turn ran in its terminal and went with it
+		return errors.New("这台电脑上没有运行共享 Codex 后台")
 	}
 	c, err := dialCodex(ctx, sock)
 	if err != nil {
 		return err
 	}
 	defer c.close()
-	if ids, err := c.loaded(); err != nil || !ids[thread] {
+	ids, err := c.loaded()
+	if err != nil {
 		return err
+	}
+	if !ids[thread] {
+		return errors.New("当前步骤由桌面端 Codex 私有窗口直接启动，请在桌面端窗口点击停止")
 	}
 	var read struct {
 		Thread struct {
@@ -561,11 +686,29 @@ func (s *Server) codexInterrupt(ctx context.Context, thread string) error {
 		} `json:"thread"`
 	}
 	if err := c.call("thread/read", map[string]any{"threadId": thread, "includeTurns": true}, &read); err != nil {
+		var turns struct {
+			Data []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"data"`
+		}
+		if err2 := c.call("thread/turns/list", map[string]any{"threadId": thread, "limit": 5, "sortDirection": "desc", "itemsView": "notLoaded"}, &turns); err2 == nil {
+			for _, t := range turns.Data {
+				if t.Status == "inProgress" {
+					err3 := c.call("turn/interrupt", map[string]any{"threadId": thread, "turnId": t.ID}, nil)
+					s.invalidateExternalCaches()
+					return err3
+				}
+			}
+			return nil
+		}
 		return err
 	}
 	for _, t := range read.Thread.Turns {
 		if t.Status == "inProgress" {
-			return c.call("turn/interrupt", map[string]any{"threadId": thread, "turnId": t.ID}, nil)
+			err := c.call("turn/interrupt", map[string]any{"threadId": thread, "turnId": t.ID}, nil)
+			s.invalidateExternalCaches()
+			return err
 		}
 	}
 	return nil
@@ -641,6 +784,40 @@ func (s *Server) stopCodexTurn(ctx context.Context, machine, thread string) erro
 		return fmt.Errorf("interrupt: %s %s", resp.Status, msg)
 	}
 	return nil
+}
+
+func (s *Server) markCodexReadNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Thread string `json:"thread"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	s.codexMarkThreadRead(r.Context(), body.Thread)
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) markCodexReadOn(ctx context.Context, machine, thread string) {
+	if thread == "" {
+		return
+	}
+	if machine == "" {
+		s.codexMarkThreadRead(ctx, thread)
+		return
+	}
+	c, err := s.herdr.Client(machine)
+	if err != nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	b, _ := json.Marshal(map[string]any{"thread": thread})
+	req, _ := http.NewRequestWithContext(rctx, "POST", "http://node/api/codex/read", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 // ---------------------------------------------------------------- HTTP
@@ -724,4 +901,59 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// interruptExternal: POST /api/external/{id}/interrupt stops the currently
+// running turn of an external or desktop conversation without deleting history.
+func (s *Server) interruptExternal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	e := s.externalByID(id)
+	if e == nil {
+		writeJSON(w, 404, map[string]any{"error": "找不到这个正在运行的会话"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	switch e.Kind {
+	case "codex":
+		if e.Session != "" {
+			if err := s.codexInterrupt(ctx, e.Session); err == nil {
+				writeJSON(w, 200, map[string]any{"ok": true})
+				return
+			} else {
+				if e.via == "app" {
+					if s.codexAppInterrupt(ctx, e.Session) == nil {
+						writeJSON(w, 200, map[string]any{"ok": true})
+						return
+					}
+				}
+				if !e.desktop && e.PID > 0 && interruptProcess(e.PID) == nil {
+					s.invalidateExternalCaches()
+					writeJSON(w, 200, map[string]any{"ok": true})
+					return
+				}
+				writeJSON(w, 409, map[string]any{"error": err.Error()})
+				return
+			}
+		}
+	case "agy":
+		if e.desktop && e.Session != "" {
+			if err := s.agyAppInterrupt(ctx, e.Session); err != nil {
+				fail(w, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"ok": true})
+			return
+		}
+	}
+
+	if !e.desktop && e.PID > 0 {
+		if err := interruptProcess(e.PID); err == nil {
+			s.invalidateExternalCaches()
+			writeJSON(w, 200, map[string]any{"ok": true})
+			return
+		}
+	}
+	writeJSON(w, 409, map[string]any{"error": "该会话当前由桌面应用私有进程运行，请切回对应桌面窗口停止"})
 }

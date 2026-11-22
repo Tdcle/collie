@@ -17,9 +17,10 @@ import (
 
 // Message is one entry of the conversation view that wraps an agent terminal.
 type Message struct {
-	Kind string `json:"kind"` // user | assistant | tool | ask
-	Text string `json:"text,omitempty"`
-	Name string `json:"name,omitempty"`
+	Kind  string `json:"kind"`            // user | assistant | tool | ask
+	Phase string `json:"phase,omitempty"` // commentary | final_answer | reasoning
+	Text  string `json:"text,omitempty"`
+	Name  string `json:"name,omitempty"`
 	// ask: the agent's question to the human (Claude's AskUserQuestion, or
 	// the Claude app's end-of-turn box); Options are its answers' labels,
 	// Output the answer once given, Input a recap that came with it.
@@ -557,6 +558,8 @@ func (t *transcript) codexLine(line []byte) bool {
 		Payload struct {
 			Type      string          `json:"type"`
 			Role      string          `json:"role"`
+			Phase     string          `json:"phase"`
+			Summary   json.RawMessage `json:"summary"`
 			Content   json.RawMessage `json:"content"`
 			Name      string          `json:"name"`
 			Arguments json.RawMessage `json:"arguments"`
@@ -570,6 +573,25 @@ func (t *transcript) codexLine(line []byte) bool {
 	}
 	p := e.Payload
 	switch p.Type {
+	case "reasoning":
+		var summaries []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(p.Summary, &summaries) != nil || len(summaries) == 0 {
+			return false
+		}
+		var parts []string
+		for _, sm := range summaries {
+			if txt := strings.TrimSpace(sm.Text); txt != "" {
+				parts = append(parts, txt)
+			}
+		}
+		if len(parts) == 0 {
+			return false
+		}
+		t.add(&Message{Kind: "assistant", Phase: "reasoning", Text: strings.Join(parts, "\n")})
+		return true
 	case "message":
 		if p.Role != "user" && p.Role != "assistant" {
 			return false
@@ -624,7 +646,7 @@ func (t *transcript) codexLine(line []byte) bool {
 		if p.Role == "user" && len(t.pendingImgs) > 0 {
 			t.add(&Message{Kind: "assistant", Text: strings.Join(t.pendingImgs, "\n")})
 			t.pendingImgs = nil
-		} else if p.Role == "assistant" && len(t.pendingImgs) > 0 {
+		} else if p.Role == "assistant" && p.Phase != "commentary" && len(t.pendingImgs) > 0 {
 			if strings.Contains(joined, "[image:") || msgImageRefRe.MatchString(joined) {
 				t.pendingImgs = nil
 			} else {
@@ -632,7 +654,11 @@ func (t *transcript) codexLine(line []byte) bool {
 				t.pendingImgs = nil
 			}
 		}
-		t.add(&Message{Kind: p.Role, Text: joined})
+		msg := &Message{Kind: p.Role, Text: joined}
+		if p.Role == "assistant" && (p.Phase == "commentary" || p.Phase == "final_answer") {
+			msg.Phase = p.Phase
+		}
+		t.add(msg)
 		return true
 	case "image_generation_call":
 		var ig struct {
@@ -1464,7 +1490,7 @@ func (s *Server) lastMessage(w http.ResponseWriter, r *http.Request) {
 			msgs := tr.view()
 			var reply, userQ string
 			for i := len(msgs) - 1; i >= 0; i-- {
-				if reply == "" && (msgs[i].Kind == "assistant" || msgs[i].Kind == "ask") {
+				if reply == "" && ((msgs[i].Kind == "assistant" && msgs[i].Phase != "reasoning") || msgs[i].Kind == "ask") {
 					reply = formatMessageSummary(msgs[i])
 				} else if reply != "" && msgs[i].Kind == "user" {
 					userQ = msgs[i].Text

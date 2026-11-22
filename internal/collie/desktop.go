@@ -139,6 +139,8 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				// still allowing seamless herdr takeover as fallback.
 				e.CanSend, e.via = true, "bg"
 				e.CanTakeOver = canResume
+			case isCodexApp(d.app) && d.running:
+				e.ReadOnly = "当前步骤由桌面端 Codex 私有进程启动，完成后即可直接在此发消息或插话"
 			default:
 				e.CanTakeOver = canResume
 				_ = winUp
@@ -734,7 +736,12 @@ func (s *Server) codexAppUp() bool {
 	return true
 }
 
-var codexAppVersions = map[string]int{"thread-owner-discovery": 1, "thread-follower-start-turn": 2, "thread-follower-steer-turn": 1}
+var codexAppVersions = map[string]int{
+	"thread-owner-discovery":     1,
+	"thread-follower-start-turn": 2,
+	"thread-follower-steer-turn": 1,
+	"thread-follower-interrupt":  1,
+}
 
 type codexAppFrame struct {
 	Type            string          `json:"type"`
@@ -845,14 +852,48 @@ func (s *Server) codexAppSend(ctx context.Context, thread, text string) error {
 	if err != nil {
 		return errCodexNotLoaded
 	}
+	input := []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}
 	turn := map[string]any{
 		"conversationId": thread,
 		"turnStart": map[string]any{
-			"request": map[string]any{"threadId": thread, "clientUserMessageId": uuid4(), "input": []map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}},
+			"request": map[string]any{"threadId": thread, "clientUserMessageId": uuid4(), "input": input},
 			"context": map[string]any{},
 		},
 	}
 	_, err = c.request("thread-follower-start-turn", turn, owner)
+	if err != nil {
+		steer := map[string]any{
+			"conversationId": thread,
+			"turnSteer": map[string]any{
+				"request": map[string]any{"threadId": thread, "clientUserMessageId": uuid4(), "input": input},
+			},
+		}
+		if _, err2 := c.request("thread-follower-steer-turn", steer, owner); err2 == nil {
+			err = nil
+		}
+	}
+	forgetDesktopRows()
+	return err
+}
+
+func (s *Server) codexAppInterrupt(ctx context.Context, thread string) error {
+	conn, err := dialLocalSocket(ctx, s.codexAppSock())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if dl, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(dl)
+	}
+	c := &codexApp{conn: conn}
+	if _, err := c.request("initialize", map[string]any{"clientType": "collie"}, ""); err != nil {
+		return err
+	}
+	owner, err := c.owner(thread)
+	if err != nil {
+		return err
+	}
+	_, err = c.request("thread-follower-interrupt", map[string]any{"conversationId": thread}, owner)
 	forgetDesktopRows()
 	return err
 }

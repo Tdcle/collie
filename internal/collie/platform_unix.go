@@ -52,6 +52,13 @@ func stopProcess(pid int) bool {
 	return !alive(pid)
 }
 
+func interruptProcess(pid int) error {
+	if pid <= 0 || !alive(pid) {
+		return nil
+	}
+	return syscall.Kill(pid, syscall.SIGINT)
+}
+
 // isFileLockedByOtherProcess checks whether an flock-style writer lock file is
 // currently held by another process (e.g. Codex Desktop's thread-writer-locks).
 func isFileLockedByOtherProcess(path string) bool {

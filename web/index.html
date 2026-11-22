@@ -238,6 +238,7 @@
             </div>
             <span class="spacer"></span>
             <span class="send-hint" id="super-send-hint"></span>
+            <button type="button" class="stop-btn" id="super-stop" data-act="interrupt-router" title="停止当前处理" hidden><svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
             <button class="send" type="submit" title="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
@@ -276,6 +277,7 @@
           <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag" hidden></span></div>
           <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
         </div>
+        <button type="button" class="btn small danger-soft" id="x-stop-btn" data-act="interrupt-ext" hidden>停止生成</button>
         <div class="menu-wrap">
           <button class="icon-btn" data-menu="ext-menu" title="会话管理">
             <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
@@ -284,6 +286,7 @@
             <button data-act="sess-rename">重命名会话</button>
             <button data-act="sess-project">归属到项目…</button>
             <button data-act="sess-archive" id="ext-archive-btn">归档会话</button>
+            <button data-act="interrupt-ext" id="ext-menu-interrupt" hidden>中断当前执行</button>
             <hr>
             <button data-act="sess-delete" class="danger">删除会话</button>
           </div>
@@ -308,6 +311,7 @@
             </div>
             <span class="muted x-hint" id="x-hint"></span>
             <span class="spacer"></span>
+            <button type="button" class="stop-btn" id="x-stop" data-act="interrupt-ext" title="中止当前任务" hidden><svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
             <button class="send" id="x-send" type="submit" title="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
@@ -361,6 +365,7 @@
               <select id="d-effort-sel" data-pick="chip" data-title="思考强度" title="思考强度"></select>
             </div>
             <span class="spacer"></span>
+            <button type="button" class="stop-btn" id="d-stop" data-act="interrupt" title="中止当前任务" hidden><svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
             <button class="send" type="submit" title="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
           </div>
         </div>
