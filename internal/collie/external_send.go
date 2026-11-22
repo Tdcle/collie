@@ -464,9 +464,16 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 	}
 	if err := c.call("thread/resume", resumeParams, nil); err != nil {
 		if strings.Contains(err.Error(), "active writer") || strings.Contains(err.Error(), "live local writer") {
-			return errors.New("这个对话正在桌面端 Codex 里打开着：请先在桌面端切到别的对话再发，或直接在桌面端里说")
+			if s.tryClearCodexWriterLock(thread) {
+				err = c.call("thread/resume", resumeParams, nil)
+			}
 		}
-		return err
+		if err != nil {
+			if strings.Contains(err.Error(), "active writer") || strings.Contains(err.Error(), "live local writer") {
+				return errors.New("这个对话正在桌面端 Codex 里打开着：请先在桌面端切到别的对话再发，或直接在桌面端里说")
+			}
+			return err
+		}
 	}
 	var read struct {
 		Thread struct {
@@ -552,6 +559,38 @@ func (s *Server) interruptCodex(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.codexInterrupt(r.Context(), body.Thread); err != nil {
 		writeJSON(w, 502, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// sendCodexSession: POST /api/codex/send {thread, text, model, effort} continues
+// a Codex conversation directly inside the shared app-server daemon without
+// spawning a persistent CLI TUI pane (so it never holds a permanent thread lock).
+func (s *Server) sendCodexSession(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Thread string `json:"thread"`
+		Text   string `json:"text"`
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !modelNameRe.MatchString(body.Model) || !modelNameRe.MatchString(body.Effort) {
+		writeJSON(w, 400, map[string]any{"error": "invalid model or effort"})
+		return
+	}
+	thread := strings.TrimSpace(body.Thread)
+	text := strings.TrimSpace(body.Text)
+	if thread == "" || text == "" {
+		writeJSON(w, 400, map[string]any{"error": "missing thread or text"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.codexBgSend(ctx, thread, text, body.Model, body.Effort); err != nil {
+		fail(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

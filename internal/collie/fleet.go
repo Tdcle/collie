@@ -593,29 +593,22 @@ func codexScreenLocked(screen string) bool {
 }
 
 // unlockCodexPane clears Codex TUI's "This conversation is open in another app"
-// banner before submitting a prompt. It tries 'r' (retry) first in case the
-// desktop app already released its writer lock, then 'f' (fork) to clone into
-// an interactive continuation thread so messages are never swallowed.
+// banner before submitting a prompt. It presses 'r' (retry) in case the desktop
+// app already switched away from this conversation, without ever pressing 'f'
+// (fork), so we never create a duplicate session.
 func (h *Herdr) unlockCodexPane(ctx context.Context, pane string) error {
 	vis, err := h.Read(ctx, pane, "visible", "text", 0)
 	if err != nil || !codexScreenLocked(vis.Text) {
 		return nil
 	}
 	_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"r"}}, nil)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		time.Sleep(350 * time.Millisecond)
 		if v, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && !codexScreenLocked(v.Text) {
 			return nil
 		}
 	}
-	_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"f"}}, nil)
-	for i := 0; i < 20; i++ {
-		time.Sleep(400 * time.Millisecond)
-		if v, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && !codexScreenLocked(v.Text) {
-			return nil
-		}
-	}
-	return errors.New("这个对话正被电脑上的桌面端独占锁定且自动创建分支未就绪，请稍后再发或先关闭桌面端中的该对话")
+	return errors.New("这个对话正被电脑上的 Codex 桌面端窗口打开占用，请先在桌面端切到别的对话再发，以继续在同一个会话中对话")
 }
 
 // Prompt submits text to an agent. herdr 0.8 refuses agent.prompt while it

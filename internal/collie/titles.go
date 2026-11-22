@@ -162,9 +162,6 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 		if kind == "codex" && sess != "" {
 			if f := s.herdr.Forked(local); f != "" {
 				sess = f
-			} else if childID, _ := s.codexLatestFork(sess, deref(a.Cwd)); childID != "" {
-				s.herdr.RememberFork(local, childID)
-				sess = childID
 			}
 		}
 		var t string

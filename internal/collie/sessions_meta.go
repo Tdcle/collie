@@ -427,10 +427,6 @@ func (s *Server) switchSessionModel(w http.ResponseWriter, r *http.Request) {
 		// Brief settle so any file/session writer lock held by the old TUI releases cleanly.
 		time.Sleep(350 * time.Millisecond)
 	}
-	if herdrKind == "codex" && body.Session != "" && s.isCodexSessionLockedOn(ctx, machine, body.Session) {
-		rargs = []string{"fork", strings.TrimSpace(body.Session)}
-		args = append(append([]string{}, rargs...), modelArgs(body.Kind, body.Model, body.Effort)...)
-	}
 
 	name := strings.TrimSpace(body.Name)
 	if !isManagedWorker || !nameRe.MatchString(name) {

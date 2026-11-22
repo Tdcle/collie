@@ -47,3 +47,31 @@ func imageToken(src imageSource) string {
 	}
 	return "[image:~/.collie/images/" + name + "]"
 }
+
+// imageDataURLToken parses a base64 data URL (e.g. "data:image/png;base64,iVBOR...")
+// from Codex/OpenAI image content items and saves it to ~/.collie/images/<hash>.<ext>.
+func imageDataURLToken(u string) string {
+	u = strings.TrimSpace(u)
+	if !strings.HasPrefix(u, "data:") {
+		if u != "" && (filepath.IsAbs(u) || strings.HasPrefix(u, "~/") || strings.HasPrefix(u, `~\`) || isWindowsPath(u) || strings.HasPrefix(u, "file://")) {
+			p := uriToPath(u)
+			return "[image:" + p + "]"
+		}
+		return ""
+	}
+	semi := strings.IndexByte(u, ';')
+	comma := strings.IndexByte(u, ',')
+	if semi <= 5 || comma <= semi {
+		return ""
+	}
+	mediaType := strings.ToLower(strings.TrimSpace(u[5:semi]))
+	enc := strings.ToLower(strings.TrimSpace(u[semi+1 : comma]))
+	if enc != "base64" {
+		return ""
+	}
+	return imageToken(imageSource{
+		Type:      "base64",
+		MediaType: mediaType,
+		Data:      u[comma+1:],
+	})
+}

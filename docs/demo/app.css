@@ -1229,11 +1229,15 @@ body.dragging { cursor: col-resize; user-select: none; }
 @media (max-width: 760px) { .app.has-file { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .app, .filepane { transition: none !important; } }
 
-.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 8px; }
 .msg .thumbs:not(:first-child) { margin: 8px 0 2px; }
-.thumb { display: block; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg-2); cursor: zoom-in; }
+.thumb { display: block; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg-2); cursor: zoom-in; transition: border-color .15s, box-shadow .15s; }
+.thumb:hover { border-color: color-mix(in srgb, var(--signal) 45%, var(--line-2)); box-shadow: var(--shadow-sm); }
 .thumb img { display: block; max-width: min(240px, 60vw); max-height: 180px; min-width: 64px; min-height: 48px; object-fit: cover; }
-.thumb:has(img:not([src])):not(.broken) { width: 144px; height: 108px; animation: thumb-wait 1.4s ease-in-out infinite; }
+.thumbs.assistant-figs { margin: 8px 0 12px; }
+.thumb.assistant-fig { border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.thumb.assistant-fig img { max-width: min(640px, 100%); max-height: 440px; width: auto; height: auto; object-fit: contain; }
+.thumb:has(img:not([src])):not(.broken) { width: 180px; height: 120px; animation: thumb-wait 1.4s ease-in-out infinite; }
 .thumb img:not([src]) { display: none; }
 @keyframes thumb-wait { 50% { opacity: .55; } }
 .thumb.broken::after { content: "图片读不到"; display: block; padding: 14px 16px; font-size: 12px; opacity: .7; }

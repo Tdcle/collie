@@ -682,6 +682,26 @@ func (s *Server) codexThreadWriterLocked(session string) bool {
 	return isFileLockedByOtherProcess(lockPath)
 }
 
+// tryClearCodexWriterLock clears a Codex thread-writer-lock file if possible
+// (e.g. on Windows where Codex Desktop holds an idle handle with FILE_SHARE_DELETE)
+// so Collie can run a turn directly in the exact same conversation without forking.
+func (s *Server) tryClearCodexWriterLock(session string) bool {
+	if session == "" || strings.ContainsAny(session, `/\*?[`) {
+		return false
+	}
+	if p, _ := s.findCodexRolloutSingle(session); p != "" && codexTurnRunning(p) {
+		return false // never steal a lock while a turn is actively running
+	}
+	lockPath := filepath.Join(s.codexHome(), "thread-writer-locks", session+".lock")
+	if !isFile(lockPath) {
+		return false
+	}
+	if os.Remove(lockPath) == nil {
+		return true
+	}
+	return false
+}
+
 func (s *Server) checkCodexLock(w http.ResponseWriter, r *http.Request) {
 	sess := strings.TrimSpace(r.URL.Query().Get("session"))
 	writeJSON(w, 200, map[string]any{"locked": s.codexThreadWriterLocked(sess)})
@@ -739,18 +759,12 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := resumeArgs(e.Kind, e.Session)
-	forked := false
-	if e.Kind == "codex" && s.codexThreadWriterLocked(e.Session) {
-		// Another app (e.g. Windows Codex Desktop) holds an exclusive writer lock
-		// on this thread: `codex resume` would stall on "This conversation is open
-		// in another app", whereas `codex fork <id>` clones the full conversation
-		// context into an unlocked interactive session immediately.
-		args = []string{"fork", e.Session}
-		forked = true
-	}
 	if len(args) == 0 {
 		writeJSON(w, 409, map[string]any{"error": "暂不支持继续这种类型的会话"})
 		return
+	}
+	if e.Kind == "codex" && s.codexThreadWriterLocked(e.Session) {
+		_ = s.tryClearCodexWriterLock(e.Session)
 	}
 	args = append(modelArgs(e.Kind, body.Model, body.Effort), args...)
 	if e.Live && !e.CanTakeOver {
@@ -814,9 +828,6 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out := map[string]any{"pane_id": pane, "workspace_id": ws, "name": name}
-	if forked {
-		out["forked"] = true
-	}
 	if warn != "" {
 		out["warning"] = warn
 	}

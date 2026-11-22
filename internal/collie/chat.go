@@ -333,29 +333,59 @@ func toolSummary(name string, raw json.RawMessage) string {
 	return clip(string(b), maxInput)
 }
 
-// textOf flattens string-or-blocks content into plain text.
+// textOf flattens string-or-blocks content into plain text, also extracting
+// any embedded base64 / data-URL images as [image:...] tokens.
 func textOf(raw json.RawMessage) string {
+	text, _ := textAndImagesOf(raw)
+	return text
+}
+
+func textAndImagesOf(raw json.RawMessage) (string, []string) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return s
+		return s, nil
 	}
 	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		ImageURL json.RawMessage `json:"image_url"`
+		Source   imageSource     `json:"source"`
 	}
-	json.Unmarshal(raw, &blocks)
+	if json.Unmarshal(raw, &blocks) != nil {
+		return "", nil
+	}
 	var b strings.Builder
+	var imgs []string
 	for _, bl := range blocks {
 		if bl.Text != "" {
 			if b.Len() > 0 {
 				b.WriteString("\n")
 			}
 			b.WriteString(bl.Text)
-		} else if bl.Type == "image" {
-			b.WriteString("[image]")
+			continue
+		}
+		switch bl.Type {
+		case "image":
+			if tok := imageToken(bl.Source); strings.HasPrefix(tok, "[image:") {
+				imgs = append(imgs, tok)
+			} else if b.Len() == 0 {
+				b.WriteString("[image]")
+			}
+		case "input_image", "output_image", "image_url":
+			var u string
+			if json.Unmarshal(bl.ImageURL, &u) != nil {
+				var obj struct {
+					URL string `json:"url"`
+				}
+				_ = json.Unmarshal(bl.ImageURL, &obj)
+				u = obj.URL
+			}
+			if tok := imageDataURLToken(u); strings.HasPrefix(tok, "[image:") {
+				imgs = append(imgs, tok)
+			}
 		}
 	}
-	return b.String()
+	return b.String(), imgs
 }
 
 func (t *transcript) claudeLine(line []byte) bool {
@@ -533,11 +563,34 @@ func (t *transcript) codexLine(line []byte) bool {
 			return false
 		}
 		var blocks []struct {
-			Text string `json:"text"`
+			Type     string          `json:"type"`
+			Text     string          `json:"text"`
+			ImageURL json.RawMessage `json:"image_url"`
+			Source   imageSource     `json:"source"`
 		}
 		json.Unmarshal(p.Content, &blocks)
 		var parts []string
 		for _, b := range blocks {
+			switch b.Type {
+			case "input_image", "output_image", "image_url":
+				var u string
+				if json.Unmarshal(b.ImageURL, &u) != nil {
+					var obj struct {
+						URL string `json:"url"`
+					}
+					_ = json.Unmarshal(b.ImageURL, &obj)
+					u = obj.URL
+				}
+				if tok := imageDataURLToken(u); tok != "" {
+					parts = append(parts, tok)
+				}
+				continue
+			case "image":
+				if tok := imageToken(b.Source); tok != "" {
+					parts = append(parts, tok)
+				}
+				continue
+			}
 			if p.Role == "assistant" || !noise(b.Text) {
 				if strings.TrimSpace(b.Text) != "" {
 					parts = append(parts, b.Text)
@@ -549,6 +602,24 @@ func (t *transcript) codexLine(line []byte) bool {
 		}
 		t.add(&Message{Kind: p.Role, Text: strings.Join(parts, "\n\n")})
 		return true
+	case "image_generation_call":
+		var ig struct {
+			Result string `json:"result"`
+		}
+		if json.Unmarshal(line, &struct {
+			Payload *struct {
+				Result string `json:"result"`
+			} `json:"payload"`
+		}{Payload: &ig}) == nil && strings.TrimSpace(ig.Result) != "" {
+			tok := imageDataURLToken(ig.Result)
+			if tok == "" {
+				tok = imageToken(imageSource{Type: "base64", MediaType: "image/png", Data: ig.Result})
+			}
+			if strings.HasPrefix(tok, "[image:") {
+				t.add(&Message{Kind: "assistant", Text: tok})
+				return true
+			}
+		}
 	case "function_call", "custom_tool_call", "local_shell_call":
 		args := p.Arguments
 		if len(args) == 0 {
@@ -562,10 +633,20 @@ func (t *transcript) codexLine(line []byte) bool {
 		t.add(m)
 		return true
 	case "function_call_output", "custom_tool_call_output":
+		txt, imgs := textAndImagesOf(p.Output)
+		changed := false
+		isViewOnly := false
 		if m := t.tools[p.CallID]; m != nil {
-			m.Output = clip(textOf(p.Output), maxOutput)
-			return true
+			m.Output = clip(txt, maxOutput)
+			inp := strings.ToLower(m.Input)
+			isViewOnly = m.Name == "view_image" || (strings.Contains(inp, "view_image") && !strings.Contains(inp, "imagegen") && !strings.Contains(inp, "image_gen"))
+			changed = true
 		}
+		if len(imgs) > 0 && (!isViewOnly || strings.Contains(txt, "Generated images are saved")) {
+			t.add(&Message{Kind: "assistant", Text: strings.Join(imgs, "\n")})
+			changed = true
+		}
+		return changed
 	}
 	return false
 }
@@ -768,12 +849,8 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 	cwd := deref(a.Cwd)
 	if kind == "codex" && value != "" {
 		local, _ := split(pane)
-		orig := sessionID(sessKind, value)
 		if f := s.herdr.Forked(local); f != "" {
 			sessKind, value = "id", f
-		} else if childID, _ := s.codexLatestFork(orig, cwd); childID != "" {
-			s.herdr.RememberFork(local, childID)
-			sessKind, value = "id", childID
 		}
 	}
 	ck := key + "|" + kind + "|" + sessKind + ":" + value

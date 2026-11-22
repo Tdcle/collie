@@ -340,11 +340,12 @@ func TestSuperReportBlockedTone(t *testing.T) {
 	}
 }
 
-func TestPromptUnlocksReadOnlyCodexPaneBeforeSubmit(t *testing.T) {
+func TestPromptUnlocksReadOnlyCodexPaneWithoutForking(t *testing.T) {
 	lockedScreen := "Worked for 4m 0s\n\n  🔒  This conversation is open in another app   r to retry\n   r retry   f fork\n"
-	unlockedScreen := "• Fork created. You can continue here.\n\n› Ask Codex to do anything\n"
+	unlockedScreen := "› Ask Codex to do anything\n"
 
 	screen := lockedScreen
+	retryResolves := true
 	var keysSent []string
 	var promptsSent []string
 
@@ -374,7 +375,7 @@ func TestPromptUnlocksReadOnlyCodexPaneBeforeSubmit(t *testing.T) {
 						for _, k := range ks {
 							if s, ok := k.(string); ok {
 								keysSent = append(keysSent, s)
-								if s == "f" {
+								if s == "r" && retryResolves {
 									screen = unlockedScreen
 								}
 							}
@@ -391,20 +392,38 @@ func TestPromptUnlocksReadOnlyCodexPaneBeforeSubmit(t *testing.T) {
 		},
 	}
 
+	// Case 1: Desktop released lock, 'r' unlocks same session cleanly without 'f'
 	if err := h.Prompt(t.Context(), "w7:p1", "检查表 III 数据"); err != nil {
 		t.Fatalf("Prompt failed: %v", err)
 	}
-	if !slices.Equal(keysSent, []string{"r", "f"}) {
-		t.Fatalf("expected unlock keys [r f] before agent.prompt, got %v", keysSent)
+	if !slices.Equal(keysSent, []string{"r"}) {
+		t.Fatalf("expected only retry key [r] (never fork [f]), got %v", keysSent)
 	}
 	if !slices.Equal(promptsSent, []string{"检查表 III 数据"}) {
-		t.Fatalf("expected prompt sent exactly once after unlock, got %v", promptsSent)
+		t.Fatalf("expected prompt sent once after retry unlock, got %v", promptsSent)
+	}
+
+	// Case 2: Desktop still holds lock, must NEVER press 'f' (fork) and must return clear error
+	screen = lockedScreen
+	retryResolves = false
+	keysSent = nil
+	promptsSent = nil
+	if err := h.Prompt(t.Context(), "w7:p1", "不应创建副本"); err == nil {
+		t.Fatal("expected error when desktop still holds lock instead of forking")
+	}
+	if slices.Contains(keysSent, "f") {
+		t.Fatalf("must NEVER send 'f' (fork), got %v", keysSent)
+	}
+	if len(promptsSent) != 0 {
+		t.Fatalf("must not submit prompt when locked, got %v", promptsSent)
 	}
 }
 
-func TestCodexForkDiscoveryAndRolloutChain(t *testing.T) {
+func TestCodexRolloutChainAndImageExtraction(t *testing.T) {
 	t.Setenv("CODEX_HOME", "")
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	now := time.Now()
 	sessDir := filepath.Join(dir, ".codex", "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
 	if err := os.MkdirAll(sessDir, 0o755); err != nil {
@@ -425,19 +444,21 @@ func TestCodexForkDiscoveryAndRolloutChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 1x1 transparent PNG in base64
+	tinyPNG := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 	forkPath := filepath.Join(sessDir, "rollout-2026-11-22T11-25-38-"+forkID+".jsonl")
 	forkContent := `{"type":"session_meta","payload":{"id":"` + forkID + `","forked_from_id":"` + origID + `","cwd":` + string(cwdJSON) + `,"history_mode":"paginated","history_base":{"thread_id":"` + segID + `"}}}` + "\n" +
-		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续检查飞书表格"}]}}` + "\n"
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续修改模型图，先给我设计图吧。"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_view","name":"exec","input":"image((await tools.view_image({path:\"C:/Users/26422/Desktop/SFD-Net.png\"})).image_url)"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_view","output":[{"type":"input_text","text":"Script completed"},{"type":"input_image","image_url":"` + tinyPNG + `"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_gen","name":"exec","input":"const result=await tools.image_gen__imagegen({prompt:\"Edit SFD-Net\"})"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_gen","output":[{"type":"input_text","text":"Script completed\nWall time 65.1 seconds"},{"type":"input_image","image_url":"` + tinyPNG + `"},{"type":"input_text","text":"Generated images are saved to C:\\Users\\26422\\.codex\\generated_images\\x.png"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这是设计预览，桌面上的 Visio 原稿已保留。"}]}}` + "\n"
 	if err := os.WriteFile(forkPath, []byte(forkContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	srv := &Server{herdr: newHerdr("", "hub", dir), home: dir}
-
-	gotForkID, gotForkPath := srv.codexLatestFork(origID, cwd)
-	if gotForkID != forkID || gotForkPath != forkPath {
-		t.Fatalf("expected fork %s at %s, got %s at %s", forkID, forkPath, gotForkID, gotForkPath)
-	}
 
 	chain := srv.codexRolloutChain(forkPath)
 	if len(chain) != 2 || chain[0] != segPath || chain[1] != forkPath {
@@ -451,15 +472,26 @@ func TestCodexForkDiscoveryAndRolloutChain(t *testing.T) {
 		Session: &struct {
 			Kind  string `json:"kind"`
 			Value string `json:"value"`
-		}{Kind: "id", Value: origID},
+		}{Kind: "id", Value: forkID},
 	}, map[string]*transcript{})
 	if tr == nil {
 		t.Fatal("expected non-nil chained transcript")
 	}
 	tr.openTail()
 	msgs := tr.view()
-	if len(msgs) != 3 || msgs[0].Text != "补完 CVC-300 直接推理" || msgs[1].Text != "已补完 CVC-300 全部 60 张图的直接推理。" || msgs[2].Text != "继续检查飞书表格" {
-		t.Fatalf("expected ancestor + forked messages (3 total), got %+v", msgs)
+	// Expect:
+	// 0: user (ancestor)
+	// 1: assistant (ancestor)
+	// 2: user ("继续修改模型图...")
+	// 3: tool (view_image -> NO assistant image bubble!)
+	// 4: tool (imagegen)
+	// 5: assistant ("[image:~/.collie/images/...png]" extracted from imagegen output!)
+	// 6: assistant ("这是设计预览...")
+	if len(msgs) != 7 {
+		t.Fatalf("expected 7 messages (view_image skipped, imagegen extracted), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[5].Kind != "assistant" || len(msgs[5].Text) < 25 || msgs[5].Text[:24] != "[image:~/.collie/images/" {
+		t.Fatalf("expected generated image token at msgs[5], got %+v", msgs[5])
 	}
 }
 

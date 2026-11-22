@@ -49,7 +49,7 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 		switch {
 		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec", r.URL.Path == "/api/codex/lock":
 			machine = r.URL.Query().Get("machine")
-		case r.URL.Path == "/api/agents" && r.Method == "POST":
+		case (r.URL.Path == "/api/agents" || r.URL.Path == "/api/codex/send") && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 			var b struct {
 				Machine   string `json:"machine"`

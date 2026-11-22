@@ -2453,6 +2453,24 @@
     const label = histName(h).slice(0, 48);
     const { model, effort } = currentExtModelChoice();
     addPendingThreadMsg($("#x-thread"), text);
+    if (h.kind === "codex" && h.session) {
+      try {
+        await api("/api/codex/send", { body: {
+          machine: h.machine || "", thread: h.session, text, model, effort,
+        } });
+        await loadExternal().catch(() => {});
+        const matched = ext.find((x) => x.kind === "codex" && x.session === h.session && (x.machine || "") === (h.machine || ""));
+        if (matched) {
+          await api(`/api/history/${encodeURIComponent(h.id)}/delete`, { body: {} }).catch(() => {});
+          hist = hist.filter((x) => x.id !== h.id);
+          renderHist();
+          location.hash = "#/x/" + encodeURIComponent(matched.id);
+        } else {
+          setTimeout(() => openHist(hid), 1200);
+        }
+        return;
+      } catch {}
+    }
     toast("正在连接会话并发送…");
     let r;
     try {
@@ -3560,7 +3578,13 @@
         i++;
         continue;
       }
-      html += m.kind === "user" ? `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      if (m.kind === "user") {
+        html += `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>`;
+      } else {
+        const rendered = md(m.text);
+        const extraImgs = !rendered.includes("thumb ") ? imagesIn(m.text) : "";
+        html += `<div class="msg assistant">${rendered}${extraImgs}</div>`;
+      }
       cut();
       i++;
     }
@@ -3794,13 +3818,13 @@
     const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
     body.innerHTML = MD_EXT.test(path) ? `<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}` : `<pre class="fv-pre">${esc(text)}</pre>${cut}`;
   }
-  // Images a message carries ("[image:~/.collie/images/….png]", saved from the
-  // agent's transcript on its computer) show as thumbnails; tap for the panel.
-  const IMG_TOKEN = /\[image:(~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp))\]\n?/g;
+  // Images a message carries ("[image:~/.collie/images/….png]" or any local
+  // Windows/Unix image path) show inline; tap to open the full viewer panel.
+  const IMG_TOKEN = /\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]\n?/gi;
   const thumbs = new Map(); // path -> object URL, kept so redraws don't refetch
-  const IMG_RUN = /(?:\[image:~\/\.collie\/images\/[0-9a-f]+\.(?:png|jpg|gif|webp)\]\n?)+/g;
-  const thumbBtn = (p) => `<button type="button" class="thumb" data-img="${esc(p)}" aria-label="图片"><img alt=""${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
-  const withImages = (html) => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p))}</span>`) : html;
+  const IMG_RUN = /(?:\[image:(?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp)\]\n?)+/gi;
+  const thumbBtn = (p, cls = "") => `<button type="button" class="thumb${cls ? " " + cls : ""}" data-img="${esc(p)}" aria-label="点击查看大图"><img alt=""${thumbs.get(p) ? ` src="${thumbs.get(p)}"` : ""}></button>`;
+  const withImages = (html, cls = "") => html.includes("[image:") ? html.replace(IMG_RUN, (run) => `<span class="thumbs${cls ? " " + cls : ""}">${run.replace(IMG_TOKEN, (_, p) => thumbBtn(p, cls))}</span>`) : html;
   async function loadThumb(img) {
     const p = img.parentElement.dataset.img;
     if (thumbs.get(p)) { img.src = thumbs.get(p); return; }
@@ -3954,6 +3978,16 @@
       return s
         .replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`))
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]/gi, (_, p) => {
+          const raw = p.replace(/&amp;/g, "&");
+          return hold(`<span class="thumbs assistant-figs">${thumbBtn(raw, "assistant-fig")}</span>`);
+        })
+        .replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s"]+)\)/g, (_, alt, u) => hold(`<span class="thumbs assistant-figs"><a class="thumb assistant-fig" href="${u}" target="_blank" rel="noopener noreferrer"><img src="${u}" alt="${alt}"></a></span>`))
+        .replace(/!\[([^\]\n]*)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:#[^)\s"]*)?\)/gi, (_, alt, p) => {
+          let raw = p.replace(/&amp;/g, "&");
+          try { raw = decodeURI(raw); } catch {}
+          return hold(`<span class="thumbs assistant-figs">${thumbBtn(raw, "assistant-fig")}</span>`);
+        })
         .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, (_, l, u) => hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
         .replace(/\[([^\]\n]+)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
@@ -4115,10 +4149,10 @@
   }
   // Images a Collie message points at (a screenshot a worker took) show
   // under it, so you need not open each one.
-  const IMG_PATH = /(?:^|[\s(（`"'：:])((?:~|\/)[^\s`"'()（）<>]*\.(?:png|jpe?g|gif|webp))(?=$|[\s)）`"'，。,;；])/gim;
+  const IMG_PATH = /(?:^|[\s(（`"'：:])((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\s`"'()（）<>]*\.(?:png|jpe?g|gif|webp))(?=$|[\s)）`"'，。,;；])/gim;
   function imagesIn(t) {
     const ps = [...new Set([...(t || "").matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
-    return ps.length ? `<span class="thumbs">${ps.map(thumbBtn).join("")}</span>` : "";
+    return ps.length ? `<span class="thumbs">${ps.map((p) => thumbBtn(p)).join("")}</span>` : "";
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
   const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").trim()).filter(Boolean).join(" ")
@@ -4132,7 +4166,7 @@
     const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
     const name = (p) => p.split(/[\\/]/).pop().replace(/^[0-9a-f]{6}-/, "");
     return withImages(esc(t.slice(0, i).trimEnd()))
-      + (imgs.length ? `<span class="thumbs">${imgs.map(thumbBtn).join("")}</span>` : "")
+      + (imgs.length ? `<span class="thumbs">${imgs.map((p) => thumbBtn(p)).join("")}</span>` : "")
       + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
   }
 
