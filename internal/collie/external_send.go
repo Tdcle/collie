@@ -260,8 +260,16 @@ func (s *Server) codexHome() string { return envOr("CODEX_HOME", filepath.Join(s
 
 func (s *Server) codexDaemonSock() string {
 	p := filepath.Join(s.codexHome(), "app-server-control", "app-server-control.sock")
-	if _, err := os.Stat(p); err != nil { // follows the link to the daemon's socket
+	fi, err := os.Lstat(p)
+	if err != nil {
 		return ""
+	}
+	// On macOS/Linux, app-server-control.sock is a symlink to the daemon's socket;
+	// on Windows, it is an NTFS AF_UNIX reparse point where os.Stat may fail.
+	if fi.Mode()&os.ModeSymlink != 0 {
+		if _, err := os.Stat(p); err != nil {
+			return ""
+		}
 	}
 	return p
 }
@@ -502,7 +510,11 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 		turnParams["effort"] = effort
 	}
 	if !headless {
-		return c.call("turn/start", turnParams, nil)
+		if err := c.call("turn/start", turnParams, nil); err != nil {
+			return err
+		}
+		s.invalidateExternalCaches()
+		return nil
 	}
 	turnParams["approvalPolicy"] = "never"
 	if err := c.call("turn/start", turnParams, nil); err != nil {
@@ -510,7 +522,18 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 	}
 	// Let go, so the daemon closes the thread (and its lock) once it is idle.
 	c.call("thread/unsubscribe", map[string]any{"threadId": thread}, nil)
+	s.invalidateExternalCaches()
 	return nil
+}
+
+func (s *Server) invalidateExternalCaches() {
+	forgetDesktopRows()
+	externalCache.Lock()
+	externalCache.at = time.Time{}
+	externalCache.Unlock()
+	codexLoadedCache.Lock()
+	codexLoadedCache.at = time.Time{}
+	codexLoadedCache.Unlock()
 }
 
 // codexInterrupt stops the turn a Codex thread is running in the shared
@@ -675,6 +698,9 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 		switch e.via {
 		case "app":
 			err = s.codexAppSend(ctx, e.Session, text)
+			if err != nil && (errors.Is(err, errCodexNotLoaded) || strings.Contains(err.Error(), "没有打开")) && s.codexDaemonSock() != "" {
+				err = s.codexBgSend(ctx, e.Session, text, body.Model, body.Effort)
+			}
 		case "bg":
 			err = s.codexBgSend(ctx, e.Session, text, body.Model, body.Effort)
 		default:
@@ -682,10 +708,6 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			fail(w, err)
-			return
-		}
-		if e.via == "bg" {
-			writeJSON(w, 200, map[string]any{"ok": true, "note": "已发出：这一轮在 Codex 后台里运行，跑完后（本机对话约一分钟后）在桌面端打开即可看到同步记录"})
 			return
 		}
 	case "agy":

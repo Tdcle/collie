@@ -848,10 +848,11 @@ func (t *transcript) geminiLine(line []byte) bool {
 // ---------------------------------------------------------------- locating
 
 type agentDetail struct {
-	Agent   *string `json:"agent"`
-	Status  string  `json:"agent_status"`
-	Cwd     *string `json:"cwd"`
-	Session *struct {
+	Agent         *string `json:"agent"`
+	Status        string  `json:"agent_status"`
+	Cwd           *string `json:"cwd"`
+	TerminalTitle string  `json:"terminal_title_stripped"`
+	Session       *struct {
 		Kind  string `json:"kind"`
 		Value string `json:"value"`
 	} `json:"agent_session"`
@@ -870,8 +871,17 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 		sessKind, value = a.Session.Kind, a.Session.Value
 	}
 	cwd := deref(a.Cwd)
+	local, _ := split(pane)
+	if value == "" {
+		if kind == "codex" {
+			if resolved := s.resolveCodexPaneSession(local, a.TerminalTitle, cwd); resolved != "" {
+				sessKind, value = "id", resolved
+			}
+		} else if rem := s.herdr.SessionOf(local); rem != "" {
+			sessKind, value = "id", rem
+		}
+	}
 	if kind == "codex" && value != "" {
-		local, _ := split(pane)
 		if f := s.herdr.Forked(local); f != "" {
 			sessKind, value = "id", f
 		}

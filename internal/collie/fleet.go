@@ -64,6 +64,9 @@ type Herdr struct {
 	runs     map[string][2]string
 	saveRuns func(map[string][2]string)
 
+	// sessions: the agent session ID Collie resumed or started in a pane,
+	// used when herdr omits agent_session (e.g. on Windows ConPTY).
+	sessions map[string]string
 	// forked: when a read-only Codex TUI pane forks into a new thread ID,
 	// herdr keeps reporting the original launch session ID; map pane -> forked ID.
 	forked map[string]string
@@ -72,13 +75,14 @@ type Herdr struct {
 
 func newHerdr(socket, hostname, home string) *Herdr {
 	return &Herdr{
-		local:  &Machine{ID: "", Name: hostname, Home: home, Local: true, conn: &herdrConn{dial: unixDialer(socket)}},
-		remote: map[string]*Machine{},
-		names:  map[string]string{},
-		named:  map[string]string{},
-		runs:   map[string][2]string{},
-		forked: map[string]string{},
-		asks:   map[string]askCheck{},
+		local:    &Machine{ID: "", Name: hostname, Home: home, Local: true, conn: &herdrConn{dial: unixDialer(socket)}},
+		remote:   map[string]*Machine{},
+		names:    map[string]string{},
+		named:    map[string]string{},
+		runs:     map[string][2]string{},
+		sessions: map[string]string{},
+		forked:   map[string]string{},
+		asks:     map[string]askCheck{},
 	}
 }
 
@@ -170,6 +174,23 @@ func (h *Herdr) Run(pane string) (*[2]string, bool) {
 	return &r, true
 }
 
+// RememberSession records the resumed session ID for pane.
+func (h *Herdr) RememberSession(pane, session string) {
+	if pane == "" || session == "" {
+		return
+	}
+	h.mu.Lock()
+	h.sessions[pane] = session
+	h.mu.Unlock()
+}
+
+// SessionOf returns the recorded session ID for pane, if any.
+func (h *Herdr) SessionOf(pane string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.sessions[pane]
+}
+
 // RememberFork records a forked session ID for a pane whose TUI forked in-place.
 func (h *Herdr) RememberFork(pane, session string) {
 	if pane == "" || session == "" {
@@ -196,6 +217,11 @@ func (h *Herdr) pruneRuns(alive map[string]bool, listed func(machine string) boo
 	for p := range h.runs {
 		if _, m := split(p); !alive[p] && listed(m) {
 			delete(h.runs, p)
+		}
+	}
+	for p := range h.sessions {
+		if _, m := split(p); !alive[p] && listed(m) {
+			delete(h.sessions, p)
 		}
 	}
 	for p := range h.forked {

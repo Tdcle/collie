@@ -51,10 +51,79 @@ func (s *Server) codexThreadName(id string) string {
 }
 
 func (s *Server) codexIDByName(name string) string {
+	return s.codexIDByNameAndCwd(name, "")
+}
+
+func (s *Server) codexIDByNameAndCwd(name, cwd string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
 	s.loadCodexNames()
 	codexNames.Lock()
-	defer codexNames.Unlock()
-	return codexNames.byName[name]
+	id := codexNames.byName[name]
+	codexNames.Unlock()
+	if id != "" {
+		return id
+	}
+	path := s.codexStateDB()
+	if path == "" {
+		return ""
+	}
+	db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)"))
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	if cwd != "" {
+		norm := cwd
+		if isWindowsPath(norm) {
+			norm = winClean(norm)
+		}
+		var dbID string
+		if db.QueryRow(`SELECT id FROM threads WHERE archived = 0 AND (name = ? OR title = ? OR first_user_message = ?) AND LOWER(cwd) = LOWER(?) ORDER BY updated_at DESC LIMIT 1`,
+			name, name, name, norm).Scan(&dbID) == nil && dbID != "" {
+			return dbID
+		}
+	}
+	var dbID string
+	if db.QueryRow(`SELECT id FROM threads WHERE archived = 0 AND (name = ? OR title = ? OR first_user_message = ?) ORDER BY updated_at DESC LIMIT 1`,
+		name, name, name).Scan(&dbID) == nil {
+		return dbID
+	}
+	return ""
+}
+
+func (s *Server) resolveCodexPaneSession(localPane, terminalTitle, cwd string) string {
+	if rem := s.herdr.SessionOf(localPane); rem != "" {
+		return rem
+	}
+	tt := terminalTitle
+	if i := strings.LastIndex(tt, " | "); i > 0 {
+		tt = tt[:i]
+	}
+	tt = strings.TrimSpace(tt)
+	if id := s.codexIDByNameAndCwd(tt, cwd); id != "" {
+		return id
+	}
+	// If there is only a single active non-archived thread in this exact cwd,
+	// or a recently updated thread in this cwd when terminalTitle is still generic.
+	if cwd != "" && (tt == "" || genericTitles[strings.ToLower(tt)]) {
+		if path := s.codexStateDB(); path != "" {
+			if db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)")); err == nil {
+				defer db.Close()
+				norm := cwd
+				if isWindowsPath(norm) {
+					norm = winClean(norm)
+				}
+				var dbID string
+				if db.QueryRow(`SELECT id FROM threads WHERE archived = 0 AND LOWER(cwd) = LOWER(?) ORDER BY updated_at DESC LIMIT 1`, norm).Scan(&dbID) == nil {
+					return dbID
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (s *Server) loadCodexNames() {
@@ -153,11 +222,9 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 		}
 		kind := deref(a.Agent)
 		if sess == "" && kind == "codex" {
-			tt := a.TerminalTitle
-			if i := strings.LastIndex(tt, " | "); i > 0 {
-				tt = tt[:i]
-			}
-			sess = s.codexIDByName(strings.TrimSpace(tt))
+			sess = s.resolveCodexPaneSession(local, a.TerminalTitle, deref(a.Cwd))
+		} else if sess == "" {
+			sess = s.herdr.SessionOf(local)
 		}
 		if kind == "codex" && sess != "" {
 			if f := s.herdr.Forked(local); f != "" {

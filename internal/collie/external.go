@@ -642,6 +642,11 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	}
 	first, beat := true, time.Now()
 	checked := time.Now()
+	lastExtSt := ""
+	if e.desktop && e.Kind == "codex" && e.path != "" && codexTurnRunning(e.path) {
+		lastExtSt = "working"
+		_ = send("status", map[string]any{"live": true, "status": "working"})
+	}
 	for {
 		if tr != nil && (tr.update() || first) {
 			if p := ms.patch(tr); p != nil {
@@ -657,6 +662,17 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 			if !e.desktop && !alive(e.PID) {
 				send("gone", map[string]any{})
 				return
+			}
+			if e.desktop && e.Kind == "codex" && e.path != "" {
+				st := ""
+				if codexTurnRunning(e.path) {
+					st = "working"
+				}
+				if st != lastExtSt {
+					lastExtSt = st
+					_ = send("status", map[string]any{"live": st != "", "status": st})
+					beat = time.Now()
+				}
 			}
 		}
 		if time.Since(beat) > 15*time.Second {
@@ -802,6 +818,10 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	pane, ws, err := s.startAgent(ctx, "", kinds[e.Kind], name, cwd, label, args)
+	if pane != "" {
+		local, _ := split(pane)
+		s.herdr.RememberSession(local, e.Session)
+	}
 	if pane != "" && (body.Model != "" || body.Effort != "") {
 		s.herdr.RememberRun(pane, body.Model, body.Effort)
 	} else if pane != "" && e.Run != nil {
@@ -821,7 +841,7 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 			if perr == nil || !errors.As(perr, &phe) || (phe.Code != "agent_not_ready" && phe.Code != "agent_not_found") || time.Now().After(wait) || ctx.Err() != nil {
 				break
 			}
-			time.Sleep(1200 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond)
 		}
 		if perr != nil {
 			warn = "会话已连接，但消息发送失败：" + perr.Error()

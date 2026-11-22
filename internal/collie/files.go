@@ -42,17 +42,19 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	limit := int64(fileTextMax)
-	if r.URL.Query().Get("as") == "image" {
+	if r.URL.Query().Get("as") == "image" || r.URL.Query().Get("download") == "1" {
 		limit = fileImageMax
 	}
 	b, _ := io.ReadAll(io.LimitReader(f, limit))
 	kind := "text"
 	if r.URL.Query().Get("as") == "image" {
 		kind = "image"
+	} else if r.URL.Query().Get("download") == "1" {
+		kind = "download"
 	} else if bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
 		kind, b = "binary", nil
 	}
-	if kind == "image" && fi.Size() > limit {
+	if (kind == "image" || kind == "download") && fi.Size() > limit {
 		kind, b = "binary", nil
 	}
 	h := w.Header()

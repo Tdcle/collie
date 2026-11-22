@@ -584,6 +584,10 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, args)
 	if paneID != "" {
 		s.herdr.RememberRun(paneID, body.Model, body.Effort)
+		if sess := resumedSessionArg(body.Kind, extra); sess != "" {
+			local, _ := split(paneID)
+			s.herdr.RememberSession(local, sess)
+		}
 		if body.ProjectID != "" {
 			s.bindPaneProject(paneID, body.ProjectID)
 		}
@@ -606,7 +610,7 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 			if err == nil || !errors.As(err, &he) || (he.Code != "agent_not_ready" && he.Code != "agent_not_found") || time.Now().After(wait) || ctx.Err() != nil {
 				break
 			}
-			time.Sleep(1500 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond)
 		}
 		if err != nil {
 			writeJSON(w, 202, map[string]any{"pane_id": paneID, "workspace_id": wsID, "warning": "已启动，但第一个任务发送失败：" + err.Error()})
@@ -614,6 +618,22 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"pane_id": paneID, "workspace_id": wsID})
+}
+
+func resumedSessionArg(kind string, extra []string) string {
+	switch kind {
+	case "codex":
+		if len(extra) >= 2 && extra[0] == "resume" {
+			return strings.TrimSpace(extra[1])
+		}
+	case "claude", "gemini":
+		for i := 0; i+1 < len(extra); i++ {
+			if extra[i] == "-r" || extra[i] == "--resume" {
+				return strings.TrimSpace(extra[i+1])
+			}
+		}
+	}
+	return ""
 }
 
 // openShell opens a plain terminal: a herdr workspace in cwd, no agent.
@@ -680,7 +700,7 @@ func (s *Server) startAgent(ctx context.Context, machine, herdrKind, name, cwd, 
 			strings.Contains(he.Code, "name") {
 			break
 		}
-		time.Sleep(600 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 	}
 	var he *HerdrError
 	if err == nil || (errors.As(err, &he) && he.Code == "agent_not_ready") {

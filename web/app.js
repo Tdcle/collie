@@ -2802,9 +2802,15 @@
       try {
         const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text, model, effort } });
         if (r.note) toast(r.note, "attn");
+        e.live = true;
+        e.status = "working";
+        if (model || effort) e.run = [model || "", effort || ""];
+        renderExt();
+        renderExtHead();
+        setTimeout(() => loadExternal().catch(() => {}), 800);
         return;
       } catch (err) {
-        if (e.live || !e.session || /正在桌面端/.test(err.message || "")) {
+        if (e.live || !e.session || /正在桌面端|占用/.test(err.message || "")) {
           removePendingThreadMsg($("#x-thread"), text);
           throw err;
         }
@@ -2859,6 +2865,16 @@
       const show = (msgs) => { keepThread("x:" + id, msgs); if (mine()) { drawThread(msgs, el, "这个会话还没有消息。"); extWorking(); } };
       el._redraw = () => show(threadMsgs(el));
       es.addEventListener("patch", (ev) => mine() && show(applyPatch(el, JSON.parse(ev.data))));
+      es.addEventListener("status", (ev) => {
+        const st = JSON.parse(ev.data);
+        const cur = ext.find((x) => x.id === id);
+        if (cur) {
+          cur.live = !!st.live;
+          cur.status = st.status || "";
+          renderExt();
+          if (mine()) renderExtHead();
+        }
+      });
       es.addEventListener("messages", (ev) => { el._msgs = null; el._older = null; show(JSON.parse(ev.data)); }); // an older computer
       es.addEventListener("gone", () => { closeExt(); if (mine()) renderExtHead(true); });
       es.onerror = () => {
@@ -3902,7 +3918,31 @@
       body.innerHTML = `<div class="fv-img"><img src="${fileUrl}" alt=""></div>`;
       return;
     }
-    if (f.kind !== "text") { body.innerHTML = `<p class="fv-note">这个文件不是文本${f.size > 20 << 20 ? "，也太大了" : ""}，没法在这里预览。</p>`; return; }
+    if (f.kind !== "text") {
+      const canDl = f.size > 0 && f.size <= (20 << 20);
+      body.innerHTML = `<p class="fv-note">这个文件不是纯文本（${fmtSize(f.size)}），无法直接在线预览文本。${canDl ? `<br><br><button type="button" class="btn primary" id="fv-dl-btn">下载到本地打开</button>` : ""}</p>`;
+      $("#fv-dl-btn")?.addEventListener("click", async () => {
+        const btn = $("#fv-dl-btn");
+        btn.disabled = true; btn.textContent = "正在下载…";
+        try {
+          const q = `/api/file?path=${encodeURIComponent(path)}${f.machine ? "&machine=" + encodeURIComponent(f.machine) : ""}&download=1`;
+          const r = routeReq(q);
+          const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
+          if (!res.ok) throw new Error("下载失败");
+          const blob = await res.blob();
+          const u = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = u; a.download = path.split(/[\\/]/).pop() || "download";
+          document.body.append(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(u), 5000);
+          btn.textContent = "已下载";
+        } catch (err) {
+          toast(err.message || "下载失败", "err");
+          btn.disabled = false; btn.textContent = "下载到本地打开";
+        }
+      });
+      return;
+    }
     const text = await f.blob.text();
     const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
     body.innerHTML = MD_EXT.test(path) ? `<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}` : `<pre class="fv-pre">${esc(text)}</pre>${cut}`;
@@ -4078,11 +4118,16 @@
           return hold(`<span class="thumbs">${thumbBtn(raw)}</span>`);
         })
         .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, (_, l, u) => hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
-        // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
-        .replace(/\[([^\]\n]+)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
-          p = p.replace(/:\d+(?:[-:]\d+)?$/, "");
+        // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84) or [图](<C:/path with spaces/a.vsdx>):
+        .replace(/\[([^\]\n]+)\]\(&lt;(?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^&#\r\n]*?(?:&amp;[^&#\r\n]*?)*)(?:#[^&\r\n]*)?&gt;\)/g, (_, label, p) => {
+          p = p.replace(/&amp;/g, "&").replace(/:\d+(?:[-:]\d+)?$/, "");
           try { p = decodeURI(p); } catch {}
-          return hold(`<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`);
+          return hold(`<a class="fpath" href="#" data-path="${esc(p)}" title="${esc(p)}">${label}</a>`);
+        })
+        .replace(/\[([^\]\n]+)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
+          p = p.replace(/&amp;/g, "&").replace(/:\d+(?:[-:]\d+)?$/, "");
+          try { p = decodeURI(p); } catch {}
+          return hold(`<a class="fpath" href="#" data-path="${esc(p)}" title="${esc(p)}">${label}</a>`);
         })
         .replace(FILE_RE, (_, pre, p) => pre + hold(`<a class="fpath" href="#" data-path="${p}" title="打开这个文件">${p}</a>`))
         .replace(URL_RE, (u) => {

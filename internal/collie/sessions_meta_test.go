@@ -504,5 +504,47 @@ func TestCodexRolloutChainAndImageExtraction(t *testing.T) {
 	if strings.Contains(msgs[8].Text, "[image:") {
 		t.Fatalf("expected Turn 2 reply NOT to duplicate [image:...] when Markdown PNG link is present, got %q", msgs[8].Text)
 	}
+
+	// Regression test: when herdr omits agent_session (e.g. on Windows ConPTY) and only
+	// reports terminal_title_stripped ("论文返修 | SFD-Net 2"), transcriptFor must still
+	// resolve the structured transcript via session_index.jsonl / RememberSession!
+	sessIndex := filepath.Join(dir, ".codex", "session_index.jsonl")
+	if err := os.WriteFile(sessIndex, []byte(`{"id":"`+forkID+`","thread_name":"论文返修"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	trByTitle := srv.transcriptFor("pane:w8:p1", "w8:p1@wlc", agentDetail{
+		Agent:         &agentKind,
+		Cwd:           &cwd,
+		TerminalTitle: "论文返修 | SFD-Net 2",
+		Session:       nil,
+	}, map[string]*transcript{})
+	if trByTitle == nil {
+		t.Fatal("expected transcriptFor to resolve Codex transcript from TerminalTitle when agent_session is nil")
+	}
+
+	// And RememberSession resolves even when TerminalTitle is empty/generic:
+	srv.herdr.RememberSession("w9:p1", forkID)
+	trByRemember := srv.transcriptFor("pane:w9:p1", "w9:p1@wlc", agentDetail{
+		Agent:         &agentKind,
+		Cwd:           &cwd,
+		TerminalTitle: "codex",
+		Session:       nil,
+	}, map[string]*transcript{})
+	if trByRemember == nil {
+		t.Fatal("expected transcriptFor to resolve Codex transcript from RememberSession when agent_session is nil")
+	}
+
+	// And codexDaemonSock succeeds when socket file exists:
+	sockDir := filepath.Join(dir, ".codex", "app-server-control")
+	if err := os.MkdirAll(sockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sockFile := filepath.Join(sockDir, "app-server-control.sock")
+	if err := os.WriteFile(sockFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.codexDaemonSock(); got != sockFile {
+		t.Fatalf("expected codexDaemonSock=%q, got %q", sockFile, got)
+	}
 }
 
