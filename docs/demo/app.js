@@ -531,7 +531,15 @@
         const pp = canonMachinePath(cand, mId);
         if (!pp) continue;
         const isRootLike = pp === "/" || pp === hp || /^[a-z]:\/?$/i.test(pp);
-        const matched = isRootLike ? sp === pp : (sp === pp || sp.startsWith(pp + "/"));
+        let matched = isRootLike ? sp === pp : (sp === pp || sp.startsWith(pp + "/"));
+        if (!matched && pp.startsWith("~/")) {
+          const rel = pp.slice(1); // "/documents/chatgpt/sfd-net 2"
+          const mHome = /^([a-z]:\/users\/[^/]+|\/users\/[^/]+|\/home\/[^/]+|\/root)(\/.*|$)/i.exec(sp);
+          if (mHome) {
+            const tail = mHome[2] || "";
+            matched = tail === rel || tail.startsWith(rel + "/");
+          }
+        }
         if (matched && pp.length > bestLen) {
           best = p;
           bestLen = pp.length;

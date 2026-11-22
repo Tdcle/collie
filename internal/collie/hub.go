@@ -155,6 +155,7 @@ type Device struct {
 	Name      string    `json:"name"`
 	Renamed   bool      `json:"renamed,omitempty"`
 	OS        string    `json:"os,omitempty"`
+	Home      string    `json:"home,omitempty"`
 	Hash      string    `json:"hash"`
 	CreatedAt time.Time `json:"created_at"`
 	LastSeen  time.Time `json:"last_seen"`
@@ -347,6 +348,28 @@ func (a *Auth) save() {
 }
 
 // ---------------------------------------------------------------- addresses
+
+func (a *Auth) noteMachineMeta(id, osName, home string) {
+	a.mu.Lock()
+	changed := false
+	for _, d := range a.devices {
+		if d.ID == id && d.Kind == "machine" {
+			if osName != "" && d.OS != osName {
+				d.OS, changed = osName, true
+			}
+			if home != "" && d.Home != home {
+				d.Home, changed = home, true
+			}
+		}
+	}
+	if changed {
+		a.dirty = true
+	}
+	a.mu.Unlock()
+	if changed {
+		a.save()
+	}
+}
 
 // lanAddresses lists the URLs other devices can try, best first: addresses
 // given with -url, then private ranges (10/8, 192.168/16, 172.16/12), then
@@ -550,7 +573,6 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		Device
 		Online  bool     `json:"online"`
 		Current bool     `json:"current"`
-		Home    string   `json:"home,omitempty"`
 		Version string   `json:"version,omitempty"`
 		Agents  []string `json:"agents"`
 	}
@@ -560,7 +582,10 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 		v := view{Device: d}
 		v.Hash = ""
 		if m, ok := machines[d.ID]; ok && d.Kind == "machine" {
-			v.Online, v.Home, v.Version, v.Agents = m.Online, m.Home, m.Version, m.Agents
+			v.Online, v.Version, v.Agents = m.Online, m.Version, m.Agents
+			if m.Home != "" {
+				v.Home = m.Home
+			}
 		}
 		v.Current = me != nil && me.ID == d.ID
 		out = append(out, v)
@@ -675,6 +700,9 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	m.ip, _, _ = net.SplitHostPort(r.RemoteAddr)
 	if u := r.Header.Get("X-Collie-UI"); strings.HasPrefix(u, "http://127.0.0.1:") || strings.HasPrefix(u, "http://localhost:") {
 		m.ui = u
+	}
+	if s.auths != nil {
+		s.auths.noteMachineMeta(d.ID, m.OS, m.Home)
 	}
 	s.herdr.attach(m)
 	log.Printf("node %s (%s) connected from %s", m.ID, m.Name, r.RemoteAddr)

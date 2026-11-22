@@ -514,7 +514,7 @@ func (s *Server) collectAllExternal(forceFresh bool) []*External {
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, m := range s.herdr.Machines() {
+	for _, m := range s.allMachines() {
 		if m.Local {
 			continue
 		}

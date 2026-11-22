@@ -249,10 +249,31 @@ func deref(p *string) string {
 	return *p
 }
 
+func (s *Server) allMachines() []Machine {
+	list := s.herdr.Machines()
+	if s.auths == nil {
+		return list
+	}
+	seen := map[string]bool{}
+	for _, m := range list {
+		seen[m.ID] = true
+	}
+	for _, d := range s.auths.list() {
+		if d.Kind != "machine" || seen[d.ID] {
+			continue
+		}
+		seen[d.ID] = true
+		list = append(list, Machine{
+			ID: d.ID, Name: d.Name, OS: d.OS, Home: d.Home, Online: false,
+		})
+	}
+	return list
+}
+
 func (s *Server) state(ctx context.Context) PaneState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	machines := s.herdr.Machines()
+	machines := s.allMachines()
 	ws, err := s.herdr.Workspaces(ctx)
 	if err != nil {
 		return PaneState{Error: err.Error(), Agents: []AgentView{}, Shells: []AgentView{}, Machines: machines, SessionMeta: s.sessionMetaSnapshot(), Projects: s.projectsSnapshot()}
