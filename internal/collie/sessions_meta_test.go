@@ -36,7 +36,7 @@ func TestDeviceRenameAndSessionLifecycle(t *testing.T) {
 		auths: newAuth(db, "tok"),
 	}
 	code, _ := srv.auths.newCode("machine")
-	dev, _, err := srv.auths.redeem(code, "machine", "DV4GH6W2PM", "darwin/arm64")
+	dev, _, _, err := srv.auths.redeem(code, "machine", "DV4GH6W2PM", "darwin/arm64", "DV4GH6W2PM", "/Users/alex")
 	if err != nil {
 		t.Fatalf("redeem: %v", err)
 	}
@@ -545,6 +545,137 @@ func TestCodexRolloutChainAndImageExtraction(t *testing.T) {
 	}
 	if got := srv.codexDaemonSock(); got != sockFile {
 		t.Fatalf("expected codexDaemonSock=%q, got %q", sockFile, got)
+	}
+}
+
+func TestRepairMachineDeduplicationAndDeleteCascade(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "herd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	projectStore.Lock()
+	projectStore.loaded = false
+	projectStore.list = nil
+	projectStore.dismissed = nil
+	projectStore.Unlock()
+
+	sessionMetaStore.Lock()
+	sessionMetaStore.loaded = false
+	sessionMetaStore.byKey = nil
+	sessionMetaStore.Unlock()
+
+	history.Lock()
+	history.loaded = false
+	history.list = nil
+	history.Unlock()
+
+	srv := &Server{
+		herdr: newHerdr("", "hub", dir),
+		token: "tok",
+		home:  dir,
+		sup:   &Super{db: db, subs: map[chan struct{}]bool{}, st: &State{Settings: Settings{RouterMachine: "wlc", WorkerMachine: "wlc"}}},
+		auths: newAuth(db, "tok"),
+	}
+
+	// 1. Pair Windows machine ("WLC") and rename it to "Win"
+	c1, _ := srv.auths.newCode("machine")
+	d1, tok1, rebound1, err := srv.auths.redeem(c1, "machine", "WLC", "windows/amd64", "WLC", `C:\Users\26422`)
+	if err != nil || rebound1 || d1.ID != "wlc" {
+		t.Fatalf("first pair failed: d1=%+v rebound=%v err=%v", d1, rebound1, err)
+	}
+	srv.auths.rename("wlc", "Win")
+
+	// 2. Re-pair the exact same physical Windows machine -> must reuse ID "wlc", preserve custom name "Win", and rotate token!
+	c2, _ := srv.auths.newCode("machine")
+	d2, tok2, rebound2, err := srv.auths.redeem(c2, "machine", "WLC", "windows/amd64", "WLC", `C:\Users\26422`)
+	if err != nil {
+		t.Fatalf("re-pair failed: %v", err)
+	}
+	if !rebound2 || d2.ID != "wlc" {
+		t.Fatalf("expected re-pair to reuse machine ID 'wlc' with rebound=true, got id=%q rebound=%v", d2.ID, rebound2)
+	}
+	if d2.Name != "Win" {
+		t.Fatalf("expected re-pair to preserve renamed display name 'Win', got %q", d2.Name)
+	}
+	if tok1 == tok2 {
+		t.Fatal("expected re-pair to rotate token")
+	}
+	if len(srv.auths.list()) != 1 {
+		t.Fatalf("expected exactly 1 device (no wlc-2 duplicate), got %d: %+v", len(srv.auths.list()), srv.auths.list())
+	}
+
+	// 3. Pair a DIFFERENT Windows machine -> must get distinct ID ("wlc-2")
+	c3, _ := srv.auths.newCode("machine")
+	d3, _, rebound3, err := srv.auths.redeem(c3, "machine", "WLC", "windows/amd64", "WLC-OFFICE", `C:\Users\other`)
+	if err != nil || rebound3 || d3.ID != "wlc-2" {
+		t.Fatalf("expected different machine to get wlc-2, got d3=%+v rebound=%v err=%v", d3, rebound3, err)
+	}
+
+	// 4. Populate projects, dismissed tombstones, session_meta, history, and ext_snapshot for "wlc"
+	srv.herdr.attach(&Machine{ID: "wlc", Name: "Win", OS: "windows/amd64", Online: true})
+	projectStore.Lock()
+	srv.loadProjectsLocked()
+	projectStore.list = append(projectStore.list,
+		&Project{ID: "prj_win", Name: "SFD-Net", Machine: "wlc", Cwd: `~\Documents\SFD-Net 2`, Kind: "codex"},
+		&Project{ID: "prj_other", Name: "Office", Machine: "wlc-2", Cwd: `D:\Office`, Kind: "codex"},
+	)
+	projectStore.dismissed["wlc|d:/pythonproject/apix"] = true
+	srv.saveProjectsLocked()
+	projectStore.Unlock()
+
+	srv.remember(&Ended{Kind: "codex", Machine: "wlc", Cwd: `~\Documents\SFD-Net 2`, Session: "sess-win", Ended: time.Now()})
+	srv.saveExternalSnapshot("wlc", []*External{{ID: "cx-sess-win@wlc", Kind: "codex", Machine: "wlc", Session: "sess-win", Title: "论文返修"}})
+
+	sessionMetaStore.Lock()
+	srv.loadSessionMetaLocked()
+	sessionMetaStore.byKey["s:codex:wlc:sess-win"] = &SessionMeta{Title: "论文返修", ProjectID: "prj_win", UpdatedAt: time.Now()}
+	sessionMetaStore.byKey["x:cx-sess-win@wlc"] = &SessionMeta{Title: "论文返修", UpdatedAt: time.Now()}
+	sessionMetaStore.byKey["s:codex:wlc-2:sess-keep"] = &SessionMeta{Title: "保留会话", ProjectID: "prj_other", UpdatedAt: time.Now()}
+	srv.saveSessionMetaLocked()
+	sessionMetaStore.Unlock()
+
+	// 5. Delete "wlc" via /api/devices/wlc/delete -> must cascade-delete all wlc data while keeping wlc-2 untouched!
+	req := httptest.NewRequest("POST", "/api/devices/wlc/delete", bytes.NewBufferString(`{}`))
+	req.SetPathValue("id", "wlc")
+	w := httptest.NewRecorder()
+	srv.deleteDevice(w, req)
+	if w.Code != 200 {
+		t.Fatalf("deleteDevice status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	projs := srv.projectsSnapshot()
+	if len(projs) != 1 || projs[0].ID != "prj_other" {
+		t.Fatalf("expected wlc project cascade-deleted and prj_other kept, got %+v", projs)
+	}
+	if snap := srv.offlineExternalSnapshot("wlc"); len(snap) != 0 {
+		t.Fatalf("expected wlc external snapshot deleted, got %+v", snap)
+	}
+	meta := srv.sessionMetaSnapshot()
+	if _, exists := meta["s:codex:wlc:sess-win"]; exists {
+		t.Fatalf("expected wlc session_meta deleted, got %+v", meta)
+	}
+	if _, exists := meta["x:cx-sess-win@wlc"]; exists {
+		t.Fatalf("expected wlc ext session_meta deleted, got %+v", meta)
+	}
+	if _, exists := meta["s:codex:wlc-2:sess-keep"]; !exists {
+		t.Fatalf("expected wlc-2 session_meta preserved, got %+v", meta)
+	}
+	if srv.sup.st.Settings.RouterMachine != "" || srv.sup.st.Settings.WorkerMachine != "" {
+		t.Fatalf("expected RouterMachine/WorkerMachine cleared when pointing to deleted machine, got %+v", srv.sup.st.Settings)
+	}
+
+	// 6. Verify /install.ps1 and /install.sh are served directly by Hub Routes()
+	mux := srv.Routes()
+	for _, p := range []string{"/install.ps1", "/install.sh"} {
+		ir := httptest.NewRequest("GET", p, nil)
+		iw := httptest.NewRecorder()
+		mux.ServeHTTP(iw, ir)
+		if iw.Code != 200 || iw.Body.Len() < 500 {
+			t.Fatalf("expected %s served with status 200, got code=%d len=%d", p, iw.Code, iw.Body.Len())
+		}
 	}
 }
 

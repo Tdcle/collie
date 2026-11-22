@@ -84,19 +84,39 @@ install_binary() {
     step "从源码编译（$src，$v）"
     (cd "$src" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "$tmp/$asset" .) || die "编译失败"
   else
-    step "下载 $asset（$VERSION）"
-    if fetch "$base/$asset" "$tmp/$asset"; then
-      if fetch "$base/checksums.txt" "$tmp/checksums.txt" 2>/dev/null; then
-        want=$(grep " $asset\$" "$tmp/checksums.txt" | cut -d' ' -f1)
-        [ -n "$want" ] && [ "$want" = "$(sha256 "$tmp/$asset")" ] || die "校验和对不上，没有安装"
+    mirror_base=""
+    if [ -n "${COLLIE_HUB_MIRROR:-}" ]; then
+      mirror_base="${COLLIE_HUB_MIRROR%/}/dl"
+    elif [ -f "$HOME/.collie/node.json" ]; then
+      mh=$(sed -n 's/.*"hub"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/.collie/node.json" | head -n 1)
+      [ -n "$mh" ] && mirror_base="${mh%/}/dl"
+    fi
+    downloaded=0
+    if [ -n "$mirror_base" ] && [ "$VERSION" = latest ]; then
+      step "从 Hub 镜像下载 $asset"
+      if fetch "$mirror_base/$asset" "$tmp/$asset" 2>/dev/null; then
+        downloaded=1
+        if fetch "$mirror_base/checksums.txt" "$tmp/checksums.txt" 2>/dev/null; then
+          want=$(grep " $asset\$" "$tmp/checksums.txt" | cut -d' ' -f1)
+          [ -n "$want" ] && [ "$want" = "$(sha256 "$tmp/$asset")" ] || die "校验和对不上，没有安装"
+        fi
       fi
-    elif command -v git >/dev/null 2>&1 && command -v go >/dev/null 2>&1; then
-      step "没有现成的预编译版本，用本机 Go 从 https://github.com/$REPO 编译…"
-      git clone --depth 1 "https://github.com/$REPO.git" "$tmp/src" || die "git clone 失败"
-      v=$(git -C "$tmp/src" describe --tags --always --dirty 2>/dev/null || echo dev)
-      (cd "$tmp/src" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "$tmp/$asset" .) || die "编译失败"
-    else
-      die "下载失败：$base/$asset（也可以装好 git + Go 1.25+ 后重跑自动编译）"
+    fi
+    if [ "$downloaded" = 0 ]; then
+      step "下载 $asset（$VERSION）"
+      if fetch "$base/$asset" "$tmp/$asset"; then
+        if fetch "$base/checksums.txt" "$tmp/checksums.txt" 2>/dev/null; then
+          want=$(grep " $asset\$" "$tmp/checksums.txt" | cut -d' ' -f1)
+          [ -n "$want" ] && [ "$want" = "$(sha256 "$tmp/$asset")" ] || die "校验和对不上，没有安装"
+        fi
+      elif command -v git >/dev/null 2>&1 && command -v go >/dev/null 2>&1; then
+        step "没有现成的预编译版本，用本机 Go 从 https://github.com/$REPO 编译…"
+        git clone --depth 1 "https://github.com/$REPO.git" "$tmp/src" || die "git clone 失败"
+        v=$(git -C "$tmp/src" describe --tags --always --dirty 2>/dev/null || echo dev)
+        (cd "$tmp/src" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$v" -o "$tmp/$asset" .) || die "编译失败"
+      else
+        die "下载失败：$base/$asset（也可以装好 git + Go 1.25+ 后重跑自动编译）"
+      fi
     fi
   fi
 
@@ -297,6 +317,14 @@ case "$mode" in
     check_herdr
     ;;
   node)
+    if [ -z "${COLLIE_HUB_MIRROR:-}" ]; then
+      prev=""
+      for a in "$@"; do
+        if [ "$prev" = "--hub" ]; then COLLIE_HUB_MIRROR="$a"; break; fi
+        case "$a" in --hub=*) COLLIE_HUB_MIRROR="${a#--hub=}"; break ;; esac
+        prev="$a"
+      done
+    fi
     install_binary
     case " $* " in
       *" --code "* | *" --code="*)

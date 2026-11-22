@@ -154,6 +154,7 @@ type Device struct {
 	Kind      string    `json:"kind"` // "browser" | "machine"
 	Name      string    `json:"name"`
 	Renamed   bool      `json:"renamed,omitempty"`
+	Hostname  string    `json:"hostname,omitempty"`
 	OS        string    `json:"os,omitempty"`
 	Home      string    `json:"home,omitempty"`
 	Hash      string    `json:"hash"`
@@ -264,36 +265,120 @@ func (a *Auth) newCode(kind string) (string, time.Time) {
 	return code, exp
 }
 
-// redeem turns a one-time code into a device with its own token.
-func (a *Auth) redeem(code, kind, name, osName string) (*Device, string, error) {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	p, ok := a.codes[code]
-	if !ok || time.Now().After(p.expires) {
-		return nil, "", fmt.Errorf("配对码无效或已过期")
-	}
-	if p.kind != kind {
-		return nil, "", fmt.Errorf("这个配对码不是给%s用的", map[string]string{"browser": "手机或浏览器", "machine": "电脑"}[kind])
-	}
-	delete(a.codes, code)
-	token := randomToken()
-	d := &Device{ID: a.uniqueID(kind, name), Kind: kind, Name: name, OS: osName, Hash: hashToken(token), CreatedAt: time.Now(), LastSeen: time.Now()}
-	a.devices[d.Hash] = d
-	a.dirty = true
-	return d, token, nil
-}
-
-var slugRe = regexp.MustCompile(`[^a-z0-9-]+`)
-
-func (a *Auth) uniqueID(kind, name string) string {
-	base := strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+func deviceSlug(kind, s string) string {
+	base := strings.Trim(slugRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-"), "-")
 	if len(base) > 20 {
 		base = base[:20]
 	}
 	if base == "" {
 		base = kind
 	}
+	return base
+}
+
+func sameMachineIdentity(d *Device, name, osName, hostname, home string) bool {
+	if d == nil || d.Kind != "machine" {
+		return false
+	}
+	if d.OS != "" && osName != "" && !strings.EqualFold(d.OS, osName) {
+		return false
+	}
+	if hostname != "" && d.Hostname != "" && strings.EqualFold(hostname, d.Hostname) {
+		if home == "" || d.Home == "" || strings.EqualFold(home, d.Home) {
+			return true
+		}
+	}
+	if home != "" && d.Home != "" && strings.EqualFold(home, d.Home) {
+		cand := hostname
+		if cand == "" {
+			cand = name
+		}
+		if d.ID == deviceSlug("machine", cand) || strings.EqualFold(d.Name, cand) {
+			return true
+		}
+	}
+	candSlug := deviceSlug("machine", hostname)
+	if hostname == "" {
+		candSlug = deviceSlug("machine", name)
+	}
+	if candSlug != "" && candSlug != "machine" && candSlug != "电脑" && d.ID == candSlug {
+		if home == "" || d.Home == "" || strings.EqualFold(home, d.Home) {
+			return true
+		}
+	}
+	return false
+}
+
+// redeem turns a one-time code into a device with its own token.
+// Re-pairing an already-registered physical machine rotates its token in-place
+// and preserves its ID, custom display name, and projects instead of creating a duplicate.
+func (a *Auth) redeem(code, kind, name, osName, hostname, home string) (*Device, string, bool, error) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.codes[code]
+	if !ok || time.Now().After(p.expires) {
+		return nil, "", false, fmt.Errorf("配对码无效或已过期")
+	}
+	if p.kind != kind {
+		return nil, "", false, fmt.Errorf("这个配对码不是给%s用的", map[string]string{"browser": "手机或浏览器", "machine": "电脑"}[kind])
+	}
+	delete(a.codes, code)
+	token := randomToken()
+	newHash := hashToken(token)
+	now := time.Now()
+
+	if kind == "machine" {
+		for oldHash, existing := range a.devices {
+			if sameMachineIdentity(existing, name, osName, hostname, home) {
+				delete(a.devices, oldHash)
+				existing.Hash = newHash
+				existing.LastSeen = now
+				if osName != "" {
+					existing.OS = osName
+				}
+				if hostname != "" {
+					existing.Hostname = hostname
+				}
+				if home != "" {
+					existing.Home = home
+				}
+				if !existing.Renamed && name != "" {
+					existing.Name = name
+				}
+				a.devices[newHash] = existing
+				a.dirty = true
+				cp := *existing
+				return &cp, token, true, nil
+			}
+		}
+	}
+
+	idSeed := name
+	if kind == "machine" && hostname != "" && name == "" {
+		idSeed = hostname
+	}
+	d := &Device{
+		ID:        a.uniqueID(kind, idSeed),
+		Kind:      kind,
+		Name:      name,
+		Hostname:  hostname,
+		OS:        osName,
+		Home:      home,
+		Hash:      newHash,
+		CreatedAt: now,
+		LastSeen:  now,
+	}
+	a.devices[d.Hash] = d
+	a.dirty = true
+	cp := *d
+	return &cp, token, false, nil
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9-]+`)
+
+func (a *Auth) uniqueID(kind, name string) string {
+	base := deviceSlug(kind, name)
 	taken := map[string]bool{}
 	for _, d := range a.devices {
 		taken[d.ID] = true
@@ -349,7 +434,7 @@ func (a *Auth) save() {
 
 // ---------------------------------------------------------------- addresses
 
-func (a *Auth) noteMachineMeta(id, osName, home string) {
+func (a *Auth) noteMachineMeta(id, osName, home, hostname string) {
 	a.mu.Lock()
 	changed := false
 	for _, d := range a.devices {
@@ -359,6 +444,9 @@ func (a *Auth) noteMachineMeta(id, osName, home string) {
 			}
 			if home != "" && d.Home != home {
 				d.Home, changed = home, true
+			}
+			if hostname != "" && d.Hostname != hostname {
+				d.Hostname, changed = hostname, true
 			}
 		}
 	}
@@ -506,10 +594,12 @@ func (s *Server) pairNew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Code string `json:"code"`
-		Kind string `json:"kind"`
-		Name string `json:"name"`
-		OS   string `json:"os"`
+		Code     string `json:"code"`
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+		OS       string `json:"os"`
+		Hostname string `json:"hostname"`
+		Home     string `json:"home"`
 		// Another hub's page keeps the token itself: it can't use our cookie.
 		WantToken bool `json:"want_token"`
 	}
@@ -526,19 +616,22 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 	if len([]rune(name)) > 40 {
 		name = string([]rune(name)[:40])
 	}
-	d, token, err := s.auths.redeem(body.Code, body.Kind, name, body.OS)
+	d, token, rebound, err := s.auths.redeem(body.Code, body.Kind, name, strings.TrimSpace(body.OS), strings.TrimSpace(body.Hostname), strings.TrimSpace(body.Home))
 	if err != nil {
 		time.Sleep(500 * time.Millisecond)
 		writeJSON(w, 401, map[string]any{"error": err.Error()})
 		return
 	}
+	if rebound && d.Kind == "machine" && s.herdr != nil {
+		s.herdr.detach(d.ID, nil)
+	}
 	go s.auths.save()
 	if d.Kind == "browser" && !body.WantToken {
 		setTokenCookie(w, r, token)
-		writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID})
+		writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID, "name": d.Name})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID, "token": token})
+	writeJSON(w, 200, map[string]any{"ok": true, "id": d.ID, "name": d.Name, "rebound": rebound, "token": token})
 }
 
 func setTokenCookie(w http.ResponseWriter, r *http.Request, token string) {
@@ -641,7 +734,7 @@ func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.Kind == "machine" {
-		s.herdr.detach(d.ID, nil)
+		s.purgeMachineData(d.ID)
 	}
 	go s.auths.save()
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -702,7 +795,7 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 		m.ui = u
 	}
 	if s.auths != nil {
-		s.auths.noteMachineMeta(d.ID, m.OS, m.Home)
+		s.auths.noteMachineMeta(d.ID, m.OS, m.Home, strings.TrimSpace(r.Header.Get("X-Collie-Hostname")))
 	}
 	s.herdr.attach(m)
 	log.Printf("node %s (%s) connected from %s", m.ID, m.Name, r.RemoteAddr)

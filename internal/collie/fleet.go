@@ -349,6 +349,63 @@ func (h *Herdr) detach(id string, m *Machine) {
 	}
 }
 
+func (h *Herdr) purgeMachine(id string) {
+	if id == "" {
+		return
+	}
+	h.mu.Lock()
+	if cur := h.remote[id]; cur != nil {
+		cur.Online = false
+		if cur.close != nil {
+			cur.close()
+		}
+		delete(h.remote, id)
+	}
+	runsChanged := false
+	for p := range h.runs {
+		if _, m := split(p); m == id {
+			delete(h.runs, p)
+			runsChanged = true
+		}
+	}
+	namesChanged := false
+	for p, n := range h.named {
+		if _, m := split(p); m == id {
+			delete(h.named, p)
+			if h.names[n] == p {
+				delete(h.names, n)
+			}
+			namesChanged = true
+		}
+	}
+	for p := range h.sessions {
+		if _, m := split(p); m == id {
+			delete(h.sessions, p)
+		}
+	}
+	for p := range h.forked {
+		if _, m := split(p); m == id {
+			delete(h.forked, p)
+		}
+	}
+	for p := range h.asks {
+		if _, m := split(p); m == id {
+			delete(h.asks, p)
+		}
+	}
+	if runsChanged {
+		h.persistRunsLocked()
+	}
+	if namesChanged {
+		h.persistNamesLocked()
+	}
+	cb := h.onChange
+	h.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
 // Client returns the HTTP client for a remote machine's node API.
 func (h *Herdr) Client(machine string) (*http.Client, error) {
 	m, err := h.machine(machine)

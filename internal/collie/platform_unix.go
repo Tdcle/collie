@@ -224,3 +224,6 @@ func findBinPlatform(name, home string) string {
 	}
 	return ""
 }
+
+func registerDaemonAutoStart(_, _ string, _ []string) {}
+func unregisterDaemonAutoStart(_ string)              {}

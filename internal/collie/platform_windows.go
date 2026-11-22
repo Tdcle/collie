@@ -545,3 +545,59 @@ func findBinPlatform(name, home string) string {
 	}
 	return ""
 }
+
+func quoteWinArg(s string) string {
+	if s == "" || strings.ContainsAny(s, " \t\"") {
+		return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	}
+	return s
+}
+
+// registerDaemonAutoStart registers a silent logon auto-start entry in Windows
+// Registry (HKCU\Software\Microsoft\Windows\CurrentVersion\Run) via a tiny VBS
+// launcher so no console window ever flashes on boot/logon.
+func registerDaemonAutoStart(name, exe string, subArgs []string) {
+	if os.Getenv("COLLIE_DRY_SERVICE") != "" || name == "" || exe == "" {
+		return
+	}
+	dir := collieDir()
+	_ = os.MkdirAll(dir, 0o700)
+
+	parts := []string{quoteWinArg(exe), "daemon", "start", name, "--"}
+	for _, a := range subArgs {
+		parts = append(parts, quoteWinArg(a))
+	}
+	cmdLine := strings.Join(parts, " ")
+	vbsPath := filepath.Join(dir, "autostart-"+name+".vbs")
+	vbs := "CreateObject(\"WScript.Shell\").Run \"" + strings.ReplaceAll(cmdLine, `"`, `""`) + "\", 0, False\r\n"
+	_ = os.WriteFile(vbsPath, []byte(vbs), 0o600)
+
+	runVal := `wscript.exe //B //Nologo ` + quoteWinArg(vbsPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "reg.exe", "add",
+		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+		"/v", "Collie-"+name,
+		"/t", "REG_SZ",
+		"/d", runVal,
+		"/f",
+	)
+	hideCmd(cmd)
+	_ = cmd.Run()
+}
+
+func unregisterDaemonAutoStart(name string) {
+	if os.Getenv("COLLIE_DRY_SERVICE") != "" || name == "" {
+		return
+	}
+	_ = os.Remove(filepath.Join(collieDir(), "autostart-"+name+".vbs"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "reg.exe", "delete",
+		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+		"/v", "Collie-"+name,
+		"/f",
+	)
+	hideCmd(cmd)
+	_ = cmd.Run()
+}

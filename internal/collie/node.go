@@ -59,6 +59,7 @@ func runNode(args []string) {
 	code := fs.String("code", "", "pairing code shown by the hub (first time only)")
 	name := fs.String("name", host, "how this computer is shown on the hub")
 	pairOnly := fs.Bool("pair-only", false, "join the hub and exit (a service runs `collie node` afterwards)")
+	daemonFlag := fs.Bool("daemon", false, "after pairing, start background daemon supervisor and register logon auto-start")
 	ui := fs.String("ui", envOr("COLLIE_UI", defaultLocalUI), "serve the hub's web UI on this computer at this address (off: don't)")
 	sock := fs.String("socket", defaultHerdrSocket(home), "herdr API socket")
 	fs.Usage = func() {
@@ -78,12 +79,27 @@ func runNode(args []string) {
 			os.Exit(2)
 		}
 		var err error
-		if cfg, err = pairNode(*hub, *code, *name); err != nil {
+		if cfg, err = pairNode(*hub, *code, *name, host, home); err != nil {
 			fmt.Fprintln(os.Stderr, "配对失败：", err)
 			os.Exit(1)
 		}
 		fmt.Printf("  已加入 %s，这台电脑在 hub 上叫「%s」(%s)\n", cfg.Hub, cfg.Name, cfg.ID)
 		if *pairOnly {
+			return
+		}
+		if *daemonFlag || (runtime.GOOS == "windows" && os.Getenv("COLLIE_SUPERVISED") == "") {
+			var svcArgs []string
+			fs.Visit(func(f *flag.Flag) {
+				switch f.Name {
+				case "name", "socket", "ui":
+					svcArgs = append(svcArgs, "--"+f.Name, f.Value.String())
+				}
+			})
+			if err := daemonStart("node", svcArgs); err != nil {
+				fmt.Fprintln(os.Stderr, "启动后台守护失败：", err)
+				os.Exit(1)
+			}
+			fmt.Println("  已启动后台常驻守护进程，并已配置开机/登录自启（可随时关闭当前窗口）。")
 			return
 		}
 	} else if !ok {
@@ -114,10 +130,10 @@ func runNode(args []string) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		start := time.Now()
-		err := nodeSession(ctx, cfg, *name, home, bin, *sock, api)
+		err := nodeSession(ctx, cfg, *name, host, home, bin, *sock, api)
 		if errors.Is(err, errRevoked) {
 			fmt.Fprintln(os.Stderr, "hub 拒绝了这台电脑（可能已在设备列表里移除）。重新配对：collie node --hub", cfg.Hub, "--code <新配对码>")
-			os.Exit(1)
+			os.Exit(78)
 		}
 		if ctx.Err() != nil {
 			break
@@ -136,15 +152,26 @@ func runNode(args []string) {
 	}
 }
 
-func pairNode(hub, code, name string) (nodeConfig, error) {
+func pairNode(hub, code, name, hostname, home string) (nodeConfig, error) {
 	hub = strings.TrimRight(strings.TrimSpace(hub), "/")
 	if !strings.Contains(hub, "://") {
 		hub = "http://" + hub
 	}
-	body, _ := json.Marshal(map[string]string{"code": code, "kind": "machine", "name": name, "os": runtime.GOOS + "/" + runtime.GOARCH})
+	body, _ := json.Marshal(map[string]string{
+		"code":     code,
+		"kind":     "machine",
+		"name":     name,
+		"os":       runtime.GOOS + "/" + runtime.GOARCH,
+		"hostname": hostname,
+		"home":     home,
+	})
+	tr := &http.Transport{Proxy: nil}
+	if strings.HasPrefix(strings.ToLower(hub), "https://") {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	// Dial the hub directly, as nodeSession does: a sandbox's http_proxy
 	// usually can't reach a hub on the private network and answers 502.
-	direct := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	direct := &http.Client{Timeout: 30 * time.Second, Transport: tr}
 	resp, err := direct.Post(hub+"/api/pair", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nodeConfig{}, fmt.Errorf("连不上 hub %s：%v", hub, err)
@@ -152,6 +179,7 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 	defer resp.Body.Close()
 	var out struct {
 		ID    string `json:"id"`
+		Name  string `json:"name"`
 		Token string `json:"token"`
 		Error string `json:"error"`
 	}
@@ -168,7 +196,11 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 		}
 		return nodeConfig{}, errors.New(out.Error)
 	}
-	cfg := nodeConfig{Hub: hub, ID: out.ID, Name: name, Token: out.Token}
+	effName := name
+	if out.Name != "" {
+		effName = out.Name
+	}
+	cfg := nodeConfig{Hub: hub, ID: out.ID, Name: effName, Token: out.Token}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	if err := os.WriteFile(nodeConfigPath(), b, 0o600); err != nil {
 		return cfg, err
@@ -178,7 +210,7 @@ func pairNode(hub, code, name string) (nodeConfig, error) {
 
 var errRevoked = errors.New("revoked")
 
-func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock string, api http.Handler) error {
+func nodeSession(ctx context.Context, cfg nodeConfig, name, hostname, home, bin, sock string, api http.Handler) error {
 	u, err := url.Parse(cfg.Hub)
 	if err != nil {
 		return err
@@ -193,7 +225,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	var conn net.Conn
 	if u.Scheme == "https" {
-		conn, err = tls.DialWithDialer(&d, "tcp", addr, &tls.Config{ServerName: u.Hostname()})
+		conn, err = tls.DialWithDialer(&d, "tcp", addr, &tls.Config{ServerName: u.Hostname(), InsecureSkipVerify: net.ParseIP(u.Hostname()) != nil})
 	} else {
 		conn, err = d.DialContext(ctx, "tcp", addr)
 	}
@@ -205,6 +237,7 @@ func nodeSession(ctx context.Context, cfg nodeConfig, name, home, bin, sock stri
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "collie-node")
 	req.Header.Set("X-Collie-Name", name)
+	req.Header.Set("X-Collie-Hostname", hostname)
 	req.Header.Set("X-Collie-Home", home)
 	req.Header.Set("X-Collie-OS", runtime.GOOS+"/"+runtime.GOARCH)
 	req.Header.Set("X-Collie-Bin", bin)

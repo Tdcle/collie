@@ -92,6 +92,7 @@ func serve() {
 	srv.herdr.onChange = sup.changed
 	loadAgentNames(sup.db, srv.herdr)
 	loadAgentRuns(sup.db, srv.herdr)
+	srv.pruneOrphanMachineState()
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {

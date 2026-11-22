@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lihuanyu0w0/collie/docs"
 )
 
 type Server struct {
@@ -86,6 +88,8 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", s.static())
 	mux.HandleFunc("GET /dl/{asset}", s.serveReleaseMirror)
+	mux.HandleFunc("GET /install.ps1", s.serveInstallPS1)
+	mux.HandleFunc("GET /install.sh", s.serveInstallSH)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
 
@@ -844,6 +848,18 @@ func (s *Server) serveReleaseMirror(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+asset+`"`)
 	http.ServeFile(w, r, p)
+}
+
+func (s *Server) serveInstallPS1(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(docs.InstallPS1)
+}
+
+func (s *Server) serveInstallSH(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(docs.InstallSH)
 }
 
 func (s *Server) tilde(p string) string { return tildeIn(s.home, p) }

@@ -58,7 +58,16 @@ func runDaemon(args []string) {
 			os.Exit(1)
 		}
 	case "stop":
+		unregister := false
+		for _, a := range rest {
+			if a == "--uninstall" {
+				unregister = true
+			}
+		}
 		daemonStop(name)
+		if unregister {
+			unregisterDaemonAutoStart(name)
+		}
 	case "status":
 		pidFile, _, _, logFile := daemonFiles(name)
 		if pid := readPID(pidFile); alive(pid) {
@@ -112,6 +121,8 @@ func daemonStart(name string, subArgs []string) error {
 	if r, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = r
 	}
+	exe = stripOldExe(exe)
+	registerDaemonAutoStart(name, exe, subArgs)
 	pidFile, _, stopFile, logFile := daemonFiles(name)
 	_ = os.Remove(stopFile)
 
@@ -156,6 +167,17 @@ func openRotatedLog(path string) *os.File {
 	return f
 }
 
+func stripOldExe(p string) string {
+	low := strings.ToLower(p)
+	if i := strings.Index(low, ".exe.old"); i > 0 {
+		return p[:i+4]
+	}
+	if i := strings.Index(low, ".old.exe"); i > 0 {
+		return p[:i] + ".exe"
+	}
+	return strings.TrimSuffix(p, ".old")
+}
+
 func daemonSupervisor(name string, subArgs []string) {
 	_ = os.MkdirAll(collieDir(), 0o700)
 	pidFile, childFile, stopFile, logFile := daemonFiles(name)
@@ -197,17 +219,7 @@ func daemonSupervisor(name string, subArgs []string) {
 		return false
 	}
 
-	stripOld := func(p string) string {
-		low := strings.ToLower(p)
-		if i := strings.Index(low, ".exe.old"); i > 0 {
-			return p[:i+4]
-		}
-		if i := strings.Index(low, ".old.exe"); i > 0 {
-			return p[:i] + ".exe"
-		}
-		return strings.TrimSuffix(p, ".old")
-	}
-	exe = stripOld(exe)
+	exe = stripOldExe(exe)
 
 	backoff := 2 * time.Second
 	for !stopping() {
@@ -251,6 +263,12 @@ func daemonSupervisor(name string, subArgs []string) {
 					lf.Close()
 				}
 				if stopping() {
+					_ = os.Remove(stopFile)
+					return
+				}
+				// Exit code 78 signals permanent token revocation (device removed on Hub);
+				// stop supervisor loop cleanly instead of hammering Hub with 401s forever.
+				if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 78 {
 					_ = os.Remove(stopFile)
 					return
 				}

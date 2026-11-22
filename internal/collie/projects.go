@@ -452,3 +452,180 @@ func (s *Server) assignSessionProject(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "project_id": pid})
 }
+
+func sessionMetaKeyMatchesMachine(k, machine string) bool {
+	if machine == "" || k == "" {
+		return false
+	}
+	if strings.HasPrefix(k, "s:") {
+		parts := strings.SplitN(k, ":", 4)
+		return len(parts) == 4 && parts[2] == machine
+	}
+	if strings.HasPrefix(k, "p:") || strings.HasPrefix(k, "x:") {
+		_, m := split(k[2:])
+		return m == machine
+	}
+	return false
+}
+
+// purgeMachineData cascade-deletes all projects, session metadata, external
+// session snapshots, history entries, and machine settings bound to a removed
+// machine so deleting a computer leaves zero orphaned records behind.
+func (s *Server) purgeMachineData(machine string) {
+	machine = strings.TrimSpace(machine)
+	if machine == "" {
+		return
+	}
+	if s.herdr != nil {
+		s.herdr.purgeMachine(machine)
+	}
+
+	// 1. Remove projects and dismissed project tombstones for this machine.
+	removedProjIDs := map[string]bool{}
+	projectStore.Lock()
+	s.loadProjectsLocked()
+	keptProjs := make([]*Project, 0, len(projectStore.list))
+	projChanged := false
+	for _, p := range projectStore.list {
+		if p == nil {
+			continue
+		}
+		if p.Machine == machine {
+			removedProjIDs[p.ID] = true
+			projChanged = true
+			continue
+		}
+		keptProjs = append(keptProjs, p)
+	}
+	projectStore.list = keptProjs
+	prefix := machine + "|"
+	for k := range projectStore.dismissed {
+		if strings.HasPrefix(k, prefix) {
+			delete(projectStore.dismissed, k)
+			projChanged = true
+		}
+	}
+	if projChanged {
+		s.saveProjectsLocked()
+	}
+	projectStore.Unlock()
+
+	// 2. Remove ended history entries for this machine and collect their IDs.
+	removedHistIDs := map[string]bool{}
+	history.Lock()
+	s.loadHistory()
+	keptHist := make([]*Ended, 0, len(history.list))
+	histChanged := false
+	for _, e := range history.list {
+		if e == nil {
+			continue
+		}
+		if e.Machine == machine {
+			if e.ID != "" {
+				removedHistIDs[e.ID] = true
+			}
+			histChanged = true
+			continue
+		}
+		keptHist = append(keptHist, e)
+	}
+	history.list = keptHist
+	if histChanged {
+		s.saveHistory()
+	}
+	history.Unlock()
+
+	// 3. Remove session_meta entries belonging to this machine or its deleted projects/history.
+	sessionMetaStore.Lock()
+	s.loadSessionMetaLocked()
+	metaChanged := false
+	for k, m := range sessionMetaStore.byKey {
+		if sessionMetaKeyMatchesMachine(k, machine) ||
+			(strings.HasPrefix(k, "h:") && removedHistIDs[k[2:]]) {
+			delete(sessionMetaStore.byKey, k)
+			metaChanged = true
+			continue
+		}
+		if m != nil && removedProjIDs[m.ProjectID] {
+			m.ProjectID = ""
+			m.UpdatedAt = time.Now()
+			metaChanged = true
+		}
+	}
+	if metaChanged {
+		s.saveSessionMetaLocked()
+	}
+	sessionMetaStore.Unlock()
+
+	// 4. Clear cached and persisted external session snapshots for this machine.
+	remoteExternal.Lock()
+	delete(remoteExternal.m, machine)
+	remoteExternal.Unlock()
+	if s.sup != nil && s.sup.db != nil {
+		_, _ = s.sup.db.Exec(`DELETE FROM kv WHERE k=?`, "ext_snapshot:"+machine)
+	}
+
+	// 5. Clear RouterMachine / WorkerMachine references if they pointed to this machine.
+	if s.sup != nil {
+		s.sup.mu.Lock()
+		settingsChanged := false
+		if s.sup.st.Settings.RouterMachine == machine {
+			s.sup.st.Settings.RouterMachine = ""
+			settingsChanged = true
+		}
+		if s.sup.st.Settings.WorkerMachine == machine {
+			s.sup.st.Settings.WorkerMachine = ""
+			settingsChanged = true
+		}
+		if settingsChanged || projChanged || histChanged || metaChanged {
+			s.sup.changed()
+		}
+		s.sup.mu.Unlock()
+	}
+}
+
+// pruneOrphanMachineState cleans up any leftover kv records for machines that
+// are no longer in Auth.devices (e.g. deleted by an older Collie version).
+func (s *Server) pruneOrphanMachineState() {
+	if s.node || s.auths == nil {
+		return
+	}
+	valid := map[string]bool{"": true}
+	for _, d := range s.auths.list() {
+		if d.Kind == "machine" {
+			valid[d.ID] = true
+		}
+	}
+	orphans := map[string]bool{}
+	projectStore.Lock()
+	s.loadProjectsLocked()
+	for _, p := range projectStore.list {
+		if p != nil && !valid[p.Machine] {
+			orphans[p.Machine] = true
+		}
+	}
+	for k := range projectStore.dismissed {
+		if i := strings.IndexByte(k, '|'); i > 0 && !valid[k[:i]] {
+			orphans[k[:i]] = true
+		}
+	}
+	projectStore.Unlock()
+
+	if s.sup != nil && s.sup.db != nil {
+		rows, err := s.sup.db.Query(`SELECT k FROM kv WHERE k LIKE 'ext_snapshot:%'`)
+		if err == nil {
+			for rows.Next() {
+				var k string
+				if rows.Scan(&k) == nil {
+					if m := strings.TrimPrefix(k, "ext_snapshot:"); m != "" && !valid[m] {
+						orphans[m] = true
+					}
+				}
+			}
+			rows.Close()
+		}
+	}
+	for m := range orphans {
+		s.purgeMachineData(m)
+	}
+}

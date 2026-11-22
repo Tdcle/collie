@@ -3058,10 +3058,15 @@
   const left = (p) => { const s = Math.max(0, Math.round((p.expires - Date.now()) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
   // A newer release: the footer says so, the devices page says where and how.
-  const INSTALL_SH = "curl -fsSL https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.sh | sh -s --";
-  const INSTALL_PS1_URL = "https://raw.githubusercontent.com/Tdcle/collie/main/docs/install.ps1";
-  const winCmd = (args) => `powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm ${INSTALL_PS1_URL}))) ${args}"`;
-  const installCmdFor = (os, args) => /^windows\b/i.test(os || "") ? winCmd(args) : `${INSTALL_SH} ${args}`;
+  const unixInstallCmd = (base, args) => {
+    const b = (base || location.origin).replace(/\/+$/, "");
+    return `curl -fsSL ${b}/install.sh | COLLIE_HUB_MIRROR=${b} sh -s -- ${args}`;
+  };
+  const winCmd = (base, args) => {
+    const b = (base || location.origin).replace(/\/+$/, "");
+    return `powershell -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([scriptblock]::Create((irm ${b}/install.ps1))) ${args}"`;
+  };
+  const installCmdFor = (os, args, base) => /^windows\b/i.test(os || "") ? winCmd(base, args) : unixInstallCmd(base, args);
   const isOld = (have, latest) => {
     const p = (v) => /^v\d+\.\d+\.\d+$/.test(v || "") ? v.slice(1).split(".").map(Number) : null;
     const a = p(have), b = p(latest);
@@ -3101,10 +3106,10 @@
     const phoneURL = pb ? `${devAddr}/?pair=${pb.code}` : "";
     const pm = fresh("machine") ? pairing.machine : null;
     const nodeArgs = pm ? `node --hub ${devAddr} --code ${pm.code}` : "";
-    const nodeCmd = pm ? `collie ${nodeArgs}` : "";
-    const installCmd = pm ? `${INSTALL_SH} ${nodeArgs}` : "";
-    const installWinCmd = pm ? winCmd(nodeArgs) : "";
-    const hubCmd = installCmdFor(r.hub.os, "hub");
+    const nodeCmd = pm ? `collie ${nodeArgs} --daemon` : "";
+    const installCmd = pm ? unixInstallCmd(devAddr, nodeArgs) : "";
+    const installWinCmd = pm ? winCmd(devAddr, nodeArgs) : "";
+    const hubCmd = installCmdFor(r.hub.os, "hub", devAddr);
     const machines = r.devices.filter((d) => d.kind === "machine");
     const addrSel = addrs.length > 1 ? `<label class="addr-pick">使用这个接入地址<select id="dev-addr">${addrs.map((a) => `<option ${a === devAddr ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>` : "";
     const keepOpen = document.activeElement?.id === "dev-addr" || document.activeElement?.closest?.("#add-hub");
@@ -3164,12 +3169,16 @@
             ${updateRow(r.hub.version, r.latest, hubCmd, "装 hub 时加过 --url 等参数的话照样带上", "", r.hub.name)}
           </div>
           <div class="dev-acts"><button class="btn ghost small" data-rename-dev="hub" data-name="${esc(r.hub.name)}">改名</button>${r.hub.herdr ? `<button class="btn small" data-launch-on="">+ 新建会话</button>` : `<span class="right">运行中</span>`}</div></li>
-        ${machines.map((d) => { const dCmd = installCmdFor(d.os, "node"); return `<li class="row dev-row">
+        ${machines.map((d) => {
+          const dCmd = installCmdFor(d.os, "node", devAddr);
+          const reconnectCmd = pm ? installCmdFor(d.os, `node --hub ${devAddr} --code ${pm.code}`, devAddr) : "";
+          return `<li class="row dev-row">
           <span class="dev-ico">${osGlyph(d.os)}<span class="dot ${d.online ? "online" : "offline"}"></span></span>
           <div>
             <div class="meta"><b>${esc(d.name)}</b>${brainId === d.id ? `<span class="tag brain">Collie 大脑</span>` : ""}${d.online ? `<span class="tag online-pill">在线</span>` : `<span class="tag">离线 · 上次 ${when(d.last_seen)}</span>`}<span>${esc(d.os || "")}</span>${verTag(d.version, r.latest, dCmd)}</div>
             <div class="dev-sub">${d.home ? `<span class="dev-path">${esc(tilde(d.home))}</span>` : ""}${d.online ? agentsTag(d.agents) : ""}</div>
             ${updateRow(d.version, r.latest, dCmd, "", d.id, d.name)}
+            ${!d.online ? (pm ? `<div class="update-cmd"><p class="pair-hint muted">在「${esc(d.name)}」终端执行以下命令即可恢复上线并配置守护进程与开机自启（自动复用原设备，不重复创建）：</p><div class="code"><span>${esc(reconnectCmd)}</span><button class="icon-btn" data-copy="${esc(reconnectCmd)}" title="复制"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div></div>` : `<div class="update-cmd"><p class="pair-hint muted">这台电脑当前离线；若需恢复上线或修复后台守护进程：<button class="btn small" data-reconnect-dev="${esc(d.id)}" data-os-hint="${esc(d.os || "")}">生成重连命令</button></p></div>`) : ""}
           </div>
           <div class="dev-acts"><button class="btn ghost small" data-rename-dev="${esc(d.id)}" data-name="${esc(d.name)}">改名</button>${d.online ? `<button class="btn small" data-launch-on="${esc(d.id)}">+ 新建会话</button>` : ""}<button class="btn ghost small" data-del-dev="${esc(d.id)}" data-name="${esc(d.name)}">移除</button></div></li>`; }).join("")}
       </ul></div>
@@ -3236,6 +3245,12 @@
       else if (b.dataset.launchOn !== undefined) { openLauncher(b.dataset.launchOn); }
       else if (b.dataset.copy) { await copy(b.dataset.copy); toast("已复制"); }
       else if (b.id === "new-node-code") { await newCode("machine"); loadDevices(); }
+      else if (b.dataset.reconnectDev) {
+        if (/^windows/i.test(b.dataset.osHint || "")) pairOS = "win";
+        else if (b.dataset.osHint) pairOS = "unix";
+        await newCode("machine");
+        loadDevices();
+      }
       else if (b.dataset.update !== undefined) {
         const id = b.dataset.update;
         if (!confirm(`更新「${b.dataset.name}」上的 Collie？它会下载新版并重启，大约十几秒连不上${id ? "" : "（这是 hub，页面会短暂断开）"}；里面的 agent 不受影响。`)) return;
@@ -3265,9 +3280,18 @@
         });
       }
       else if (b.dataset.delDev) {
-        if (!confirm(`移除「${b.dataset.name}」？它需要重新配对才能再连进来。`)) return;
-        await api(`/api/devices/${encodeURIComponent(b.dataset.delDev)}/delete`, { body: {} });
+        const delId = b.dataset.delDev;
+        if (!confirm(`确定移除「${b.dataset.name}」？移除后该电脑关联的项目、会话记录和离线快照都会一并清理，需要重新配对才能再连入。`)) return;
+        await api(`/api/devices/${encodeURIComponent(delId)}/delete`, { body: {} });
+        if (sideMachine === delId) { sideMachine = "all"; store.set("sideMachine", "all"); }
+        try {
+          setLocalState(await api("/api/state"));
+          await Promise.all([loadExternal(), loadHistory()]);
+          renderSide();
+          renderTarget(true);
+        } catch {}
         loadDevices();
+        toast(`已移除「${b.dataset.name}」及其关联数据`);
       }
     } catch (err) { toast(err.message, "attn"); }
   });

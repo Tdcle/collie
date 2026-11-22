@@ -110,12 +110,23 @@ function Build-FromGitHubSource([string]$TmpDir) {
   return $out
 }
 
-function Install-Binary {
+function Install-Binary([string]$MirrorUrl = "") {
   $asset = "collie-windows-$Arch.exe"
   $base = if ($Version -eq "latest") {
     "https://github.com/$Repo/releases/latest/download"
   } else {
     "https://github.com/$Repo/releases/download/$Version"
+  }
+  $mirrorBase = ""
+  if ($MirrorUrl) {
+    $mirrorBase = $MirrorUrl.TrimEnd("/") + "/dl"
+  } elseif ($env:COLLIE_HUB_MIRROR) {
+    $mirrorBase = $env:COLLIE_HUB_MIRROR.TrimEnd("/") + "/dl"
+  } elseif (Test-Path (Join-Path $HOME ".collie\node.json")) {
+    try {
+      $nj = Get-Content (Join-Path $HOME ".collie\node.json") -Raw | ConvertFrom-Json
+      if ($nj.hub) { $mirrorBase = ([string]$nj.hub).TrimEnd("/") + "/dl" }
+    } catch {}
   }
 
   $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("collie-install-" + [guid]::NewGuid().ToString("N"))
@@ -145,23 +156,40 @@ function Install-Binary {
         Pop-Location
       }
     } else {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
       $downloaded = $false
-      Step "下载 $asset（$Version）"
-      try {
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $tmpExe
-        $downloaded = $true
-      } catch {
-        $built = Build-FromGitHubSource $tmp
-        if ($built -and (Test-Path $built)) {
-          Copy-Item -Force $built $tmpExe
-        } else {
-          Die "下载失败（$base/$asset），且本机没有 git + Go 1.25+ 可供源码编译。"
+      $usedBase = $base
+      if ($mirrorBase -and $Version -eq "latest") {
+        try {
+          Step "从 Hub 镜像快速下载 $asset"
+          Invoke-WebRequest -UseBasicParsing -Uri "$mirrorBase/$asset" -OutFile $tmpExe
+          if ((Test-Path $tmpExe) -and ((Get-Item $tmpExe).Length -gt 1048576)) {
+            $downloaded = $true
+            $usedBase = $mirrorBase
+          }
+        } catch {
+          Remove-Item -Force $tmpExe -ErrorAction SilentlyContinue
+        }
+      }
+      if (-not $downloaded) {
+        Step "下载 $asset（$Version）"
+        try {
+          Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $tmpExe
+          $downloaded = $true
+          $usedBase = $base
+        } catch {
+          $built = Build-FromGitHubSource $tmp
+          if ($built -and (Test-Path $built)) {
+            Copy-Item -Force $built $tmpExe
+          } else {
+            Die "下载失败（$base/$asset），且本机没有 git + Go 1.25+ 可供源码编译。"
+          }
         }
       }
       if ($downloaded) {
         $sumFile = Join-Path $tmp "checksums.txt"
         try {
-          Invoke-WebRequest -UseBasicParsing -Uri "$base/checksums.txt" -OutFile $sumFile
+          Invoke-WebRequest -UseBasicParsing -Uri "$usedBase/checksums.txt" -OutFile $sumFile
           $want = ""
           foreach ($line in Get-Content $sumFile) {
             $f = $line.Trim() -split "\s+"
@@ -196,13 +224,19 @@ function Quote-CmdArg([string]$Arg) {
 function Register-AutoStart([string]$Name, [string[]]$SubArgs) {
   $cmdParts = @("daemon", "start", $Name, "--") + $SubArgs
   $argStr = ($cmdParts | ForEach-Object { Quote-CmdArg $_ }) -join " "
-  $runVal = '"' + $Bin + '" ' + $argStr
+  $cmdLine = '"' + $Bin + '" ' + $argStr
+  $colDir = Join-Path $HOME ".collie"
+  New-Item -ItemType Directory -Force -Path $colDir | Out-Null
+  $vbsPath = Join-Path $colDir "autostart-$Name.vbs"
+  $vbsContent = 'CreateObject("WScript.Shell").Run "' + ($cmdLine -replace '"', '""') + '", 0, False' + "`r`n"
+  $runVal = 'wscript.exe //B //Nologo "' + $vbsPath + '"'
   $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
   if ($env:COLLIE_DRY_SERVICE) {
     Say "$regPath -> Collie-$Name = $runVal"
     return
   }
   try {
+    [System.IO.File]::WriteAllText($vbsPath, $vbsContent, [System.Text.Encoding]::UTF8)
     New-Item -Path $regPath -Force | Out-Null
     Set-ItemProperty -Path $regPath -Name "Collie-$Name" -Value $runVal
   } catch {
@@ -213,7 +247,7 @@ function Register-AutoStart([string]$Name, [string[]]$SubArgs) {
   if ($LASTEXITCODE -ne 0) {
     Die "后台服务启动失败，请查看 $HOME\.collie\$Name.log"
   }
-  Step "已作为后台服务运行，并已注册登录自启（HKCU Run: Collie-$Name）"
+  Step "已作为后台常驻守护进程运行，并已注册无窗口开机/登录自启（HKCU Run: Collie-$Name）"
   Say "    日志：Get-Content -Wait `"$HOME\.collie\$Name.log`""
   Say "    管理：collie daemon status|restart|stop $Name"
 }
@@ -299,7 +333,15 @@ switch ($Mode) {
     Check-Herdr
   }
   "node" {
-    Install-Binary
+    $hubArg = ""
+    for ($i = 0; $i -lt $Rest.Count; $i++) {
+      if ($Rest[$i] -eq "--hub" -and ($i + 1 -lt $Rest.Count)) { $hubArg = $Rest[$i + 1]; break }
+      if ($Rest[$i] -like "--hub=*") { $hubArg = $Rest[$i].Substring(6); break }
+    }
+    if (Test-Path $Bin) {
+      try { & $Bin daemon stop node 2>$null | Out-Null } catch {}
+    }
+    Install-Binary $hubArg
     $hasCode = $false
     foreach ($a in $Rest) {
       if ($a -eq "--code" -or $a -like "--code=*") { $hasCode = $true; break }
