@@ -131,6 +131,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/external/{id}/earlier", wrap(s.externalEarlier))
 	mux.Handle("POST /api/external/{id}/takeover", wrap(s.takeOverExternal))
 	mux.Handle("POST /api/external/{id}/send", wrap(s.sendExternal))
+	mux.Handle("GET /api/codex/lock", wrap(s.checkCodexLock))
 	mux.Handle("POST /api/codex/interrupt", wrap(s.interruptCodex))
 	mux.Handle("POST /api/external/{id}/reveal", wrap(s.revealExternal))
 }
@@ -574,7 +575,11 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = body.Name
 	}
-	args := append(modelArgs(body.Kind, body.Model, body.Effort), body.Args...)
+	extra := append([]string{}, body.Args...)
+	if kind == "codex" && len(extra) == 2 && extra[0] == "resume" && s.codexThreadWriterLocked(extra[1]) {
+		extra = []string{"fork", extra[1]}
+	}
+	args := append(modelArgs(body.Kind, body.Model, body.Effort), extra...)
 	paneID, wsID, err := s.startAgent(ctx, "", kind, body.Name, cwd, label, args)
 	if paneID != "" {
 		s.herdr.RememberRun(paneID, body.Model, body.Effort)

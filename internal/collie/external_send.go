@@ -428,19 +428,19 @@ func (s *Server) codexLoaded() (map[string]bool, error) {
 	return ids, nil
 }
 
-func (s *Server) codexSend(ctx context.Context, thread, text string) error {
-	return s.codexDaemonSend(ctx, thread, text, false)
+func (s *Server) codexSend(ctx context.Context, thread, text, model, effort string) error {
+	return s.codexDaemonSend(ctx, thread, text, model, effort, false)
 }
 
 // codexBgSend continues a Codex App thread in the shared daemon when nothing
 // else runs it: the new App keeps its own app-server private, so this is the
 // way in. The App locks only the thread it has open; the daemon takes the
 // lock for the turn and lets go about a minute after it ends.
-func (s *Server) codexBgSend(ctx context.Context, thread, text string) error {
-	return s.codexDaemonSend(ctx, thread, text, true)
+func (s *Server) codexBgSend(ctx context.Context, thread, text, model, effort string) error {
+	return s.codexDaemonSend(ctx, thread, text, model, effort, true)
 }
 
-func (s *Server) codexDaemonSend(ctx context.Context, thread, text string, idle bool) error {
+func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effort string, idle bool) error {
 	sock := s.codexDaemonSock()
 	if sock == "" {
 		return errors.New("这台电脑上没有运行 Codex 后台")
@@ -458,7 +458,11 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text string, idle 
 	if !ids[thread] && !headless {
 		return errors.New("这个 Codex 会话没有在共享后台里运行，只能看")
 	}
-	if err := c.call("thread/resume", map[string]any{"threadId": thread, "excludeTurns": true}, nil); err != nil {
+	resumeParams := map[string]any{"threadId": thread, "excludeTurns": true}
+	if model != "" {
+		resumeParams["model"] = model
+	}
+	if err := c.call("thread/resume", resumeParams, nil); err != nil {
 		if strings.Contains(err.Error(), "active writer") || strings.Contains(err.Error(), "live local writer") {
 			return errors.New("这个对话正在桌面端 Codex 里打开着：请先在桌面端切到别的对话再发，或直接在桌面端里说")
 		}
@@ -483,10 +487,18 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text string, idle 
 	if running != "" {
 		return c.call("turn/steer", map[string]any{"threadId": thread, "input": input, "expectedTurnId": running}, nil)
 	}
-	if !headless {
-		return c.call("turn/start", map[string]any{"threadId": thread, "input": input}, nil)
+	turnParams := map[string]any{"threadId": thread, "input": input}
+	if model != "" {
+		turnParams["model"] = model
 	}
-	if err := c.call("turn/start", map[string]any{"threadId": thread, "input": input, "approvalPolicy": "never"}, nil); err != nil {
+	if effort != "" {
+		turnParams["effort"] = effort
+	}
+	if !headless {
+		return c.call("turn/start", turnParams, nil)
+	}
+	turnParams["approvalPolicy"] = "never"
+	if err := c.call("turn/start", turnParams, nil); err != nil {
 		return err
 	}
 	// Let go, so the daemon closes the thread (and its lock) once it is idle.
@@ -573,9 +585,15 @@ func (s *Server) stopCodexTurn(ctx context.Context, machine, thread string) erro
 
 func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Text string `json:"text"`
+		Text   string `json:"text"`
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
 	}
 	if !decode(w, r, &body) {
+		return
+	}
+	if !modelNameRe.MatchString(body.Model) || !modelNameRe.MatchString(body.Effort) {
+		writeJSON(w, 400, map[string]any{"error": "invalid model or effort"})
 		return
 	}
 	text := strings.TrimSpace(body.Text)
@@ -614,14 +632,16 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "codex":
-		send := s.codexSend
+		var err error
 		switch e.via {
 		case "app":
-			send = s.codexAppSend
+			err = s.codexAppSend(ctx, e.Session, text)
 		case "bg":
-			send = s.codexBgSend
+			err = s.codexBgSend(ctx, e.Session, text, body.Model, body.Effort)
+		default:
+			err = s.codexSend(ctx, e.Session, text, body.Model, body.Effort)
 		}
-		if err := send(ctx, e.Session, text); err != nil {
+		if err != nil {
 			fail(w, err)
 			return
 		}

@@ -567,6 +567,7 @@ kbd {
   box-shadow: var(--shadow-xs);
   padding: 10.5px 16px; border-radius: 18px 18px 5px 18px; white-space: pre-wrap; line-height: 1.62;
 }
+.msg.user.pending { opacity: .72; }
 .msg.assistant { align-self: stretch; color: var(--fg); }
 .msg.assistant > :first-child { margin-top: 0; }
 .msg.assistant > :last-child { margin-bottom: 0; }

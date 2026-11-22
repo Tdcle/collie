@@ -31,18 +31,20 @@ type Message struct {
 
 // transcript incrementally parses an agent's JSONL session log.
 type transcript struct {
-	path    string
-	format  string // claude | codex | agy
-	offset  int64
-	msgs    []*Message
-	tools   map[string]*Message
-	pending []*Message // agy: tool calls waiting for their output, in order
-	lastID  string
-	dropped int   // messages trimmed off the front, so positions stay stable
-	partial bool  // offset may be mid-line: skip to the next line first
-	began   int64 // where reading started (0: the top of the log)
-	lineAt  int64 // where the line being parsed starts
-	limit   int64 // stop reading here (0: at the end)
+	path      string
+	ancestors []string // older rollout segments before `path` (e.g. Codex forked/paginated rollouts)
+	prefix    []*Message
+	format    string // claude | codex | agy
+	offset    int64
+	msgs      []*Message
+	tools     map[string]*Message
+	pending   []*Message // agy: tool calls waiting for their output, in order
+	lastID    string
+	dropped   int   // messages trimmed off the front, so positions stay stable
+	partial   bool  // offset may be mid-line: skip to the next line first
+	began     int64 // where reading started (0: the top of the log)
+	lineAt    int64 // where the line being parsed starts
+	limit     int64 // stop reading here (0: at the end)
 }
 
 const (
@@ -60,6 +62,13 @@ func newTranscript(path, format string) *transcript {
 		}
 	}
 	return &transcript{path: path, format: format, tools: map[string]*Message{}}
+}
+
+func (t *transcript) withAncestors(anc []string) *transcript {
+	if len(anc) > 0 {
+		t.ancestors = anc
+	}
+	return t
 }
 
 func clip(s string, n int) string {
@@ -87,7 +96,9 @@ func (t *transcript) update() bool {
 		return false
 	}
 	if fi.Size() < t.offset { // rewritten
+		anc, pfx := t.ancestors, t.prefix
 		*t = *newTranscript(t.path, t.format)
+		t.ancestors, t.prefix = anc, pfx
 	}
 	f.Seek(t.offset, io.SeekStart)
 	r := bufio.NewReaderSize(f, 1<<20)
@@ -125,17 +136,33 @@ func (t *transcript) openTail() {
 	if err != nil {
 		return
 	}
+	anc := t.ancestors
 	for win := int64(1 << 20); ; win *= 4 {
 		*t = *newTranscript(t.path, t.format)
+		t.ancestors = anc
 		if win >= fi.Size() {
 			t.update()
-			return
+			break
 		}
 		t.offset, t.partial = fi.Size()-win, true
 		t.update()
 		if len(t.msgs) >= maxMessages/2 {
-			return
+			break
 		}
+	}
+	if len(anc) > 0 && len(t.msgs) < maxMessages {
+		need := maxMessages - len(t.msgs)
+		var pfx []*Message
+		for i := len(anc) - 1; i >= 0 && len(pfx) < need; i-- {
+			at := newTranscript(anc[i], t.format)
+			at.openTail()
+			av := at.view()
+			if len(av) > need-len(pfx) {
+				av = av[len(av)-(need-len(pfx)):]
+			}
+			pfx = append(append([]*Message(nil), av...), pfx...)
+		}
+		t.prefix = pfx
 	}
 }
 
@@ -157,7 +184,8 @@ type msgPatch struct {
 // patch: what changed since the last call, or nil.
 func (m *msgSync) patch(t *transcript) *msgPatch {
 	view := t.view()
-	base := t.dropped + len(t.msgs) - len(view)
+	total := len(t.prefix) + len(t.msgs)
+	base := t.dropped + total - len(view)
 	enc := make([]string, len(view))
 	for i, msg := range view {
 		b, _ := json.Marshal(msg)
@@ -192,10 +220,13 @@ func (t *transcript) add(m *Message) { m.at = t.lineAt; t.msgs = append(t.msgs, 
 // starts at the top of the log.
 func (t *transcript) earlierCursor() int64 {
 	view := t.view()
-	if len(view) == 0 || (t.began == 0 && len(view) == len(t.msgs) && t.dropped == 0) {
+	if len(view) == 0 || (len(t.prefix) == 0 && t.began == 0 && len(view) == len(t.msgs) && t.dropped == 0) {
 		return 0
 	}
-	return view[0].at
+	if view[0].at > 0 {
+		return view[0].at
+	}
+	return 0
 }
 
 // earlierMessages reads the messages whose lines start before `before`: the
@@ -249,10 +280,19 @@ func (t *transcript) line(line []byte) bool {
 }
 
 func (t *transcript) view() []*Message {
-	if len(t.msgs) > maxMessages {
-		return t.msgs[len(t.msgs)-maxMessages:]
+	if len(t.prefix) == 0 {
+		if len(t.msgs) > maxMessages {
+			return t.msgs[len(t.msgs)-maxMessages:]
+		}
+		return t.msgs
 	}
-	return t.msgs
+	all := make([]*Message, 0, len(t.prefix)+len(t.msgs))
+	all = append(all, t.prefix...)
+	all = append(all, t.msgs...)
+	if len(all) > maxMessages {
+		return all[len(all)-maxMessages:]
+	}
+	return all
 }
 
 // noise filters harness-injected text that isn't part of the human conversation.
@@ -725,16 +765,37 @@ func (s *Server) transcriptFor(key, pane string, a agentDetail, cache map[string
 	if a.Session != nil {
 		sessKind, value = a.Session.Kind, a.Session.Value
 	}
+	cwd := deref(a.Cwd)
+	if kind == "codex" && value != "" {
+		local, _ := split(pane)
+		orig := sessionID(sessKind, value)
+		if f := s.herdr.Forked(local); f != "" {
+			sessKind, value = "id", f
+		} else if childID, _ := s.codexLatestFork(orig, cwd); childID != "" {
+			s.herdr.RememberFork(local, childID)
+			sessKind, value = "id", childID
+		}
+	}
 	ck := key + "|" + kind + "|" + sessKind + ":" + value
 	if tr := cache[ck]; tr != nil {
 		return tr
 	}
-	path, format := s.findTranscript(kind, sessKind, value, pane, deref(a.Cwd))
+	path, format := s.findTranscript(kind, sessKind, value, pane, cwd)
 	if path == "" {
 		return nil
 	}
-	tr := newTranscript(path, format)
+	tr := s.newChainedTranscript(path, format)
 	cache[ck] = tr
+	return tr
+}
+
+func (s *Server) newChainedTranscript(path, format string) *transcript {
+	tr := newTranscript(path, format)
+	if format == "codex" {
+		if chain := s.codexRolloutChain(path); len(chain) > 1 {
+			tr.withAncestors(chain[:len(chain)-1])
+		}
+	}
 	return tr
 }
 

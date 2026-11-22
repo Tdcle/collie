@@ -2355,7 +2355,8 @@
     $("#x-input").disabled = !canResume;
     $("#x-send").disabled = !canResume;
     $("#x-input").placeholder = !h ? "会话已不存在" : !on ? `${machineName(h.machine)} 当前离线，上线后可直接发消息继续…` : "输入消息直接继续对话，自动继承上下文…";
-    $("#x-hint").textContent = canResume ? `${KIND_LABEL[h.kind] || h.kind}${h.machine ? " · " + machineName(h.machine) : ""}` : "";
+    $("#x-hint").textContent = canResume && h.machine ? machineName(h.machine) : "";
+    renderExtChips(h?.kind, h?.machine, null, canResume && !h?.hub, "h:" + hid);
   }
   async function openHist(hid) {
     const el = $("#x-thread");
@@ -2381,15 +2382,88 @@
     }
   }
   const RESUME = { claude: (s) => ["--resume", s], codex: (s) => ["resume", s], agy: (s) => ["--conversation", s], gemini: (s) => ["--resume", s] };
+  const extDraftRun = new Map();
+  let xChipSeq = 0;
+  async function renderExtChips(kind, machine, baseRun, enabled, key) {
+    const wrap = $("#x-chips"), mSel = $("#x-model-sel"), eSel = $("#x-effort-sel");
+    if (!wrap || !mSel || !eSel) return;
+    if (!kind || !enabled) { wrap.hidden = true; return; }
+    const seq = ++xChipSeq;
+    const saved = getSavedModel(kind, machine || "");
+    const draft = extDraftRun.get(key || "") || {
+      model: baseRun?.[0] ?? saved?.model ?? "",
+      effort: baseRun?.[1] ?? saved?.effort ?? "",
+    };
+    const info = await modelsFor(kind, machine || "").catch(() => ({ models: [], efforts: [] }));
+    if (seq !== xChipSeq) return;
+    const list = [...(info.models || [])];
+    if (draft.model && !list.some((m) => m.id === draft.model)) list.unshift({ id: draft.model });
+    const short = (id) => id.split("/").pop();
+    const defShort = info.default ? short(info.default) : "默认模型";
+    let html = `<option value="" data-short="${esc(defShort)}" data-sub="${esc(info.default ? "现在是 " + info.default : "agent 自己的默认模型")}" ${!draft.model ? "selected" : ""}>默认${info.default ? "（" + esc(short(info.default)) + "）" : ""}</option>`;
+    html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc(m.note || (m.label && m.label !== m.id ? m.id : ""))}" ${m.id === draft.model ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
+    if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
+    mSel.value = draft.model || "";
+    const cur = list.find((m) => m.id === draft.model);
+    const effs = cur?.efforts?.length ? cur.efforts : (info.efforts || []);
+    const eff = effs.includes(draft.effort) ? draft.effort : "";
+    const defE = info.default_effort || "";
+    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="使用默认思考强度" ${!eff ? "selected" : ""}>默认${defE ? "（" + esc(EFFORT_LABEL[defE] || defE) + "）" : ""}</option>`;
+    ehtml += effs.map((ef) => `<option value="${esc(ef)}" data-short="思考 · ${esc(EFFORT_LABEL[ef] || ef)}" data-sub="${esc(ef)}" ${ef === eff ? "selected" : ""}>${esc(EFFORT_LABEL[ef] || ef)}</option>`).join("");
+    if (eSel._html !== ehtml) { eSel._html = ehtml; eSel.innerHTML = ehtml; }
+    eSel.value = eff;
+    eSel.hidden = effs.length === 0;
+    wrap.hidden = false;
+    wrap.dataset.key = key || "";
+    wrap.dataset.kind = kind;
+    wrap.dataset.machine = machine || "";
+    enhance(mSel); enhance(eSel);
+    syncPick(mSel); syncPick(eSel);
+    mSel._pick?.classList.toggle("changed", !!draft.model);
+    eSel._pick?.classList.toggle("changed", !!eff);
+  }
+  $("#x-model-sel")?.addEventListener("change", (ev) => {
+    const wrap = $("#x-chips");
+    const key = wrap?.dataset.key || "", kind = wrap?.dataset.kind || "", machine = wrap?.dataset.machine || "";
+    const prev = extDraftRun.get(key) || { model: "", effort: $("#x-effort-sel")?.value || "" };
+    const next = { model: ev.target.value, effort: prev.effort };
+    extDraftRun.set(key, next);
+    if (kind) saveLastModel(kind, machine, next.model, next.effort);
+    renderExtHead();
+  });
+  $("#x-effort-sel")?.addEventListener("change", (ev) => {
+    const wrap = $("#x-chips");
+    const key = wrap?.dataset.key || "", kind = wrap?.dataset.kind || "", machine = wrap?.dataset.machine || "";
+    const prev = extDraftRun.get(key) || { model: $("#x-model-sel")?.value || "", effort: "" };
+    const next = { model: prev.model, effort: ev.target.value };
+    extDraftRun.set(key, next);
+    if (kind) saveLastModel(kind, machine, next.model, next.effort);
+    renderExtHead();
+  });
+  function currentExtModelChoice() {
+    return {
+      model: $("#x-model-sel")?.value || "",
+      effort: $("#x-effort-sel")?.value || "",
+    };
+  }
   async function sendInHist(hid, text) {
     const h = hist.find((x) => x.id === hid);
     if (!h || !RESUME[h.kind]) throw new Error("暂不支持继续这个会话");
     if (!histOnline(h)) throw new Error(`${machineName(h.machine)} 当前不在线`);
     const label = histName(h).slice(0, 48);
+    const { model, effort } = currentExtModelChoice();
+    addPendingThreadMsg($("#x-thread"), text);
     toast("正在连接会话并发送…");
-    const r = await api("/api/agents", { body: {
-      kind: h.kind, cwd: h.cwd, machine: h.machine || "", name: "", label, args: RESUME[h.kind](h.session), prompt: text,
-    } });
+    let r;
+    try {
+      r = await api("/api/agents", { body: {
+        kind: h.kind, cwd: h.cwd, machine: h.machine || "", name: "", label,
+        model, effort, args: RESUME[h.kind](h.session), prompt: text,
+      } });
+    } catch (err) {
+      removePendingThreadMsg($("#x-thread"), text);
+      throw err;
+    }
     if (r.warning) toast(r.warning, "attn");
     await api(`/api/history/${encodeURIComponent(h.id)}/delete`, { body: {} }).catch(() => {});
     await api("/api/sessions/archive", { body: { kind: h.kind, machine: h.machine || "", session: h.session, hist_id: h.id, archived: false } }).catch(() => {});
@@ -2661,6 +2735,7 @@
       $("#x-tag").hidden = true;
       $("#x-input").disabled = true;
       $("#x-send").disabled = true;
+      if ($("#x-chips")) $("#x-chips").hidden = true;
       if (!gone) extSoon();
       return;
     }
@@ -2691,7 +2766,8 @@
     $("#x-input").placeholder = !on ? `${machineName(e.machine)} 当前离线，上线后可直接继续对话…`
       : busyElsewhere ? `正在 ${e.app || "原窗口"} 中执行，当前步骤完成后即可直接发消息…`
       : "输入消息继续对话…";
-    $("#x-hint").textContent = canChat ? `${KIND_LABEL[e.kind] || e.kind}${e.machine ? " · " + machineName(e.machine) : ""}` : "";
+    $("#x-hint").textContent = canChat && e.machine ? machineName(e.machine) : "";
+    renderExtChips(e.kind, e.machine, e.run, canChat && !e.hub, "x:" + e.id);
   }
   bindComposer($("#x-composer"), $("#x-input"), async (text) => {
     if (!text.trim()) return;
@@ -2701,18 +2777,30 @@
     }
     const e = ext.find((x) => x.id === extCur);
     if (!e) throw new Error("找不到这个会话");
-    if (e.can_send) {
+    const { model, effort } = currentExtModelChoice();
+    const wantCustomRun = (e.run ? (model !== (e.run[0] || "") || effort !== (e.run[1] || "")) : Boolean(model || effort));
+    addPendingThreadMsg($("#x-thread"), text);
+    if (e.can_send && !(wantCustomRun && !e.live && e.can_take_over && e.kind !== "codex")) {
       try {
-        const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text } });
+        const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text, model, effort } });
         if (r.note) toast(r.note, "attn");
         return;
       } catch (err) {
-        if (e.live || !e.session || /正在桌面端/.test(err.message || "")) throw err;
+        if (e.live || !e.session || /正在桌面端/.test(err.message || "")) {
+          removePendingThreadMsg($("#x-thread"), text);
+          throw err;
+        }
         // Desktop IPC / shared daemon wasn't holding this thread: seamlessly resume via CLI below!
       }
     }
     toast("正在连接会话并发送…");
-    const r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: { prompt: text, label: extName(e) } });
+    let r;
+    try {
+      r = await api(`/api/external/${encodeURIComponent(e.id)}/takeover`, { body: { prompt: text, label: extName(e), model, effort } });
+    } catch (err) {
+      removePendingThreadMsg($("#x-thread"), text);
+      throw err;
+    }
     if (r.warning) toast(r.warning, "attn");
     await api("/api/sessions/archive", { body: { kind: e.kind, machine: e.machine || "", session: e.session, ext_id: e.id, archived: false } }).catch(() => {});
     ext = ext.filter((x) => x.id !== e.id);
@@ -3123,8 +3211,101 @@
       : tilde(rawCwd);
     $("#d-cwd").textContent = (ms.length > 1 ? machineName(v.machine) + " · " : "") + cwd;
     renderWorkerModel(v);
+    renderPaneChips(v);
     $("#input").placeholder = `给 ${KIND_LABEL[v.kind] || v.kind || "Agent"} 发消息…`;
   }
+
+  let dChipSeq = 0, dSwitching = false;
+  async function renderPaneChips(v) {
+    const wrap = $("#d-chips"), mSel = $("#d-model-sel"), eSel = $("#d-effort-sel");
+    if (!wrap || !mSel || !eSel) return;
+    if (!v || !v.is_agent || v.name === ROUTER || hubOf(v.pane_id)) {
+      wrap.hidden = true;
+      return;
+    }
+    const seq = ++dChipSeq;
+    const w = !v.run && isWorker(v.name) ? sup.workers.find((x) => x.name === v.name && !x.ended) : null;
+    const run = v.run || w?.run || ["", ""];
+    const kind = v.kind === "antigravity" ? "agy" : v.kind;
+    const machine = v.machine || "";
+    const busy = v.status === "working" || v.status === "starting" || dSwitching;
+    const info = await modelsFor(kind, machine).catch(() => ({ models: [], efforts: [] }));
+    if (seq !== dChipSeq || find(current)?.pane_id !== v.pane_id) return;
+    const curModel = run[0] || "";
+    const curEffort = run[1] || "";
+    const list = [...(info.models || [])];
+    if (curModel && !list.some((m) => m.id === curModel)) list.unshift({ id: curModel });
+    const short = (id) => id.split("/").pop();
+    const defShort = info.default ? short(info.default) : "默认模型";
+    let html = `<option value="" data-short="${esc(defShort)}" data-sub="${esc(info.default ? "现在是 " + info.default : "agent 自己的默认模型")}" ${!curModel ? "selected" : ""}>默认${info.default ? "（" + esc(short(info.default)) + "）" : ""}</option>`;
+    html += list.map((m) => `<option value="${esc(m.id)}" data-short="${esc(m.label && m.label.length <= 24 ? m.label : short(m.id))}" data-sub="${esc(m.note || (m.label && m.label !== m.id ? m.id : ""))}" ${m.id === curModel ? "selected" : ""}>${esc(m.label || m.id)}</option>`).join("");
+    if (mSel._html !== html) { mSel._html = html; mSel.innerHTML = html; }
+    mSel.value = curModel;
+    mSel.disabled = busy;
+    mSel.title = busy ? "当前步骤执行完后可切换对话模型" : "切换这个会话使用的模型";
+    const mObj = list.find((m) => m.id === curModel);
+    const effs = mObj?.efforts?.length ? mObj.efforts : (info.efforts || []);
+    const eff = effs.includes(curEffort) ? curEffort : "";
+    const defE = info.default_effort || "";
+    let ehtml = `<option value="" data-short="思考 · ${esc(EFFORT_LABEL[defE] || defE || "默认")}" data-sub="使用默认思考强度" ${!eff ? "selected" : ""}>默认${defE ? "（" + esc(EFFORT_LABEL[defE] || defE) + "）" : ""}</option>`;
+    ehtml += effs.map((ef) => `<option value="${esc(ef)}" data-short="思考 · ${esc(EFFORT_LABEL[ef] || ef)}" data-sub="${esc(ef)}" ${ef === eff ? "selected" : ""}>${esc(EFFORT_LABEL[ef] || ef)}</option>`).join("");
+    if (eSel._html !== ehtml) { eSel._html = ehtml; eSel.innerHTML = ehtml; }
+    eSel.value = eff;
+    eSel.hidden = effs.length === 0;
+    eSel.disabled = busy;
+    eSel.title = busy ? "当前步骤执行完后可调整思考强度" : "切换这个会话的思考强度";
+    wrap.hidden = false;
+    enhance(mSel); enhance(eSel);
+    syncPick(mSel); syncPick(eSel);
+    mSel._pick?.classList.toggle("changed", !!curModel);
+    eSel._pick?.classList.toggle("changed", !!eff);
+  }
+
+  async function applyPaneModelSwitch(newModel, newEffort) {
+    const v = find(current);
+    if (!v || !v.is_agent || dSwitching) return;
+    const kind = v.kind === "antigravity" ? "agy" : v.kind;
+    saveLastModel(kind, v.machine || "", newModel, newEffort);
+    dSwitching = true;
+    renderPaneChips(v);
+    toast("正在切换模型并无缝续接会话…");
+    try {
+      const r = await api("/api/sessions/model", { body: {
+        pane_id: v.pane_id,
+        workspace_id: v.workspace_id,
+        kind: v.kind,
+        machine: v.machine || "",
+        session: v.session || "",
+        cwd: v.cwd || "",
+        label: title(v),
+        name: v.name || "",
+        model: newModel,
+        effort: newEffort,
+      } });
+      if (r.warning) toast(r.warning, "attn");
+      else toast("模型与思考强度已更新");
+      const oldMsgs = threadCache.get("p:" + v.pane_id);
+      if (oldMsgs && r.pane_id) keepThread("p:" + r.pane_id, oldMsgs);
+      try { setLocalState(await api("/api/state")); renderSide(); } catch {}
+      if (r.pane_id && r.pane_id !== current) {
+        location.hash = "#/p/" + encodeURIComponent(r.pane_id);
+      } else {
+        renderHead();
+      }
+    } catch (err) {
+      toast(err.message, "attn");
+    } finally {
+      dSwitching = false;
+      const curV = find(current);
+      if (curV) renderPaneChips(curV);
+    }
+  }
+  $("#d-model-sel")?.addEventListener("change", (ev) => {
+    applyPaneModelSwitch(ev.target.value, $("#d-effort-sel")?.value || "");
+  });
+  $("#d-effort-sel")?.addEventListener("change", (ev) => {
+    applyPaneModelSwitch($("#d-model-sel")?.value || "", ev.target.value);
+  });
 
   // What model an agent was started with, recorded when Collie (the launcher
   // or a spawn) started it. Agents started by hand elsewhere show nothing.
@@ -3171,7 +3352,7 @@
     $("#thread").classList.remove("asking");
     $("#live").hidden = true;
     $("#live").innerHTML = "";
-    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
+    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._pending = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
   }
   function openChat(id) {
     stream = openES(paneURL(id, "chat"));
@@ -3213,10 +3394,33 @@
       list = list.slice(p.base - base); base = p.base;
     }
     el._msgs = list; el._base = base; el._liveEarlier = p.earlier || 0;
+    reconcilePendingThreadMsgs(el);
     return threadMsgs(el);
   }
-  // A thread's messages: the older ones loaded on request, then the live view.
-  const threadMsgs = (el) => (el._older || []).concat(el._msgs || []);
+  const normMsgText = (t) => String(t || "").trim().replace(/\r\n/g, "\n");
+  function reconcilePendingThreadMsgs(el) {
+    if (!el._pending?.length) return;
+    const now = Date.now();
+    const seenUser = new Set((el._msgs || []).filter((m) => m.kind === "user").map((m) => normMsgText(m.text)));
+    el._pending = el._pending.filter((p) => !seenUser.has(normMsgText(p.text)) && now - p.at < 45000);
+  }
+  function addPendingThreadMsg(el, text) {
+    if (!el || !String(text || "").trim()) return;
+    el._pending = [...(el._pending || []), { kind: "user", text, pending: true, at: Date.now() }];
+    el._redraw ? el._redraw() : drawThread(threadMsgs(el), el);
+  }
+  function removePendingThreadMsg(el, text) {
+    if (!el || !el._pending?.length) return;
+    const want = normMsgText(text);
+    const idx = el._pending.findIndex((p) => normMsgText(p.text) === want);
+    if (idx >= 0) el._pending.splice(idx, 1);
+    el._redraw ? el._redraw() : drawThread(threadMsgs(el), el);
+  }
+  // A thread's messages: the older ones loaded on request, then the live view, plus optimistic pending sends.
+  const threadMsgs = (el) => {
+    reconcilePendingThreadMsgs(el);
+    return (el._older || []).concat(el._msgs || []).concat(el._pending || []);
+  };
   const earlierCursor = (el) => (el._older ? el._olderEarlier : el._liveEarlier) || 0;
   function resetEarlier(el, url) {
     el._older = null; el._olderEarlier = 0; el._liveEarlier = 0; el._earlierURL = url;
@@ -3356,7 +3560,7 @@
         i++;
         continue;
       }
-      html += m.kind === "user" ? `<div class="msg user">${userText(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
+      html += m.kind === "user" ? `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>` : `<div class="msg assistant">${md(m.text)}</div>`;
       cut();
       i++;
     }
@@ -3945,12 +4149,17 @@
       e.preventDefault();
       const btn = $(".send", form);
       btn.disabled = true;
+      const rawDraft = input.value;
       try {
-        const text = await withFiles(form, input.value);
+        const text = await withFiles(form, rawDraft);
+        input.value = ""; grow(input);
         await send(text);
-        input.value = ""; grow(input); form._clearFiles?.();
+        form._clearFiles?.();
       }
-      catch (err) { toast(err.message, "attn"); }
+      catch (err) {
+        if (!input.value) { input.value = rawDraft; grow(input); }
+        toast(err.message, "attn");
+      }
       finally { btn.disabled = false; }
     });
   }
@@ -3964,10 +4173,13 @@
       v = find(current) || { pane_id: current, is_agent: false };
     }
     if (!text.trim()) { sendKeys(["enter"]); return; }
+    const th = $("#thread");
+    if (v.is_agent) addPendingThreadMsg(th, text);
     try {
       if (v.is_agent) await api(`/api/agents/${encodeURIComponent(current)}/prompt`, { body: { text } });
       else await api(paneURL(current, "text"), { body: { text, enter: true } });
     } catch (err) {
+      if (v.is_agent) removePendingThreadMsg(th, text);
       throw new Error(err.message.includes("blocked") ? "agent 正在等你确认，先处理上面的确认卡片" : err.message);
     }
   }, () => (current || "").includes("@") ? current.slice(current.lastIndexOf("@") + 1) : "");

@@ -365,11 +365,17 @@
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.34", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
-        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.34", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.35", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.35", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.34", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.34",
+      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.35", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.35",
     });
+    if (p === "/api/sessions/model" && method === "POST") {
+      const a = agents.find((x) => x.pane_id === body.pane_id);
+      if (a) a.run = [body.model || "", body.effort || ""];
+      pushAll();
+      return json({ ok: true, pane_id: body.pane_id, workspace_id: body.workspace_id, run: [body.model || "", body.effort || ""] });
+    }
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }
     if ((m = /^\/api\/panes\/([^/]+)\/(keys|text)$/.exec(p))) {

@@ -152,6 +152,21 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 			}
 		}
 		kind := deref(a.Agent)
+		if sess == "" && kind == "codex" {
+			tt := a.TerminalTitle
+			if i := strings.LastIndex(tt, " | "); i > 0 {
+				tt = tt[:i]
+			}
+			sess = s.codexIDByName(strings.TrimSpace(tt))
+		}
+		if kind == "codex" && sess != "" {
+			if f := s.herdr.Forked(local); f != "" {
+				sess = f
+			} else if childID, _ := s.codexLatestFork(sess, deref(a.Cwd)); childID != "" {
+				s.herdr.RememberFork(local, childID)
+				sess = childID
+			}
+		}
 		var t string
 		switch kind {
 		case "codex":
@@ -172,13 +187,13 @@ func (s *Server) localSessions(ctx context.Context) map[string]paneSession {
 				if i := strings.LastIndex(tt, " | "); i > 0 {
 					tt = tt[:i]
 				}
-				if sess == "" {
-					sess = s.codexIDByName(strings.TrimSpace(tt))
-				}
 			}
 			t = cleanTitle(tt)
 		}
 		run, _ := s.herdr.Run(local)
+		if run == nil && kind == "codex" && sess != "" {
+			run = s.codexThreadRun(sess)
+		}
 		if t != "" || sess != "" || run != nil {
 			out[local] = paneSession{Title: t, Session: sess, Run: run}
 		}

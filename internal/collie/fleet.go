@@ -64,7 +64,10 @@ type Herdr struct {
 	runs     map[string][2]string
 	saveRuns func(map[string][2]string)
 
-	asks map[string]askCheck // pane → recent look at an "idle" screen
+	// forked: when a read-only Codex TUI pane forks into a new thread ID,
+	// herdr keeps reporting the original launch session ID; map pane -> forked ID.
+	forked map[string]string
+	asks   map[string]askCheck // pane → recent look at an "idle" screen
 }
 
 func newHerdr(socket, hostname, home string) *Herdr {
@@ -74,6 +77,7 @@ func newHerdr(socket, hostname, home string) *Herdr {
 		names:  map[string]string{},
 		named:  map[string]string{},
 		runs:   map[string][2]string{},
+		forked: map[string]string{},
 		asks:   map[string]askCheck{},
 	}
 }
@@ -166,6 +170,23 @@ func (h *Herdr) Run(pane string) (*[2]string, bool) {
 	return &r, true
 }
 
+// RememberFork records a forked session ID for a pane whose TUI forked in-place.
+func (h *Herdr) RememberFork(pane, session string) {
+	if pane == "" || session == "" {
+		return
+	}
+	h.mu.Lock()
+	h.forked[pane] = session
+	h.mu.Unlock()
+}
+
+// Forked returns the forked session ID recorded for pane, if any.
+func (h *Herdr) Forked(pane string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.forked[pane]
+}
+
 // pruneRuns forgets panes that are gone (herdr reuses pane ids), on the
 // machines it has a full list from.
 func (h *Herdr) pruneRuns(alive map[string]bool, listed func(machine string) bool) {
@@ -175,6 +196,11 @@ func (h *Herdr) pruneRuns(alive map[string]bool, listed func(machine string) boo
 	for p := range h.runs {
 		if _, m := split(p); !alive[p] && listed(m) {
 			delete(h.runs, p)
+		}
+	}
+	for p := range h.forked {
+		if _, m := split(p); !alive[p] && listed(m) {
+			delete(h.forked, p)
 		}
 	}
 	if len(h.runs) != n {
@@ -562,18 +588,71 @@ func streamDialer(open func() (net.Conn, error), kind string) func(ctx context.C
 	}
 }
 
+func codexScreenLocked(screen string) bool {
+	return strings.Contains(screen, "This conversation is open in another app")
+}
+
+// unlockCodexPane clears Codex TUI's "This conversation is open in another app"
+// banner before submitting a prompt. It tries 'r' (retry) first in case the
+// desktop app already released its writer lock, then 'f' (fork) to clone into
+// an interactive continuation thread so messages are never swallowed.
+func (h *Herdr) unlockCodexPane(ctx context.Context, pane string) error {
+	vis, err := h.Read(ctx, pane, "visible", "text", 0)
+	if err != nil || !codexScreenLocked(vis.Text) {
+		return nil
+	}
+	_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"r"}}, nil)
+	for i := 0; i < 4; i++ {
+		time.Sleep(350 * time.Millisecond)
+		if v, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && !codexScreenLocked(v.Text) {
+			return nil
+		}
+	}
+	_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"f"}}, nil)
+	for i := 0; i < 20; i++ {
+		time.Sleep(400 * time.Millisecond)
+		if v, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && !codexScreenLocked(v.Text) {
+			return nil
+		}
+	}
+	return errors.New("这个对话正被电脑上的桌面端独占锁定且自动创建分支未就绪，请稍后再发或先关闭桌面端中的该对话")
+}
+
 // Prompt submits text to an agent. herdr 0.8 refuses agent.prompt while it
 // still marks the agent launch_pending, which can stick for good; once herdr
 // reports the agent idle the terminal is ready, so paste into the pane and
-// press enter instead.
+// press enter instead. Also checks before sending whether Codex TUI is sitting
+// on a read-only lock banner, because herdr 0.9+ reports idle/interactive_ready
+// even when Codex TUI rejects keystrokes as read-only.
 func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
-	err := h.Call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, nil)
-	var he *HerdrError
-	if err == nil || !errors.As(err, &he) || (he.Code != "agent_not_found" && he.Code != "agent_not_ready") {
-		return err
-	}
 	pane := target
 	if !strings.Contains(pane, ":") {
+		pane = h.paneOfName(ctx, target)
+	}
+	if pane != "" {
+		if err := h.unlockCodexPane(ctx, pane); err != nil {
+			return err
+		}
+	}
+	err := h.Call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, nil)
+	if err == nil {
+		// Double-check that Codex TUI didn't reject the submission with a read-only banner.
+		if pane != "" {
+			time.Sleep(180 * time.Millisecond)
+			if vis, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && codexScreenLocked(vis.Text) {
+				if uerr := h.unlockCodexPane(ctx, pane); uerr != nil {
+					return uerr
+				}
+				return h.Call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, nil)
+			}
+		}
+		return nil
+	}
+	var he *HerdrError
+	if !errors.As(err, &he) || (he.Code != "agent_not_found" && he.Code != "agent_not_ready") {
+		return err
+	}
+	if pane == "" {
 		if pane = h.paneOfName(ctx, target); pane == "" {
 			return err
 		}
@@ -598,19 +677,8 @@ func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
 	if h.ScreenAsks(ctx, pane) {
 		return &HerdrError{Code: "agent_blocked", Message: "agent is showing a question"}
 	}
-	if vis, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && strings.Contains(vis.Text, "This conversation is open in another app") {
-		// Automatically press 'f' (Codex TUI shortcut for `fork`) to unlock into an
-		// interactive continuation thread before pasting the user's message.
-		_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"f"}}, nil)
-		for i := 0; i < 15; i++ {
-			time.Sleep(400 * time.Millisecond)
-			if err := h.Call(ctx, "agent.prompt", map[string]any{"target": target, "text": text}, nil); err == nil {
-				return nil
-			}
-			if v2, e2 := h.Read(ctx, pane, "visible", "text", 0); e2 == nil && !strings.Contains(v2.Text, "This conversation is open in another app") {
-				break
-			}
-		}
+	if uerr := h.unlockCodexPane(ctx, pane); uerr != nil {
+		return uerr
 	}
 	// Bracketed paste keeps multi-line text in one message.
 	if e := h.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": "\x1b[200~" + text + "\x1b[201~"}, nil); e != nil {

@@ -1,10 +1,15 @@
 package collie
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -332,6 +337,129 @@ func TestSuperReportBlockedTone(t *testing.T) {
 	}
 	if sp.st.Entries[1].Tone != "done" {
 		t.Fatalf("expected normal report to have tone=done, got %q", sp.st.Entries[1].Tone)
+	}
+}
+
+func TestPromptUnlocksReadOnlyCodexPaneBeforeSubmit(t *testing.T) {
+	lockedScreen := "Worked for 4m 0s\n\n  🔒  This conversation is open in another app   r to retry\n   r retry   f fork\n"
+	unlockedScreen := "• Fork created. You can continue here.\n\n› Ask Codex to do anything\n"
+
+	screen := lockedScreen
+	var keysSent []string
+	var promptsSent []string
+
+	h := newHerdr("", "hub", t.TempDir())
+	h.local.conn = &herdrConn{
+		dial: func(ctx context.Context) (net.Conn, error) {
+			c1, c2 := net.Pipe()
+			go func() {
+				defer c2.Close()
+				r := bufio.NewReader(c2)
+				line, err := r.ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				var req struct {
+					ID     string         `json:"id"`
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				_ = json.Unmarshal(line, &req)
+				var res any = map[string]any{"ok": true}
+				switch req.Method {
+				case "pane.read":
+					res = map[string]any{"read": map[string]any{"text": screen}}
+				case "pane.send_keys":
+					if ks, ok := req.Params["keys"].([]any); ok {
+						for _, k := range ks {
+							if s, ok := k.(string); ok {
+								keysSent = append(keysSent, s)
+								if s == "f" {
+									screen = unlockedScreen
+								}
+							}
+						}
+					}
+				case "agent.prompt":
+					txt, _ := req.Params["text"].(string)
+					promptsSent = append(promptsSent, txt)
+				}
+				b, _ := json.Marshal(map[string]any{"id": req.ID, "result": res})
+				_, _ = c2.Write(append(b, '\n'))
+			}()
+			return c1, nil
+		},
+	}
+
+	if err := h.Prompt(t.Context(), "w7:p1", "检查表 III 数据"); err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	if !slices.Equal(keysSent, []string{"r", "f"}) {
+		t.Fatalf("expected unlock keys [r f] before agent.prompt, got %v", keysSent)
+	}
+	if !slices.Equal(promptsSent, []string{"检查表 III 数据"}) {
+		t.Fatalf("expected prompt sent exactly once after unlock, got %v", promptsSent)
+	}
+}
+
+func TestCodexForkDiscoveryAndRolloutChain(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	dir := t.TempDir()
+	now := time.Now()
+	sessDir := filepath.Join(dir, ".codex", "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cwd := filepath.Join(dir, "SFD-Net 2")
+	cwdJSON, _ := json.Marshal(cwd)
+
+	origID := "01a15378-6cc5-78d0-8d61-b0c7e4f8b367"
+	segID := "01a1fc1f-27ad-7331-ab36-7a9f501316ce"
+	forkID := "01a20149-b855-7b13-b51c-06c45332c3ec"
+
+	segPath := filepath.Join(sessDir, "rollout-2026-11-21T11-21-02-"+origID+"_"+segID+".jsonl")
+	segContent := `{"type":"session_meta","payload":{"id":"` + origID + `","cwd":` + string(cwdJSON) + `}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"补完 CVC-300 直接推理"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已补完 CVC-300 全部 60 张图的直接推理。"}]}}` + "\n"
+	if err := os.WriteFile(segPath, []byte(segContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	forkPath := filepath.Join(sessDir, "rollout-2026-11-22T11-25-38-"+forkID+".jsonl")
+	forkContent := `{"type":"session_meta","payload":{"id":"` + forkID + `","forked_from_id":"` + origID + `","cwd":` + string(cwdJSON) + `,"history_mode":"paginated","history_base":{"thread_id":"` + segID + `"}}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续检查飞书表格"}]}}` + "\n"
+	if err := os.WriteFile(forkPath, []byte(forkContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{herdr: newHerdr("", "hub", dir), home: dir}
+
+	gotForkID, gotForkPath := srv.codexLatestFork(origID, cwd)
+	if gotForkID != forkID || gotForkPath != forkPath {
+		t.Fatalf("expected fork %s at %s, got %s at %s", forkID, forkPath, gotForkID, gotForkPath)
+	}
+
+	chain := srv.codexRolloutChain(forkPath)
+	if len(chain) != 2 || chain[0] != segPath || chain[1] != forkPath {
+		t.Fatalf("expected rollout chain [%s, %s], got %v", segPath, forkPath, chain)
+	}
+
+	agentKind := "codex"
+	tr := srv.transcriptFor("pane:w7:p1", "w7:p1", agentDetail{
+		Agent: &agentKind,
+		Cwd:   &cwd,
+		Session: &struct {
+			Kind  string `json:"kind"`
+			Value string `json:"value"`
+		}{Kind: "id", Value: origID},
+	}, map[string]*transcript{})
+	if tr == nil {
+		t.Fatal("expected non-nil chained transcript")
+	}
+	tr.openTail()
+	msgs := tr.view()
+	if len(msgs) != 3 || msgs[0].Text != "补完 CVC-300 直接推理" || msgs[1].Text != "已补完 CVC-300 全部 60 张图的直接推理。" || msgs[2].Text != "继续检查飞书表格" {
+		t.Fatalf("expected ancestor + forked messages (3 total), got %+v", msgs)
 	}
 }
 

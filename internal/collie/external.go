@@ -45,7 +45,8 @@ type External struct {
 	// desktop app's conversation is listed while it rests too.
 	Live bool `json:"live"`
 	// CanTakeOver: it can be continued in a herdr pane from here.
-	CanTakeOver bool `json:"can_take_over,omitempty"`
+	CanTakeOver bool       `json:"can_take_over,omitempty"`
+	Run         *[2]string `json:"run,omitempty"`
 
 	path, format string
 	reg          *claudeReg
@@ -636,7 +637,7 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	var tr *transcript
 	var ms msgSync
 	if e.path != "" {
-		tr = newTranscript(e.path, e.format)
+		tr = s.newChainedTranscript(e.path, e.format)
 		tr.openTail()
 	}
 	first, beat := true, time.Now()
@@ -681,6 +682,36 @@ func (s *Server) codexThreadWriterLocked(session string) bool {
 	return isFileLockedByOtherProcess(lockPath)
 }
 
+func (s *Server) checkCodexLock(w http.ResponseWriter, r *http.Request) {
+	sess := strings.TrimSpace(r.URL.Query().Get("session"))
+	writeJSON(w, 200, map[string]any{"locked": s.codexThreadWriterLocked(sess)})
+}
+
+func (s *Server) isCodexSessionLockedOn(ctx context.Context, machine, session string) bool {
+	if session == "" {
+		return false
+	}
+	if machine == "" {
+		return s.codexThreadWriterLocked(session)
+	}
+	client, err := s.herdr.Client(machine)
+	if err != nil {
+		return false
+	}
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(qctx, "GET", "http://node/api/codex/lock?session="+url.QueryEscape(session), nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Locked bool `json:"locked"`
+	}
+	return json.NewDecoder(resp.Body).Decode(&body) == nil && body.Locked
+}
+
 // takeOverExternal stops an external agent (if live) and resumes its
 // conversation in a new herdr workspace on the same machine, optionally
 // sending an initial user prompt right away.
@@ -688,9 +719,15 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Prompt string `json:"prompt"`
 		Label  string `json:"label"`
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	}
+	if !modelNameRe.MatchString(body.Model) || !modelNameRe.MatchString(body.Effort) {
+		writeJSON(w, 400, map[string]any{"error": "invalid model or effort"})
+		return
 	}
 	e := s.externalByID(r.PathValue("id"))
 	if e == nil {
@@ -715,6 +752,7 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]any{"error": "暂不支持继续这种类型的会话"})
 		return
 	}
+	args = append(modelArgs(e.Kind, body.Model, body.Effort), args...)
 	if e.Live && !e.CanTakeOver {
 		writeJSON(w, 409, map[string]any{"error": "这个会话正在 " + e.App + " 里执行，请等它当前步骤跑完后再发消息"})
 		return
@@ -750,6 +788,11 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	pane, ws, err := s.startAgent(ctx, "", kinds[e.Kind], name, cwd, label, args)
+	if pane != "" && (body.Model != "" || body.Effort != "") {
+		s.herdr.RememberRun(pane, body.Model, body.Effort)
+	} else if pane != "" && e.Run != nil {
+		s.herdr.RememberRun(pane, e.Run[0], e.Run[1])
+	}
 	var he *HerdrError
 	if err != nil && !(errors.As(err, &he) && he.Code == "agent_not_ready") {
 		fail(w, err)

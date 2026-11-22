@@ -47,7 +47,7 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 		var body []byte
 		var agentProjectID string
 		switch {
-		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec":
+		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec", r.URL.Path == "/api/codex/lock":
 			machine = r.URL.Query().Get("machine")
 		case r.URL.Path == "/api/agents" && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -406,6 +406,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("POST /api/sessions/archive", s.archiveSession)
 	api("POST /api/sessions/delete", s.deleteSession)
 	api("POST /api/sessions/project", s.assignSessionProject)
+	api("POST /api/sessions/model", s.switchSessionModel)
 	api("GET /api/projects", s.listProjects)
 	api("POST /api/projects", s.createProject)
 	api("POST /api/projects/sync", s.syncProjectsHandler)

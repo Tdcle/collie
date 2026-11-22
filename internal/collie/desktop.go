@@ -54,6 +54,7 @@ type desktopRow struct {
 	created, updated    time.Time
 	running             bool // the app says a turn is running (Codex, Antigravity)
 	waiting             bool // stopped, with something still to come (an Antigravity timer)
+	run                 *[2]string
 }
 
 var desktopCache struct {
@@ -102,7 +103,7 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 		if listed[d.session] {
 			continue
 		}
-		e := &External{ID: d.id, Kind: d.kind, Cwd: d.cwd, App: d.app, Started: d.created, Session: d.session, Title: d.title, Updated: d.updated, path: d.path, format: d.format, desktop: true}
+		e := &External{ID: d.id, Kind: d.kind, Cwd: d.cwd, App: d.app, Started: d.created, Session: d.session, Title: d.title, Updated: d.updated, Run: d.run, path: d.path, format: d.format, desktop: true}
 		if e.path != "" {
 			if fi, err := os.Stat(e.path); err == nil && fi.ModTime().After(e.Updated) {
 				e.Updated = fi.ModTime()
@@ -366,6 +367,155 @@ func (s *Server) codexRolloutFromStateDB(session string) string {
 	return ""
 }
 
+func (s *Server) codexThreadRun(session string) *[2]string {
+	if session == "" {
+		return nil
+	}
+	path := s.codexStateDB()
+	if path == "" {
+		return nil
+	}
+	db, err := sql.Open("sqlite", sqliteURI(path, "mode=ro&_pragma=busy_timeout(2000)"))
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+	var model, effort string
+	if db.QueryRow(`SELECT COALESCE(model,''), COALESCE(reasoning_effort,'') FROM threads WHERE id = ? LIMIT 1`, session).Scan(&model, &effort) != nil {
+		return nil
+	}
+	if model == "" && effort == "" {
+		return nil
+	}
+	return &[2]string{model, effort}
+}
+
+// codexLatestFork checks whether an interactive Codex TUI pane forked `session`
+// into a newer child thread on disk (written as `"forked_from_id":"<session>"`
+// on the first line of the rollout file). Returns the newest child session ID
+// and its rollout path when found.
+func (s *Server) codexLatestFork(session, cwd string) (childID, rolloutPath string) {
+	if session == "" || strings.ContainsAny(session, `/\*?[`) {
+		return "", ""
+	}
+	root := s.codexHome()
+	// Check recent session day folders (today and yesterday cover live TUI forks).
+	now := time.Now()
+	needle := `"forked_from_id":"` + session + `"`
+	var bestTime time.Time
+	for _, day := range []time.Time{now, now.Add(-24 * time.Hour)} {
+		dir := filepath.Join(root, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
+		files, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl"))
+		for _, f := range files {
+			fi, err := os.Stat(f)
+			if err != nil || !fi.Mode().IsRegular() || (!bestTime.IsZero() && !fi.ModTime().After(bestTime)) {
+				continue
+			}
+			fp, err := os.Open(f)
+			if err != nil {
+				continue
+			}
+			r := bufio.NewReaderSize(fp, 32<<10)
+			line, _ := r.ReadString('\n')
+			fp.Close()
+			if !strings.Contains(line, needle) {
+				continue
+			}
+			var meta struct {
+				Payload struct {
+					ID  string `json:"id"`
+					Cwd string `json:"cwd"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal([]byte(line), &meta) != nil || meta.Payload.ID == "" || meta.Payload.ID == session {
+				continue
+			}
+			if cwd != "" && meta.Payload.Cwd != "" && !samePath(meta.Payload.Cwd, cwd) {
+				continue
+			}
+			bestTime = fi.ModTime()
+			childID, rolloutPath = meta.Payload.ID, f
+		}
+	}
+	return childID, rolloutPath
+}
+
+// codexRolloutChain walks a Codex rollout file's `forked_from_id` / `history_base`
+// ancestry (up to 8 hops) and returns the ordered list of rollout files from
+// oldest ancestor to `leafPath`, so paginated/forked conversations retain their
+// earlier messages seamlessly.
+func (s *Server) codexRolloutChain(leafPath string) []string {
+	if leafPath == "" || !isFile(leafPath) {
+		return nil
+	}
+	chain := []string{leafPath}
+	seen := map[string]bool{filepath.Clean(leafPath): true}
+	cur := leafPath
+	root := s.codexHome()
+	for hop := 0; hop < 8; hop++ {
+		fp, err := os.Open(cur)
+		if err != nil {
+			break
+		}
+		r := bufio.NewReaderSize(fp, 32<<10)
+		line, _ := r.ReadString('\n')
+		fp.Close()
+		var meta struct {
+			Payload struct {
+				ForkedFromID string `json:"forked_from_id"`
+				HistoryBase  *struct {
+					ThreadID string `json:"thread_id"`
+				} `json:"history_base"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &meta) != nil {
+			break
+		}
+		prevPath := ""
+		if meta.Payload.HistoryBase != nil && meta.Payload.HistoryBase.ThreadID != "" {
+			tid := meta.Payload.HistoryBase.ThreadID
+			if !strings.ContainsAny(tid, `/\*?[`) {
+				if m, _ := filepath.Glob(filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+tid+"*.jsonl")); len(m) > 0 {
+					prevPath = newestRegularFile(m)
+				}
+			}
+		}
+		if prevPath == "" && meta.Payload.ForkedFromID != "" {
+			prevPath, _ = s.findCodexRolloutSingle(meta.Payload.ForkedFromID)
+		}
+		if prevPath == "" || seen[filepath.Clean(prevPath)] || !isFile(prevPath) {
+			break
+		}
+		seen[filepath.Clean(prevPath)] = true
+		chain = append([]string{prevPath}, chain...)
+		cur = prevPath
+	}
+	return chain
+}
+
+func (s *Server) findCodexRolloutSingle(value string) (string, string) {
+	if value == "" || strings.ContainsAny(value, `/\*?[`) {
+		return "", ""
+	}
+	root := s.codexHome()
+	var matches []string
+	for _, pat := range []string{
+		filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+".jsonl"),
+		filepath.Join(root, "sessions", "*", "*", "*", "rollout-*"+value+"_*.jsonl"),
+	} {
+		if m, _ := filepath.Glob(pat); len(m) > 0 {
+			matches = append(matches, m...)
+		}
+	}
+	if best := newestRegularFile(matches); best != "" {
+		return best, "codex"
+	}
+	if dbPath := s.codexRolloutFromStateDB(value); dbPath != "" {
+		return dbPath, "codex"
+	}
+	return "", ""
+}
+
 func (s *Server) codexAppRows() []desktopRow {
 	path := s.codexStateDB()
 	if path == "" {
@@ -377,7 +527,8 @@ func (s *Server) codexAppRows() []desktopRow {
 	}
 	defer db.Close()
 	q := `SELECT id, COALESCE(NULLIF(name,''), NULLIF(title,''), first_user_message), cwd, rollout_path,
-		COALESCE(created_at_ms, created_at*1000), COALESCE(updated_at_ms, updated_at*1000), COALESCE(originator, '')
+		COALESCE(created_at_ms, created_at*1000), COALESCE(updated_at_ms, updated_at*1000), COALESCE(originator, ''),
+		COALESCE(model, ''), COALESCE(reasoning_effort, '')
 		FROM threads WHERE archived = 0 AND source = 'vscode' AND updated_at > ? ORDER BY updated_at DESC LIMIT ?`
 	res, err := db.Query(q, time.Now().Add(-desktopWindow).Unix(), desktopMax)
 	if err != nil {
@@ -386,9 +537,9 @@ func (s *Server) codexAppRows() []desktopRow {
 	defer res.Close()
 	var rows []desktopRow
 	for res.Next() {
-		var id, title, cwd, rollout, originator string
+		var id, title, cwd, rollout, originator, model, effort string
 		var created, updated int64
-		if res.Scan(&id, &title, &cwd, &rollout, &created, &updated, &originator) != nil {
+		if res.Scan(&id, &title, &cwd, &rollout, &created, &updated, &originator, &model, &effort) != nil {
 			continue
 		}
 		if isWindowsPath(cwd) {
@@ -398,7 +549,11 @@ func (s *Server) codexAppRows() []desktopRow {
 			rollout = winClean(rollout)
 		}
 		app := codexClient(originator, cwd)
-		d := desktopRow{id: "cx-" + id, kind: "codex", app: app, session: id, title: messageTitle(title), cwd: cwd, created: time.UnixMilli(created), updated: time.UnixMilli(updated)}
+		var run *[2]string
+		if model != "" || effort != "" {
+			run = &[2]string{model, effort}
+		}
+		d := desktopRow{id: "cx-" + id, kind: "codex", app: app, session: id, title: messageTitle(title), cwd: cwd, created: time.UnixMilli(created), updated: time.UnixMilli(updated), run: run}
 		if isFile(rollout) {
 			d.path, d.format = rollout, "codex"
 			d.running = codexTurnRunning(rollout)
