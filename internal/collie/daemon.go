@@ -202,6 +202,9 @@ func daemonSupervisor(name string, subArgs []string) {
 		if i := strings.Index(low, ".exe.old"); i > 0 {
 			return p[:i+4]
 		}
+		if i := strings.Index(low, ".old.exe"); i > 0 {
+			return p[:i] + ".exe"
+		}
 		return strings.TrimSuffix(p, ".old")
 	}
 	exe = stripOld(exe)
@@ -210,6 +213,14 @@ func daemonSupervisor(name string, subArgs []string) {
 	for !stopping() {
 		// Re-resolve exe on every iteration so selfUpdate's replaced binary is picked up.
 		runExe := exe
+		if !isFile(runExe) {
+			for _, bak := range []string{runExe + ".old", strings.TrimSuffix(runExe, ".exe") + ".old.exe"} {
+				if b, err := os.ReadFile(bak); err == nil && len(b) > 0 {
+					_ = os.WriteFile(runExe, b, 0o755)
+					break
+				}
+			}
+		}
 		lf := openRotatedLog(logFile)
 		start := time.Now()
 		cmd := exec.Command(runExe, append([]string{subcmd}, subArgs...)...)

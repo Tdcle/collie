@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -192,7 +193,26 @@ func downloadRelease(ctx context.Context, tag, exe string) error {
 	asset := releaseAssetFor(runtime.GOOS, runtime.GOARCH)
 	base := "https://github.com/" + releaseRepo() + "/releases/download/" + tag + "/"
 	c := &http.Client{Timeout: 5 * time.Minute}
+	var mirrorBase string
+	var mirrorClient *http.Client
+	if nc, ok := loadNodeConfig(); ok && nc.Hub != "" {
+		mirrorBase = strings.TrimRight(nc.Hub, "/") + "/dl/"
+		mirrorClient = &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		}
+	}
 	get := func(name string) (*http.Response, error) {
+		if mirrorBase != "" {
+			if req, err := http.NewRequestWithContext(ctx, "GET", mirrorBase+name, nil); err == nil {
+				if resp, err := mirrorClient.Do(req); err == nil {
+					if resp.StatusCode == 200 {
+						return resp, nil
+					}
+					resp.Body.Close()
+				}
+			}
+		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", base+name, nil)
 		resp, err := c.Do(req)
 		if err == nil && resp.StatusCode != 200 {

@@ -85,6 +85,7 @@ var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", s.static())
+	mux.HandleFunc("GET /dl/{asset}", s.serveReleaseMirror)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
 
@@ -803,6 +804,26 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------- helpers
 
 func (s *Server) expand(p string) string { return expandIn(s.home, p) }
+
+var mirrorAssetRe = regexp.MustCompile(`^(collie-[a-z0-9-]+(?:\.exe)?|checksums\.txt)$`)
+
+// serveReleaseMirror serves locally cached release binaries from ~/.collie/releases/
+// so China/intranet nodes can pull updates directly from the Hub at LAN/domestic speed.
+func (s *Server) serveReleaseMirror(w http.ResponseWriter, r *http.Request) {
+	asset := r.PathValue("asset")
+	if !mirrorAssetRe.MatchString(asset) {
+		http.NotFound(w, r)
+		return
+	}
+	p := filepath.Join(s.home, ".collie", "releases", asset)
+	if !isFile(p) {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+asset+`"`)
+	http.ServeFile(w, r, p)
+}
 
 func (s *Server) tilde(p string) string { return tildeIn(s.home, p) }
 
