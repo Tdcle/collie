@@ -129,6 +129,12 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 			case s.codexDaemonHas(d.session):
 				e.CanSend = true
 				e.CanTakeOver = canResume
+			case isCodexApp(d.app) && !d.running && s.codexDaemonSock() != "":
+				// The new Codex App (and a closed one) has no ipc.sock; continue
+				// the thread in Codex's shared background daemon when idle, while
+				// still allowing seamless herdr takeover as fallback.
+				e.CanSend, e.via = true, "bg"
+				e.CanTakeOver = canResume
 			default:
 				e.CanTakeOver = canResume
 				_ = winUp
@@ -675,6 +681,10 @@ func (s *Server) codexDaemonHas(thread string) bool {
 	return err == nil && ids[thread]
 }
 
+const appCodexRemote = "Codex App（远程）"
+
+func isCodexApp(app string) bool { return app == appCodex || app == appCodexRemote }
+
 // codexClient names what started a "vscode" thread: the Codex App, or another
 // program driving Codex's app-server.
 func codexClient(originator, cwd string) string {
@@ -687,7 +697,7 @@ func codexClient(originator, cwd string) string {
 	switch originator {
 	case "", "Codex Desktop", "codex_work_desktop":
 		if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-			return "Codex App（远程）" // the App on another computer opened it here over SSH
+			return appCodexRemote // the App on another computer opened it here over SSH
 		}
 		return appCodex
 	case "codex-tui":

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestResumeFrom(t *testing.T) {
@@ -75,14 +76,14 @@ func TestAgentStopLine(t *testing.T) {
 func TestDreamSkills(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "d.md")
 	os.WriteFile(p, []byte("归档了两个任务。\n可做成 skill：Dorado 只读查表、Spark 草稿读 HDFS。\n\n# 记录\n"), 0o600)
-	if got := dreamSkills(p); got != "Dorado 只读查表、Spark 草稿读 HDFS" {
+	if got := dreamLine(p, dreamSkillsPrefix); got != "Dorado 只读查表、Spark 草稿读 HDFS" {
 		t.Errorf("skills: %q", got)
 	}
 	if got := dreamSummary(p); got != "归档了两个任务。" {
 		t.Errorf("summary: %q", got)
 	}
 	os.WriteFile(p, []byte("归档了两个任务。\n"), 0o600)
-	if dreamSkills(p) != "" {
+	if dreamLine(p, dreamSkillsPrefix) != "" {
 		t.Error("no line, no skills")
 	}
 }
@@ -112,5 +113,50 @@ func TestSessionID(t *testing.T) {
 	}
 	if got := sessionID("path", "/tmp/x.jsonl"); got != "" {
 		t.Errorf("no id: %q", got)
+	}
+}
+
+func TestFollow(t *testing.T) {
+	soon, later := time.Now().Add(time.Hour), time.Now().Add(20*time.Hour)
+	sp := &Super{st: &State{Timers: []*Timer{
+		{Spec: "weekdays 10:00", Text: "飞书 todo 例行", NextRun: soon.Add(-30 * time.Minute), Enabled: true, Owner: "collie"},
+		{Spec: "at 2026-11-22 09:00", Text: "复查 paper_df\n细节", NextRun: later, Enabled: true, Owner: "collie"},
+		{Spec: "in 30m", Text: "看一眼进度", NextRun: soon, Enabled: false, Owner: "collie"},
+	}}}
+	f := sp.followLocked()
+	if f == nil || f.NextText != "复查 paper_df" || !f.Next.Equal(later) {
+		t.Fatalf("got %+v", f)
+	}
+	sp.st.Timers = sp.st.Timers[:1]
+	if sp.followLocked() != nil {
+		t.Error("a routine is not a follow-up")
+	}
+}
+
+func TestProgressHash(t *testing.T) {
+	a := progressHash("⏺ Bash(collie show t12)\n✻ Thinking… (3m 21s · ↓ 1.2k tokens · esc to interrupt)\n> ")
+	b := progressHash("⏺ Bash(collie show t12)\n✶ Pondering… (4m 02s · ↓ 1.2k tokens · esc to interrupt)\n> ")
+	if a != b {
+		t.Error("the spinner line alone moving is not progress")
+	}
+	if c := progressHash("⏺ Bash(collie show t12)\n⏺ Read(memory/notes/index.md)\n> "); c == a {
+		t.Error("a new step is progress")
+	}
+	if progressHash("Working (12s • esc to interrupt)\nran 3 tests") != progressHash("Working (95s • esc to interrupt)\nran 3 tests") {
+		t.Error("codex's timer is not progress")
+	}
+}
+
+func TestDreamFixLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "j.md")
+	os.WriteFile(p, []byte("精简了指令。\n可改进 skill：feishu-todo（漏读话题回复）\n\n- 细节\n"), 0o600)
+	if got := dreamLine(p, dreamFixPrefix); got != "feishu-todo（漏读话题回复）" {
+		t.Errorf("fix line: %q", got)
+	}
+	if dreamLine(p, dreamSkillsPrefix) != "" || dreamSummary(p) != "精简了指令。" {
+		t.Error("the fix line is neither a new skill nor the summary")
+	}
+	if journalName(time.Date(2026, 11, 21, 18, 32, 0, 0, time.Local)) != "2026-11-21-1832" {
+		t.Error("journal name")
 	}
 }

@@ -50,6 +50,7 @@
   const sup = () => ({
     router: { alive: true, status: routerStatus, pane_id: "w1:p1", kind: "claude", context: 23, rotate_at: 70, model: "sonnet" },
     entries, workers, queued: 0, queued_router: 0, paused: false, earlier: true,
+    follow: { next: later(16), next_text: "看一下 fix-flaky-test 跑完没有" },
   });
   let routerStatus = "idle";
 
@@ -157,7 +158,7 @@
   ];
   const memFile = (name, text, min) => ({ name, text, size: text.length * 2, mod: ago(min) });
   const memory = {
-    dir: "~/.collie", loaded: 5200, budget: 12000, dreaming: false, last_dream: ago(60 * 9), next_dream: later(60 * 15), dreams: [
+    dir: "~/.collie", loaded: 5200, budget: 8192, dreaming: false, last_dream: ago(60 * 9), next_dream: later(60 * 15), dreams: [
       { name: "2026-11-18.md", text: "从 fix-flaky-test 里记下了分页测试的坑，写进 shop-api.md；合并了两条重复的笔记\n\n- shop-api.md：同一秒内的订单按 created_at 排序不稳定，要加 id 兜底\n- agents.md：Codex 在 devbox 上跑 shop-api 的测试更稳\n- 你更喜欢先在 devbox 上跑测试，再在 Mac 上看界面（inferred）" },
     ],
     files: [
@@ -364,10 +365,10 @@
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.33", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
-        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.33", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.34", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.34", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.33", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.33",
+      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.34", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.34",
     });
     if (p === "/api/pair/new") return json({ code: "DEMO2026", expires: new Date(Date.now() + 600000).toISOString(), kind: body.kind });
     if ((m = /^\/api\/panes\/([^/]+)\/ask$/.exec(p))) { const id = decodeURIComponent(m[1]); return json(approvals[id] && agents.find((a) => a.pane_id === id)?.status === "blocked" ? { asking: true, approval: approvals[id] } : { asking: false }); }

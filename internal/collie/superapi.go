@@ -62,6 +62,8 @@ type routerView struct {
 	RotateAt int  `json:"rotate_at"`
 	Handover bool `json:"handover,omitempty"`
 	Dreaming bool `json:"dreaming,omitempty"`
+	// It has already replied this turn, and is only wrapping up (memory…).
+	Replied bool `json:"replied,omitempty"`
 	// The model and effort it runs with ("" = the agent's own default), and
 	// whether the settings have changed since it started.
 	Model   string `json:"model,omitempty"`
@@ -78,6 +80,13 @@ type superView struct {
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
 	QueuedRouter int  `json:"queued_router"`
 	Paused       bool `json:"paused"`
+	// Follow: the next time Collie set itself to look at something again.
+	Follow *followView `json:"follow,omitempty"`
+}
+
+type followView struct {
+	Next     time.Time `json:"next"`
+	NextText string    `json:"next_text"` // what it will look at then
 }
 
 func (s *Server) superState(ctx context.Context) superView {
@@ -89,6 +98,14 @@ func (s *Server) superState(ctx context.Context) superView {
 	if a, ok := live[routerName]; ok {
 		_, rm := split(a.Pane)
 		v.Router = routerView{Alive: true, Status: a.Status, PaneID: a.Pane, Kind: a.Kind, Machine: rm}
+		if asked := sp.routerAskedAt; a.Status == "working" && !asked.IsZero() {
+			for i := len(sp.st.Entries) - 1; i >= 0 && !sp.st.Entries[i].At.Before(asked); i-- {
+				if r := sp.st.Entries[i].Role; r == "collie" || r == "user" {
+					v.Router.Replied = r == "collie" // unless the human has said more since
+					break
+				}
+			}
+		}
 	} else if sp.routerLaunching {
 		v.Router.Status = "starting"
 	}
@@ -120,6 +137,7 @@ func (s *Server) superState(ctx context.Context) superView {
 		}
 	}
 	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
+	v.Follow = sp.followLocked()
 	for _, t := range sp.st.Triggers {
 		if t.Status == "queued" {
 			v.Queued++

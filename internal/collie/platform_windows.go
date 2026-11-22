@@ -305,6 +305,9 @@ func cwdOf(pids []int) map[int]string {
 }
 
 func findAgyServer() *agyServer {
+	if ls := findAgyHub(); ls != nil {
+		return ls
+	}
 	entries, err := snapshotWinProcs()
 	if err != nil {
 		return nil

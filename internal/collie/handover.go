@@ -15,7 +15,14 @@ import (
 // starts it again in a fresh session that begins by reading it. The
 // old session stays readable under "最近结束".
 
-const memoryBudget = 6 << 10 // what a session reads up front from memory/, in bytes
+// What a session reads up front from memory/. upFrontBudget covers the files
+// Collie writes (instructions, notes/index.md, open tasks) and is the number
+// every prompt names; memoryBudget adds messages.md, which the hub writes, for
+// the memory page.
+const (
+	upFrontBudget = 6 << 10
+	memoryBudget  = upFrontBudget + 2<<10
+)
 
 type handover struct {
 	at      time.Time
@@ -128,7 +135,7 @@ func (sp *Super) checkHandover(ctx context.Context, live map[string]liveAgent, q
 - tasks/: one file per piece of open work, saying where it stands and the next step. Move finished ones to tasks/done/.
 - notes/: what you learned that will matter later; keep notes/index.md in step.
 Keep the up-front files (instructions, notes/index.md, open tasks) under ~%d KB together.%s
-Don't message the human and don't start agents. Just edit the files, then stop.`, u.Pct(), memoryBudget/1024, func() string {
+This turn is for the files alone: edit them, then stop. Your next session handles the human and the workers.`, u.Pct(), upFrontBudget/1024, func() string {
 		if sp.legacyMemory() {
 			return "\n" + migrateNote
 		}

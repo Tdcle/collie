@@ -576,6 +576,11 @@
     renderSide();
   });
 
+  function whenShort(at) {
+    const d = new Date(at), hm = d.toTimeString().slice(0, 5);
+    const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+    return days === 0 ? hm : days === 1 ? "明天 " + hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  }
   function renderSide() {
     const allMachines = (state.machines || [{ id: "", name: "本机", local: true, online: state.ok }]);
     const workMachines = allMachines.filter((m) => !isAgentlessHub(m));
@@ -649,7 +654,10 @@
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
     const running = active.filter(workerBusy).length;
-    $("#nav-collie-sub").textContent = collieStatus(r.status) + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : "");
+    const f = sup.follow;
+    const stText = r.replied ? "在收尾" : collieStatus(r.status);
+    $("#nav-collie-sub").textContent = stText + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : f?.next ? ` · ${whenShort(f.next)} 跟进` : "");
+    $("#nav-collie-sub").title = f?.next ? `Collie 计划下次跟进：${whenShort(f.next)} · ${f.next_text || ""}` : "";
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;
@@ -815,9 +823,21 @@
       whereEl.hidden = whereSep.hidden = !showWhere;
     }
     const st = $("#router-status");
+    const showLive = !r.replied && (r.status === "working" || r.status === "starting" || r.status === "dreaming" || pendingSays.length > 0);
     st.className = "status " + collieDot(r.status);
-    st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(collieStatus(r.status))}`;
+    st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`;
+    st.hidden = showLive && Boolean(sup.entries.length || pendingSays.length);
     $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
+    const fl = $("#router-follow");
+    if (fl) {
+      if (sup.follow?.next) {
+        fl.hidden = false;
+        fl.textContent = `${whenShort(sup.follow.next)} 再看：${sup.follow.next_text || ""}`;
+        fl.title = `Collie 设的下一次跟进（点击查看定时任务）：${sup.follow.next_text || ""}`;
+      } else {
+        fl.hidden = true;
+      }
+    }
     const cx = $("#router-ctx");
     if (r.handover) {
       cx.textContent = "正在交接记忆…";
@@ -916,8 +936,8 @@
           }
         }
       }
-      if (r.status === "working" || r.status === "starting" || r.status === "dreaming" || pendingSays.length) {
-        const liveLabel = r.status === "starting" ? "正在唤醒 Collie…" : r.status === "dreaming" ? "Collie 正在整理记忆…" : "Collie 正在思考与编排…";
+      if (!r.replied && (r.status === "working" || r.status === "starting" || r.status === "dreaming" || pendingSays.length)) {
+        const liveLabel = r.status === "starting" ? "正在唤醒 Collie…" : r.status === "dreaming" ? "Collie 正在整理记忆，完成后自动醒来…" : "Collie 正在思考与编排…";
         const dotSt = collieDot(r.status === "idle" && pendingSays.length ? "working" : r.status);
         html += `<div class="collie-live"><span class="avatar"><img src="/icon.svg" alt=""></span><div class="collie-live-pill"><span class="dot ${esc(dotSt)}"></span><span>${liveLabel}</span></div></div>`;
       }
@@ -1728,7 +1748,7 @@
       return `${statusBento}
         ${r.dreams?.length ? `<h4 class="mem-h">做梦整理日记<span class="muted">每晚自动回顾对话、去重合并记忆的记录</span></h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : `<h4 class="mem-h">做梦整理日记<span class="muted">每晚自动回顾对话、去重合并记忆的记录</span></h4><div class="card"><div class="empty-state"><span class="es-ico"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></span><b>还没有做梦整理记录</b><span>当天有新对话时，Collie 会在凌晨自动回顾对话并精简长期记忆，也可点击上方「立即整理记忆」手动触发。</span></div></div>`}
         ${group("已结项任务归档", "已完成或中止的历史任务记录", done, { always: true, empty: "暂无已归档任务", emptySub: "跨轮跟进的任务在结项后会自动移入此处留档备查。", card: (f) => ({ label: f.name.replace(/^tasks\/done\//, ""), crew: true }) })}
-        ${group("最近回复摘录", "Hub 自动维护，防止跨会话重复汇报", msgs, { card: { edit: false, label: "messages.md" } })}`;
+        ${group("最近回复摘录", "Hub 自动记录最近 10 条，新会话每次必读，避免重复汇报", msgs, { card: { edit: false, label: "messages.md" } })}`;
     }
     return `${statusBento}
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
@@ -2687,8 +2707,8 @@
         if (r.note) toast(r.note, "attn");
         return;
       } catch (err) {
-        if (e.live || !e.session) throw err;
-        // Desktop IPC wasn't holding this thread: seamlessly resume via CLI below!
+        if (e.live || !e.session || /正在桌面端/.test(err.message || "")) throw err;
+        // Desktop IPC / shared daemon wasn't holding this thread: seamlessly resume via CLI below!
       }
     }
     toast("正在连接会话并发送…");
@@ -2700,8 +2720,12 @@
     location.hash = "#/p/" + encodeURIComponent(r.pane_id);
   }, () => {
     if (!extCur) return "";
-    if (extCur.startsWith("h:")) return hist.find((h) => h.id === extCur.slice(2))?.machine || "";
-    return ext.find((e) => e.id === extCur)?.machine || "";
+    if (extCur.startsWith("h:")) {
+      const h = hist.find((x) => x.id === extCur.slice(2));
+      return h?.hub ? tagged(h.machine || "", h.hub) : h?.machine || "";
+    }
+    const e = ext.find((x) => x.id === extCur);
+    return e?.hub ? tagged(e.machine || "", e.hub) : e?.machine || "";
   });
   function closeExt() { extStream?.close(); extStream = null; }
   async function openExt(id) {
@@ -3715,17 +3739,33 @@
       return `\u0000${blocks.length - 1}\u0000`;
     });
     text = esc(text);
-    const inline = (s) => s
-      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-      // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
-      .replace(/\[([^\]\n]+)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
-        p = p.replace(/:\d+(?:[-:]\d+)?$/, "");
-        try { p = decodeURI(p); } catch {}
-        return `<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`;
-      })
-      .replace(FILE_RE, '$1<a class="fpath" href="#" data-path="$2" title="打开这个文件">$2</a>');
+    const URL_RE = /(?<![="'>\w\/])https?:\/\/[^\s<>"，。；：、！？）」』】（「『【]+/g;
+    const urlLabel = (u) => {
+      const raw = u.replace(/&amp;/g, "&").replace(/^https?:\/\//, "").replace(/\/$/, "");
+      return esc(raw.length > 42 ? raw.slice(0, 40) + "…" : raw);
+    };
+    const inline = (s) => {
+      const spans = [];
+      const hold = (h) => `\u0001${spans.push(h) - 1}\u0001`;
+      return s
+        .replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`))
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, (_, l, u) => hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
+        // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
+        .replace(/\[([^\]\n]+)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+)(?:#[^)\s"]*)?\)/g, (_, label, p) => {
+          p = p.replace(/:\d+(?:[-:]\d+)?$/, "");
+          try { p = decodeURI(p); } catch {}
+          return hold(`<a class="fpath" href="#" data-path="${p}" title="${p}">${label}</a>`);
+        })
+        .replace(FILE_RE, (_, pre, p) => pre + hold(`<a class="fpath" href="#" data-path="${p}" title="打开这个文件">${p}</a>`))
+        .replace(URL_RE, (u) => {
+          let tail = u.match(/(?:&quot;|&#39;|[.,;:!?'\]]+)+$/)?.[0] || "";
+          u = u.slice(0, u.length - tail.length);
+          if (u.endsWith(")") && !u.includes("(")) { u = u.slice(0, -1); tail = ")" + tail; }
+          return `<a class="url" href="${u}" target="_blank" rel="noopener noreferrer" title="${u}">${urlLabel(u)}</a>${tail}`;
+        })
+        .replace(/\u0001(\d+)\u0001/g, (_, i) => spans[+i]);
+    };
     const out = [];
     let list = null, para = [];
     const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };

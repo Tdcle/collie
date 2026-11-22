@@ -28,8 +28,8 @@ const memoryLayout = `memory/
   tasks/<slug>.md   one file per piece of open work: goal, thread id, agents on it,
                     what's done, what's left, next step. Read every session.
   tasks/done/       finished or abandoned tasks, moved here with a last line on how they ended.
-  messages.md       written by the hub: what you recently told the human. Read every
-                    session so you don't repeat yourself; don't edit it.
+  messages.md       what you recently told the human, kept up to date by the hub. Read
+                    every session, to build on what you already said.
 Store only what can't be looked up again: pointers (paths, thread ids, URLs), not copies.`
 
 func (sp *Super) memDir() string { return filepath.Join(sp.routerDir(), "memory") }
@@ -54,14 +54,18 @@ func (sp *Super) ensureMemory() {
 	sp.writeMessages()
 }
 
+// recentMessages is how many of Collie's replies messages.md keeps: enough
+// not to repeat itself after a restart; older ones are in the chat history.
+const recentMessages = 10
+
 // writeMessages records Collie's recent replies to the human.
 func (sp *Super) writeMessages() {
 	sp.mu.Lock()
 	var lines []string
-	for i := len(sp.st.Entries) - 1; i >= 0 && len(lines) < 30; i-- {
+	for i := len(sp.st.Entries) - 1; i >= 0 && len(lines) < recentMessages; i-- {
 		e := sp.st.Entries[i]
 		if e.Role == "collie" {
-			lines = append(lines, fmt.Sprintf("- %s [%s] %s", e.At.Format("01-02 15:04"), e.Thread, clip(oneLine(e.Text), 400)))
+			lines = append(lines, fmt.Sprintf("- %s [%s] %s", e.At.Format("01-02 15:04"), e.Thread, clip(oneLine(e.Text), 240)))
 		}
 	}
 	sp.mu.Unlock()
@@ -94,10 +98,20 @@ func (sp *Super) loadedSize() int64 {
 	dir := sp.memDir()
 	add(filepath.Join(dir, "instructions.md"))
 	add(filepath.Join(dir, "notes", "index.md"))
+	add(filepath.Join(dir, "messages.md"))
 	for _, t := range sp.openTasks() {
 		add(filepath.Join(dir, "tasks", t))
 	}
 	add(filepath.Join(sp.routerDir(), "memory.md")) // the old single file, until migrated
+	return n
+}
+
+// upFrontSize is the part of loadedSize that Collie writes: all of it but messages.md.
+func (sp *Super) upFrontSize() int64 {
+	n := sp.loadedSize()
+	if fi, err := os.Stat(filepath.Join(sp.memDir(), "messages.md")); err == nil {
+		n -= fi.Size()
+	}
 	return n
 }
 
@@ -119,8 +133,8 @@ func (sp *Super) sessionStart() string {
 	b.WriteString(". Then handle the events below.\n")
 	if sp.legacyMemory() {
 		b.WriteString("Also read memory.md. " + migrateNote + " Do that once these events are handled.\n")
-	} else if n := sp.loadedSize(); n > memoryBudget*2 {
-		fmt.Fprintf(&b, "What you read up front is %d KB, too much for every session: once these events are handled, trim it to ~%d KB (move detail into notes/, finished work into tasks/done/).\n", n/1024, memoryBudget/1024)
+	} else if n := sp.upFrontSize(); n > upFrontBudget*2 {
+		fmt.Fprintf(&b, "The up-front files (instructions, notes/index.md, open tasks) are %d KB, a lot for every session: once these events are handled, bring them to ~%d KB (detail into notes/, finished work into tasks/done/).\n", n/1024, upFrontBudget/1024)
 	}
 	return b.String()
 }

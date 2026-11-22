@@ -120,6 +120,10 @@ func cwdOf(pids []int) map[int]string {
 }
 
 func findAgyServer() *agyServer {
+	if ls := findAgyHub(); ls != nil {
+		return ls
+	}
+	// Before 2.34 the token was on the server's command line.
 	out, err := exec.Command("ps", "-axww", "-o", "pid=,command=").Output()
 	if err != nil {
 		return nil

@@ -49,7 +49,8 @@ func (s *Server) superMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	dreams := []*memFile{}
 	if m, _ := filepath.Glob(filepath.Join(dir, "dreams", "*.md")); len(m) > 0 {
-		sort.Sort(sort.Reverse(sort.StringSlice(m)))
+		// Newest first: "2026-11-21-1840" after "2026-11-21", so compare without ".md".
+		sort.Slice(m, func(i, j int) bool { return strings.TrimSuffix(m[i], ".md") > strings.TrimSuffix(m[j], ".md") })
 		if len(m) > 30 {
 			m = m[:30]
 		}

@@ -618,6 +618,10 @@ kbd {
   margin: 0 0 .8em; padding: 2px 0 2px 13px;
   border-left: 2.5px solid var(--signal); color: var(--fg-2);
 }
+a.url { text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; word-break: break-all; }
+a.url:hover { text-decoration-color: currentColor; }
+#router-follow { text-decoration: none; border-radius: 6px; padding: 2px 6px; margin: -2px -6px; transition: color .12s, background .12s; }
+#router-follow:hover { color: var(--fg); background: var(--bg-2); }
 
 /* Message timestamps & hover actions */
 #v-collie .msg[data-time] { position: relative; }

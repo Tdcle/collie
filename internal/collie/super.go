@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Super is Collie's super-agent: one resident Router session (the herdr agent
@@ -45,6 +46,7 @@ type Super struct {
 	routerFresh     bool
 	routerAskedAt   time.Time // last delivery to the router not yet followed by a reply or check
 	routerRetries   int       // turns in a row that ended on an API error, each retried
+	routerNudged    bool      // the watchdog interrupted this turn once already
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun   *[2]string
@@ -562,9 +564,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 				_, _ = sp.pushRouterToNode(ctx, m)
 			}
 		}
-		fmt.Fprintf(&b, "\nReply to the human only via `collie reply` (usually ≤%d characters; longer only when they ask for detail; add --re <event id> when it answers something other than their latest message). Delegate work with `collie spawn`; never do task work yourself.", words)
-	} else {
-		b.WriteString("\nWork it through on your own: retry, try another approach. If you truly can't go on (a decision only the human can make, access you don't have, the same failure after a few different tries), don't spin or wait silently, and don't ask the human: run `collie report \"BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>\"` and Collie will decide or ask them. When done, run `collie report \"…\"` with the result.")
+		fmt.Fprintf(&b, "\nReply with `collie reply`, usually ≤%d characters.", words)
 	}
 
 	err := sp.s.herdr.Prompt(ctx, target, b.String())
@@ -945,6 +945,20 @@ func (sp *Super) routerDocChanged(dir string, doc []byte) {
 	sp.rereadTrig = sp.ingestLocked("system", mainThread, "collie", "ROUTER.md changed (a new Collie build or new settings). Re-read it now and work by it from here on. Nothing to tell the human.", "", "", "")
 }
 
+// followLocked is the soonest one-off timer Collie set itself ("in 30m",
+// "at …"): a follow-up. Routines like a weekday check are not one.
+func (sp *Super) followLocked() *followView {
+	var f *followView
+	for _, t := range sp.st.Timers {
+		if t.Enabled && t.Owner != "you" && (strings.HasPrefix(t.Spec, "in ") || strings.HasPrefix(t.Spec, "at ")) && t.NextRun.After(time.Now()) {
+			if f == nil || t.NextRun.Before(f.Next) {
+				f = &followView{Next: t.NextRun, NextText: clip(firstLine(t.Text), 80)}
+			}
+		}
+	}
+	return f
+}
+
 // routerReadsFresh: a new session is starting and reads ROUTER.md as it is.
 func (sp *Super) routerReadsFresh() {
 	dir := sp.routerDir()
@@ -1006,7 +1020,7 @@ func (sp *Super) writeRouterFilesFor(m *Machine) error {
 	rbin := sp.routerBinOn(m)
 	rdirOn := sp.routerDirOn(m)
 	layout := "   " + strings.ReplaceAll(memoryLayout, "\n", "\n   ")
-	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", shellBin(rbin), "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd).Replace(routerDoc)
+	doc := strings.NewReplacer("{{LAYOUT}}", layout, "{{BIN}}", shellBin(rbin), "{{WORDS}}", fmt.Sprint(words), "{{WKIND}}", wkind, "{{WCWD}}", wcwd, "{{BUDGET}}", fmt.Sprint(upFrontBudget>>10)).Replace(routerDoc)
 	for _, name := range []string{"ROUTER.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(doc), 0o600); err != nil {
 			return err
@@ -1240,10 +1254,10 @@ func workerBrief(bin string, w *Worker) string {
 
 %s
 
-Rules:
-- Work autonomously in this directory; you never talk to humans directly.
-- When you finish, or need a decision only a human can make, run:
-    %s report "<≤100 words: outcome, what changed, where; or the exact question>"
+How this works:
+- Collie relays between you and the human, through %s report "…".
+- When the task is done, report the outcome: what you found or changed, and where the details are.
+- When you need what only the human can give (a decision, access), or the same failure keeps coming back after a few different approaches, report "BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>". Collie decides or asks them, and tells you.
 - Follow-ups for your thread arrive as messages starting with [collie].`, w.Name, w.Thread, strings.TrimSpace(w.Task), shellBin(bin))
 }
 
@@ -1299,19 +1313,105 @@ func (sp *Super) watchdog(ctx context.Context, live map[string]liveAgent, router
 		if err != nil {
 			continue
 		}
-		h := fmt.Sprintf("%x", sha1.Sum([]byte(res.Text)))
+		h := progressHash(res.Text)
+		sp.mu.Lock()
 		m := sp.lastScreen[w.Name]
 		if m.hash != h {
 			sp.lastScreen[w.Name] = screenMark{hash: h, since: time.Now()}
+			sp.mu.Unlock()
 			continue
 		}
-		if !m.flag && stall > 0 && time.Since(m.since) > stall {
+		fire := !m.flag && stall > 0 && time.Since(m.since) > stall
+		if fire {
 			m.flag = true
 			sp.lastScreen[w.Name] = m
+		}
+		sp.mu.Unlock()
+		if fire {
 			sp.Ingest("system", w.Thread, "watchdog",
 				fmt.Sprintf("watchdog: worker %s has shown no visible progress for %d min while 'working'. Inspect with `collie show %s`; send guidance, stop it, or tell the human.", w.Name, int(stall.Minutes()), w.Name), "", "", w.Name)
 		}
 	}
+	sp.watchRouter(ctx, live, stall)
+}
+
+// watchRouter catches Collie itself hanging mid-turn (a stream that never
+// ends, a tool that never returns): nothing but the timer moves on its screen.
+// The first time it interrupts and tells Collie to carry on; if that turn
+// hangs again, it tells the human instead of looping.
+func (sp *Super) watchRouter(ctx context.Context, live map[string]liveAgent, stall time.Duration) {
+	a, ok := live[routerName]
+	if !ok || stall <= 0 || a.Status != "working" {
+		sp.mu.Lock()
+		delete(sp.lastScreen, routerName)
+		if ok && (a.Status == "done" || a.Status == "idle") {
+			sp.routerNudged = false
+		}
+		sp.mu.Unlock()
+		return
+	}
+	res, err := sp.s.herdr.Read(ctx, a.Pane, "detection", "text", 0)
+	if err != nil {
+		return
+	}
+	h := progressHash(res.Text)
+	sp.mu.Lock()
+	m := sp.lastScreen[routerName]
+	if m.hash != h {
+		sp.lastScreen[routerName] = screenMark{hash: h, since: time.Now()}
+		sp.mu.Unlock()
+		return
+	}
+	if m.flag || time.Since(m.since) < stall {
+		sp.mu.Unlock()
+		return
+	}
+	m.flag = true
+	sp.lastScreen[routerName] = m
+	mins := int(time.Since(m.since).Minutes())
+	if sp.routerNudged {
+		sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 连续卡住（%d 分钟没有响应，自动打断重试后仍未恢复）；可在顶部点击大脑配置切换模型/Agent，或在「设置」中重启 Collie", mins), routerName, "error")
+		sp.mu.Unlock()
+		return
+	}
+	sp.routerNudged = true
+	sp.addEntryLocked("event", mainThread, fmt.Sprintf("Collie 卡住了 %d 分钟没有动静，已自动打断让它继续", mins), "", "info")
+	sp.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": a.Pane, "keys": []string{"esc"}}, nil)
+		time.Sleep(2 * time.Second)
+		if err := sp.s.herdr.Prompt(ctx, routerName, fmt.Sprintf("%s: nothing on your screen changed for %d min, so Collie interrupted it. Carry on with what you were doing; the events you had are still yours to handle. A command that hangs is a job for a worker: hand it over.", routerRetryMark, mins)); err != nil {
+			log.Printf("router nudge: %v", err)
+			return
+		}
+		sp.mu.Lock()
+		if sp.routerAskedAt.IsZero() {
+			sp.routerAskedAt = time.Now()
+		}
+		sp.mu.Unlock()
+	}()
+}
+
+// progressHash fingerprints a pane's screen for the watchdog, leaving out what
+// moves on its own while an agent waits: the spinner line ("✻ Thinking… (3m
+// 21s · esc to interrupt)", "Working (12s • esc to interrupt)") and numbers.
+func progressHash(screen string) string {
+	var b strings.Builder
+	for _, l := range strings.Split(screen, "\n") {
+		if strings.Contains(strings.ToLower(l), "esc to interrupt") || strings.Contains(strings.ToLower(l), "esc to cancel") {
+			continue
+		}
+		b.WriteString(strings.Map(func(r rune) rune {
+			if unicode.IsDigit(r) {
+				return -1
+			}
+			return r
+		}, l))
+		b.WriteByte('\n')
+	}
+	return fmt.Sprintf("%x", sha1.Sum([]byte(b.String())))
 }
 
 // ---------------------------------------------------------------- outbox
