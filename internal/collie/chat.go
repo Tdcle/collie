@@ -38,8 +38,9 @@ type transcript struct {
 	offset    int64
 	msgs      []*Message
 	tools     map[string]*Message
-	pending   []*Message // agy: tool calls waiting for their output, in order
-	lastID    string
+	pending     []*Message // agy: tool calls waiting for their output, in order
+	pendingImgs []string   // codex: tool-generated images attached after the turn's reply if not linked there
+	lastID      string
 	dropped   int   // messages trimmed off the front, so positions stay stable
 	partial   bool  // offset may be mid-line: skip to the next line first
 	began     int64 // where reading started (0: the top of the log)
@@ -245,8 +246,12 @@ func earlierMessages(path, format string, before int64, want int) ([]*Message, i
 		}
 		t.limit = end
 		t.update()
+		all := t.msgs
+		if len(t.pendingImgs) > 0 {
+			all = append(append([]*Message(nil), t.msgs...), &Message{Kind: "assistant", Text: strings.Join(t.pendingImgs, "\n"), at: t.lineAt})
+		}
 		var keep []*Message
-		for _, m := range t.msgs {
+		for _, m := range all {
 			if m.at < before {
 				keep = append(keep, m)
 			}
@@ -280,20 +285,26 @@ func (t *transcript) line(line []byte) bool {
 }
 
 func (t *transcript) view() []*Message {
-	if len(t.prefix) == 0 {
-		if len(t.msgs) > maxMessages {
-			return t.msgs[len(t.msgs)-maxMessages:]
-		}
-		return t.msgs
+	msgs := t.msgs
+	if len(t.pendingImgs) > 0 {
+		msgs = append(append([]*Message(nil), t.msgs...), &Message{Kind: "assistant", Text: strings.Join(t.pendingImgs, "\n"), at: t.lineAt})
 	}
-	all := make([]*Message, 0, len(t.prefix)+len(t.msgs))
+	if len(t.prefix) == 0 {
+		if len(msgs) > maxMessages {
+			return msgs[len(msgs)-maxMessages:]
+		}
+		return msgs
+	}
+	all := make([]*Message, 0, len(t.prefix)+len(msgs))
 	all = append(all, t.prefix...)
-	all = append(all, t.msgs...)
+	all = append(all, msgs...)
 	if len(all) > maxMessages {
 		return all[len(all)-maxMessages:]
 	}
 	return all
 }
+
+var msgImageRefRe = regexp.MustCompile(`(?i)\.(?:png|jpe?g|gif|webp|svg|bmp)\b`)
 
 // noise filters harness-injected text that isn't part of the human conversation.
 func noise(s string) bool {
@@ -600,7 +611,19 @@ func (t *transcript) codexLine(line []byte) bool {
 		if len(parts) == 0 {
 			return false
 		}
-		t.add(&Message{Kind: p.Role, Text: strings.Join(parts, "\n\n")})
+		joined := strings.Join(parts, "\n\n")
+		if p.Role == "user" && len(t.pendingImgs) > 0 {
+			t.add(&Message{Kind: "assistant", Text: strings.Join(t.pendingImgs, "\n")})
+			t.pendingImgs = nil
+		} else if p.Role == "assistant" && len(t.pendingImgs) > 0 {
+			if strings.Contains(joined, "[image:") || msgImageRefRe.MatchString(joined) {
+				t.pendingImgs = nil
+			} else {
+				joined += "\n\n" + strings.Join(t.pendingImgs, "\n")
+				t.pendingImgs = nil
+			}
+		}
+		t.add(&Message{Kind: p.Role, Text: joined})
 		return true
 	case "image_generation_call":
 		var ig struct {
@@ -616,7 +639,7 @@ func (t *transcript) codexLine(line []byte) bool {
 				tok = imageToken(imageSource{Type: "base64", MediaType: "image/png", Data: ig.Result})
 			}
 			if strings.HasPrefix(tok, "[image:") {
-				t.add(&Message{Kind: "assistant", Text: tok})
+				t.pendingImgs = append(t.pendingImgs, tok)
 				return true
 			}
 		}
@@ -643,7 +666,7 @@ func (t *transcript) codexLine(line []byte) bool {
 			changed = true
 		}
 		if len(imgs) > 0 && (!isViewOnly || strings.Contains(txt, "Generated images are saved")) {
-			t.add(&Message{Kind: "assistant", Text: strings.Join(imgs, "\n")})
+			t.pendingImgs = append(t.pendingImgs, imgs...)
 			changed = true
 		}
 		return changed

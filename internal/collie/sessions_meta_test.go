@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -453,7 +454,12 @@ func TestCodexRolloutChainAndImageExtraction(t *testing.T) {
 		`{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_view","output":[{"type":"input_text","text":"Script completed"},{"type":"input_image","image_url":"` + tinyPNG + `"}]}}` + "\n" +
 		`{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_gen","name":"exec","input":"const result=await tools.image_gen__imagegen({prompt:\"Edit SFD-Net\"})"}}` + "\n" +
 		`{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_gen","output":[{"type":"input_text","text":"Script completed\nWall time 65.1 seconds"},{"type":"input_image","image_url":"` + tinyPNG + `"},{"type":"input_text","text":"Generated images are saved to C:\\Users\\26422\\.codex\\generated_images\\x.png"}]}}` + "\n" +
-		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这是设计预览，桌面上的 Visio 原稿已保留。"}]}}` + "\n"
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这是设计预览，桌面上的 Visio 原稿已保留。"}]}}` + "\n" +
+		// Turn 2: model ALSO embeds a Markdown file link to the generated PNG -> must NOT duplicate!
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"把输入改成 Video Sequence"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_gen2","name":"exec","input":"generatedImage(await tools.image_gen__imagegen({prompt:\"Video Sequence\"}))"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_gen2","output":[{"type":"input_text","text":"Script completed"},{"type":"input_image","image_url":"` + tinyPNG + `"}]}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"[新版设计稿](C:/Users/26422/.codex/generated_images/exec-2.png)已将输入简化为 Video Sequence。"}]}}` + "\n"
 	if err := os.WriteFile(forkPath, []byte(forkContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -479,19 +485,24 @@ func TestCodexRolloutChainAndImageExtraction(t *testing.T) {
 	}
 	tr.openTail()
 	msgs := tr.view()
-	// Expect:
+	// Expect 9 messages total:
 	// 0: user (ancestor)
 	// 1: assistant (ancestor)
 	// 2: user ("继续修改模型图...")
-	// 3: tool (view_image -> NO assistant image bubble!)
+	// 3: tool (view_image -> skipped!)
 	// 4: tool (imagegen)
-	// 5: assistant ("[image:~/.collie/images/...png]" extracted from imagegen output!)
-	// 6: assistant ("这是设计预览...")
-	if len(msgs) != 7 {
-		t.Fatalf("expected 7 messages (view_image skipped, imagegen extracted), got %d: %+v", len(msgs), msgs)
+	// 5: assistant ("这是设计预览...\n\n[image:~/.collie/images/...png]" -> image attached below text!)
+	// 6: user ("把输入改成 Video Sequence")
+	// 7: tool (imagegen 2)
+	// 8: assistant ("[新版设计稿](C:/.../exec-2.png)..." -> pendingImgs dropped because reply already links PNG!)
+	if len(msgs) != 9 {
+		t.Fatalf("expected 9 messages without duplicate image bubbles, got %d: %+v", len(msgs), msgs)
 	}
-	if msgs[5].Kind != "assistant" || len(msgs[5].Text) < 25 || msgs[5].Text[:24] != "[image:~/.collie/images/" {
-		t.Fatalf("expected generated image token at msgs[5], got %+v", msgs[5])
+	if !strings.Contains(msgs[5].Text, "这是设计预览") || !strings.Contains(msgs[5].Text, "[image:~/.collie/images/") {
+		t.Fatalf("expected Turn 1 reply to carry appended [image:...], got %q", msgs[5].Text)
+	}
+	if strings.Contains(msgs[8].Text, "[image:") {
+		t.Fatalf("expected Turn 2 reply NOT to duplicate [image:...] when Markdown PNG link is present, got %q", msgs[8].Text)
 	}
 }
 

@@ -3582,7 +3582,7 @@
         html += `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>`;
       } else {
         const rendered = md(m.text);
-        const extraImgs = !rendered.includes("thumb ") ? imagesIn(m.text) : "";
+        const extraImgs = imagesIn(m.text);
         html += `<div class="msg assistant">${rendered}${extraImgs}</div>`;
       }
       cut();
@@ -3791,7 +3791,96 @@
     return null;
   }
   let fileUrl = "", fileSeq = 0;
+  let lbUrl = "", lbSeq = 0;
+  function closeImageModal() {
+    const dlg = $("#img-lightbox");
+    if (!dlg) return;
+    lbSeq++;
+    if (dlg.open) dlg.close();
+    const img = $("#ilb-img");
+    if (img) { img.removeAttribute("src"); img.hidden = true; img.classList.remove("zoomed"); }
+    if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = ""; }
+  }
+  async function openImageModal(path) {
+    const dlg = $("#img-lightbox"), img = $("#ilb-img"), note = $("#ilb-note"), dl = $("#ilb-dl");
+    if (!dlg || !img) return;
+    const seq = ++lbSeq;
+    const isHttp = /^https?:\/\//i.test(path);
+    const fname = (path.split(/[?#]/)[0].split(/[\\/]/).pop() || "image.png");
+    $("#ilb-name").textContent = fname;
+    $("#ilb-info").textContent = isHttp ? path : tilde(path);
+    img.classList.remove("zoomed");
+    dl.hidden = true;
+    if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = ""; }
+
+    if (isHttp) {
+      note.hidden = true;
+      img.src = path;
+      img.hidden = false;
+      dl.href = path;
+      dl.download = fname;
+      dl.hidden = false;
+      if (!dlg.open) dlg.showModal();
+      return;
+    }
+
+    const cached = thumbs.get(path);
+    if (cached) {
+      note.hidden = true;
+      img.src = cached;
+      img.hidden = false;
+      dl.href = cached;
+      dl.download = fname;
+      dl.hidden = false;
+    } else {
+      img.removeAttribute("src");
+      img.hidden = true;
+      note.textContent = "正在加载原图…";
+      note.hidden = false;
+    }
+    if (!dlg.open) dlg.showModal();
+
+    const tries = fileTries();
+    try {
+      const f = await findFile(path, tries);
+      if (seq !== lbSeq) return;
+      if (!f || f.kind !== "image") {
+        if (!cached) {
+          note.textContent = f ? "这个文件无法作为图片预览。" : `在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这张图片。`;
+          note.hidden = false;
+        }
+        return;
+      }
+      const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+      $("#ilb-info").textContent = where + f.path + (f.size ? " · " + fmtSize(f.size) : "");
+      const ext = fname.split(".").pop().toLowerCase();
+      lbUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
+      note.hidden = true;
+      img.src = lbUrl;
+      img.hidden = false;
+      dl.href = lbUrl;
+      dl.download = fname;
+      dl.hidden = false;
+    } catch (err) {
+      if (seq !== lbSeq || cached) return;
+      note.textContent = err.message || "原图读取失败";
+      note.hidden = false;
+    }
+  }
+  $("#img-lightbox")?.addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-ilb-close]")) { closeImageModal(); return; }
+    if (ev.target.id === "ilb-img") { ev.target.classList.toggle("zoomed"); return; }
+    if (ev.target === $("#img-lightbox") || ev.target.hasAttribute("data-ilb-backdrop")) closeImageModal();
+  });
+  $("#img-lightbox")?.addEventListener("close", () => {
+    lbSeq++;
+    if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = ""; }
+  });
+
   async function openFile(path) {
+    if (IMG_EXT.test((path || "").split(/[?#]/)[0])) {
+      return openImageModal(path);
+    }
     const body = $("#fv-body"), seq = ++fileSeq;
     $("#fv-name").textContent = path.split(/[\\/]/).pop();
     $("#fv-path").textContent = path;
@@ -3900,7 +3989,7 @@
 
   document.addEventListener("click", (e) => {
     const t = e.target.closest(".thumb[data-img]");
-    if (t) { e.preventDefault(); openFile(t.dataset.img); return; }
+    if (t) { e.preventDefault(); openImageModal(t.dataset.img); return; }
     const a = e.target.closest("a.fpath");
     if (!a) return;
     e.preventDefault();
@@ -3980,13 +4069,13 @@
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]/gi, (_, p) => {
           const raw = p.replace(/&amp;/g, "&");
-          return hold(`<span class="thumbs assistant-figs">${thumbBtn(raw, "assistant-fig")}</span>`);
+          return hold(`<span class="thumbs">${thumbBtn(raw)}</span>`);
         })
-        .replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s"]+)\)/g, (_, alt, u) => hold(`<span class="thumbs assistant-figs"><a class="thumb assistant-fig" href="${u}" target="_blank" rel="noopener noreferrer"><img src="${u}" alt="${alt}"></a></span>`))
+        .replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s"]+)\)/g, (_, alt, u) => hold(`<span class="thumbs"><button type="button" class="thumb" data-img="${u}" aria-label="点击查看原图"><img src="${u}" alt="${alt}"></button></span>`))
         .replace(/!\[([^\]\n]*)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:#[^)\s"]*)?\)/gi, (_, alt, p) => {
           let raw = p.replace(/&amp;/g, "&");
           try { raw = decodeURI(raw); } catch {}
-          return hold(`<span class="thumbs assistant-figs">${thumbBtn(raw, "assistant-fig")}</span>`);
+          return hold(`<span class="thumbs">${thumbBtn(raw)}</span>`);
         })
         .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, (_, l, u) => hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${l}</a>`))
         // [MergeStatus.tsx](file:///…/MergeStatus.tsx#L67-L84): the name, opening the file.
@@ -4147,11 +4236,16 @@
     if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
     return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
   }
-  // Images a Collie message points at (a screenshot a worker took) show
-  // under it, so you need not open each one.
-  const IMG_PATH = /(?:^|[\s(（`"'：:])((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\s`"'()（）<>]*\.(?:png|jpe?g|gif|webp))(?=$|[\s)）`"'，。,;；])/gim;
+  // Images a Collie or agent message points at (including Markdown file links)
+  // show as compact thumbnails under the message, without duplicating inline [image:...].
+  const IMG_PATH = /(?:^|[\s(（`"'：:])(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\s`"'()（）<>\]]*\.(?:png|jpe?g|gif|webp|svg|bmp))(?=$|[\s)）`"'，。,;；#\]])/gim;
   function imagesIn(t) {
-    const ps = [...new Set([...(t || "").matchAll(IMG_PATH)].map((m) => m[1]))].slice(0, 6);
+    const cleaned = String(t || "").replace(IMG_RUN, "").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, "");
+    const ps = [...new Set([...cleaned.matchAll(IMG_PATH)].map((m) => {
+      let p = m[1];
+      try { p = decodeURI(p); } catch {}
+      return p;
+    }))].slice(0, 6);
     return ps.length ? `<span class="thumbs">${ps.map((p) => thumbBtn(p)).join("")}</span>` : "";
   }
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.

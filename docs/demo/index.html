@@ -558,6 +558,26 @@
   </form>
 </dialog>
 
+<!-- ───────────── image lightbox modal ───────────── -->
+<dialog class="img-lightbox" id="img-lightbox">
+  <div class="ilb-bar">
+    <div class="ilb-meta">
+      <b id="ilb-name"></b>
+      <span class="muted mono" id="ilb-info"></span>
+    </div>
+    <div class="ilb-acts">
+      <a class="btn small ghost" id="ilb-dl" href="#" download hidden>下载原图</a>
+      <button type="button" class="icon-btn ilb-close" data-ilb-close title="关闭（Esc）">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="ilb-stage" id="ilb-stage" data-ilb-backdrop>
+    <p class="ilb-note" id="ilb-note" hidden></p>
+    <img id="ilb-img" alt="" hidden>
+  </div>
+</dialog>
+
 <div class="toasts" id="toasts"></div>
 
 <script src="demo.js"></script>
