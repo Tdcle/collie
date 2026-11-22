@@ -4112,6 +4112,11 @@
           return hold(`<span class="thumbs">${thumbBtn(raw)}</span>`);
         })
         .replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s"]+)\)/g, (_, alt, u) => hold(`<span class="thumbs"><button type="button" class="thumb" data-img="${u}" aria-label="点击查看原图"><img src="${u}" alt="${alt}"></button></span>`))
+        .replace(/!\[([^\]\n]*)\]\(&lt;(?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^&#\r\n]*?(?:&amp;[^&#\r\n]*?)*\.(?:png|jpe?g|gif|webp|svg|bmp))(?:#[^&\r\n]*)?&gt;\)/gi, (_, alt, p) => {
+          let raw = p.replace(/&amp;/g, "&");
+          try { raw = decodeURI(raw); } catch {}
+          return hold(`<span class="thumbs">${thumbBtn(raw)}</span>`);
+        })
         .replace(/!\[([^\]\n]*)\]\((?:file:\/\/\/?)?((?:\/|~[\\/]|[A-Za-z]:[\\/])[^)\s"#]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:#[^)\s"]*)?\)/gi, (_, alt, p) => {
           let raw = p.replace(/&amp;/g, "&");
           try { raw = decodeURI(raw); } catch {}
@@ -4284,10 +4289,17 @@
   // Images a Collie or agent message points at (including Markdown file links)
   // show as compact thumbnails under the message, without duplicating inline [image:...].
   const IMG_PATH = /(?:^|[\s(（`"'：:])(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\s`"'()（）<>\]]*\.(?:png|jpe?g|gif|webp|svg|bmp))(?=$|[\s)）`"'，。,;；#\]])/gim;
+  const IMG_ANGLE = /<(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^>#\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))(?:#[^>\r\n]*)?>/gi;
   function imagesIn(t) {
-    const cleaned = String(t || "").replace(IMG_RUN, "").replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, "");
-    const ps = [...new Set([...cleaned.matchAll(IMG_PATH)].map((m) => {
-      let p = m[1];
+    const cleaned = String(t || "").replace(IMG_RUN, "")
+      .replace(/!\[[^\]\n]*\]\(<[^>\r\n]+>\)/g, "")
+      .replace(/!\[[^\]\n]*\]\([^)\n]+\)/g, "");
+    const rawList = [
+      ...[...cleaned.matchAll(IMG_ANGLE)].map((m) => m[1]),
+      ...[...cleaned.matchAll(IMG_PATH)].map((m) => m[1]),
+    ];
+    const ps = [...new Set(rawList.map((raw) => {
+      let p = raw;
       try { p = decodeURI(p); } catch {}
       return p;
     }))].slice(0, 6);
