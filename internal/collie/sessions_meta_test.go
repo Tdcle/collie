@@ -211,6 +211,7 @@ func TestProjectsLifecycleAndMakeDir(t *testing.T) {
 }
 
 func TestHostCodexProjectSyncAndDismiss(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	dir := t.TempDir()
 	codexDir := filepath.Join(dir, ".codex")
 	if err := os.MkdirAll(codexDir, 0o755); err != nil {
@@ -269,8 +270,9 @@ func TestHostCodexProjectSyncAndDismiss(t *testing.T) {
 		t.Fatalf("expected 2 synced projects, got added=%d changed=%v", added, changed)
 	}
 	projs := srv.projectsSnapshot()
-	if len(projs) != 2 || projs[0].Name != "SFD-Net" || projs[0].Cwd != "~/Desktop/SFD_Net" || len(projs[0].Roots) != 2 {
-		t.Fatalf("unexpected synced projects: %+v", projs)
+	wantCwd := tildeIn(dir, filepath.Join(dir, "Desktop", "SFD_Net"))
+	if len(projs) != 2 || projs[0].Name != "SFD-Net" || projs[0].Cwd != wantCwd || len(projs[0].Roots) != 2 {
+		t.Fatalf("unexpected synced projects: len=%d first=%+v wantCwd=%q", len(projs), projs[0], wantCwd)
 	}
 
 	// Dismissing/deleting a synced project must prevent it from re-importing on subsequent syncs
