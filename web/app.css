@@ -941,20 +941,9 @@ a.event:hover, .event.expandable:hover { background: var(--bg-2); border-color: 
 }
 .cbar .chips::-webkit-scrollbar { display: none; }
 .cbar .chips > * { flex: none; }
-.cbar > .send, .cbar > .stop-btn, .cbar > .attach { flex: none; }
+.cbar > .send, .cbar > .attach { flex: none; }
 .cbar .icon-btn { width: 32px; height: 32px; border-radius: 9px; }
 .send-hint { font: 500 11px/1 var(--mono); color: var(--fg-3); margin-right: 4px; white-space: nowrap; opacity: .75; }
-.stop-btn {
-  flex: none; width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center;
-  border: 1px solid color-mix(in srgb, var(--err) 38%, var(--line-2));
-  background: var(--err-soft); color: var(--err); cursor: pointer;
-  transition: background .14s, border-color .14s, transform .1s;
-}
-.stop-btn[hidden] { display: none !important; }
-.stop-btn svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
-.stop-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--err) 22%, var(--surface)); border-color: var(--err); }
-.stop-btn:active:not(:disabled) { transform: scale(.94); }
-.stop-btn:disabled { opacity: .45; cursor: default; }
 .btn.danger-soft { border-color: color-mix(in srgb, var(--err) 35%, var(--line-2)); color: var(--err); background: var(--err-soft); }
 .btn.danger-soft:hover { background: color-mix(in srgb, var(--err) 20%, var(--surface)); border-color: var(--err); color: var(--err); }
 
@@ -977,15 +966,19 @@ a.event:hover, .event.expandable:hover { background: var(--bg-2); border-color: 
 .msg.user .att span { font-size: 12.5px; padding: 2px 8px; border-radius: 8px; background: rgba(255, 255, 255, .14); }
 
 .send {
-  flex: none; width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center;
-  border: 0; background: var(--accent); color: var(--on-accent);
+  flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  border: 0; background: var(--accent); color: var(--on-accent); cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
-  transition: transform .12s, opacity .15s, background .15s;
+  transition: transform .12s, opacity .15s, background .15s, color .15s;
 }
 .send:hover:not(:disabled) { transform: translateY(-1px); }
-.send svg { width: 16.5px; height: 16.5px; stroke-width: 2; }
-.send:active { transform: scale(.93); }
-.send:disabled { opacity: .32; box-shadow: none; }
+.send svg.ico-send { width: 16.5px; height: 16.5px; stroke-width: 2.1; fill: none; stroke: currentColor; }
+.send svg.ico-stop { display: none; width: 19px; height: 19px; fill: currentColor; stroke: none; }
+.send.is-stop svg.ico-send { display: none; }
+.send.is-stop svg.ico-stop { display: block; }
+.send.is-stop:hover:not(:disabled) { background: var(--err); color: #fff; }
+.send:active:not(:disabled) { transform: scale(.93); }
+.send:disabled { opacity: .28; box-shadow: none; cursor: default; }
 .kbd-toggle { display: none; align-self: center; }
 .detail.chat-mode .kbd-toggle { display: inline-grid; }
 .kbd-toggle.on { background: var(--bg-3); color: var(--fg); }

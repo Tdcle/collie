@@ -857,9 +857,8 @@
     }
     const st = $("#router-status");
     const showLive = !r.replied && (r.status === "working" || r.status === "starting" || r.status === "dreaming" || pendingSays.length > 0);
-    const superStop = $("#super-stop");
-    if (superStop) superStop.hidden = !(r.alive && (r.status === "working" || r.status === "starting"));
     st.className = "status " + collieDot(r.status);
+    syncComposerBtn($("#super-composer"));
     st.innerHTML = `<span class="dot ${esc(collieDot(r.status))}"></span>${esc(r.replied ? "在收尾" : collieStatus(r.status))}`;
     st.hidden = showLive && Boolean(sup.entries.length || pendingSays.length);
     $("#router-queue").textContent = sup.paused ? "已暂停投递" : routerQueued() ? `${routerQueued()} 条事件排队中` : "";
@@ -1038,7 +1037,7 @@
 
   $("#super-thread").addEventListener("click", (e) => {
     const idea = e.target.closest("[data-idea]")?.dataset.idea;
-    if (idea) { $("#super-input").value = idea; grow($("#super-input")); $("#super-input").focus(); return; }
+    if (idea) { $("#super-input").value = idea; grow($("#super-input")); syncComposerBtn($("#super-composer")); $("#super-input").focus(); return; }
     const evRow = e.target.closest(".event.expandable[data-ev-id]");
     if (evRow && !e.target.closest("a")) {
       const eid = evRow.dataset.evId;
@@ -2460,15 +2459,13 @@
     $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
     const ab = $("#ext-archive-btn");
     if (ab) ab.textContent = meta?.archived ? "移出归档" : "归档会话";
-    if ($("#x-stop-btn")) $("#x-stop-btn").hidden = true;
-    if ($("#x-stop")) $("#x-stop").hidden = true;
     if ($("#ext-menu-interrupt")) $("#ext-menu-interrupt").hidden = true;
     const canResume = !!(h && on && h.session && RESUME[h.kind]);
     $("#x-composer").hidden = !h;
     $("#x-input").disabled = !canResume;
-    $("#x-send").disabled = !canResume;
     $("#x-input").placeholder = !h ? "会话已不存在" : !on ? `${machineName(h.machine)} 当前离线，上线后可直接发消息继续…` : "输入消息直接继续对话，自动继承上下文…";
     $("#x-hint").textContent = canResume && h.machine ? machineName(h.machine) : "";
+    syncComposerBtn($("#x-composer"));
     renderExtChips(h?.kind, h?.machine, null, canResume && !h?.hub, "h:" + hid);
   }
   async function openHist(hid) {
@@ -2868,11 +2865,9 @@
       $("#x-status").className = "status " + (gone ? "ended" : "unknown");
       $("#x-tag").hidden = true;
       $("#x-input").disabled = true;
-      $("#x-send").disabled = true;
-      if ($("#x-stop-btn")) $("#x-stop-btn").hidden = true;
-      if ($("#x-stop")) $("#x-stop").hidden = true;
       if ($("#ext-menu-interrupt")) $("#ext-menu-interrupt").hidden = true;
       if ($("#x-chips")) $("#x-chips").hidden = true;
+      syncComposerBtn($("#x-composer"));
       if (!gone) extSoon();
       return;
     }
@@ -2899,18 +2894,16 @@
     const busyElsewhere = !!(e.live && !e.can_send && (e.status === "working" || e.status === "blocked"));
     const extWorkingNow = !!(on && !gone && e.live && e.status === "working");
     const canInterruptExt = !!(extWorkingNow && (e.can_send || e.pid > 0 || e.kind === "agy"));
-    if ($("#x-stop-btn")) $("#x-stop-btn").hidden = !canInterruptExt;
-    if ($("#x-stop")) $("#x-stop").hidden = !canInterruptExt;
     if ($("#ext-menu-interrupt")) $("#ext-menu-interrupt").hidden = !canInterruptExt;
     const canChat = !!(on && !busyElsewhere && (e.can_send || e.can_take_over || e.session));
     $("#x-composer").hidden = false;
     $("#x-input").disabled = !canChat;
-    $("#x-send").disabled = !canChat;
     $("#x-input").placeholder = !on ? `${machineName(e.machine)} 当前离线，上线后可直接继续对话…`
       : busyElsewhere ? (e.status === "blocked" ? `正在 ${e.app || "原窗口"} 等待确认（当前回合仍由桌面端持有，可在桌面端直接回复，或等当前回合停下后在此回复）…` : `正在 ${e.app || "原窗口"} 中执行，当前步骤完成后即可直接发消息…`)
       : extWorkingNow ? (e.kind === "codex" ? "任务执行中，可直接输入补充指令插话（实时注入当前回合）…" : "任务执行中，可直接输入补充消息（自动排队跟进）…")
       : "输入消息继续对话…";
     $("#x-hint").textContent = canChat && e.machine ? machineName(e.machine) : "";
+    syncComposerBtn($("#x-composer"));
     renderExtChips(e.kind, e.machine, e.run, canChat && !e.hub, "x:" + e.id);
     if ($("#x-thread")?._redraw) $("#x-thread")._redraw();
   }
@@ -2926,18 +2919,25 @@
     const wantCustomRun = (e.run ? (model !== (e.run[0] || "") || effort !== (e.run[1] || "")) : Boolean(model || effort));
     addPendingThreadMsg($("#x-thread"), text);
     if (e.can_send && !(wantCustomRun && !e.live && e.can_take_over && e.kind !== "codex")) {
+      const prevLive = e.live, prevStatus = e.status;
+      e.live = true;
+      e.status = "working";
+      renderExt();
+      renderExtHead();
       try {
         const r = await api(`/api/external/${encodeURIComponent(e.id)}/send`, { body: { text, model, effort } });
         if (r.note) toast(r.note, "attn");
-        e.live = true;
-        e.status = "working";
         if (model || effort) e.run = [model || "", effort || ""];
         renderExt();
         renderExtHead();
         setTimeout(() => loadExternal().catch(() => {}), 800);
         return;
       } catch (err) {
-        if (e.live || !e.session || /正在桌面端|占用/.test(err.message || "")) {
+        e.live = prevLive;
+        e.status = prevStatus;
+        renderExt();
+        renderExtHead();
+        if (prevLive || !e.session || /正在桌面端|占用/.test(err.message || "")) {
           removePendingThreadMsg($("#x-thread"), text);
           throw err;
         }
@@ -3396,10 +3396,6 @@
     st.className = "status " + v.status;
     st.innerHTML = `<span class="dot ${esc(v.status)}"></span>${esc(STATUS_LABEL[v.status] || v.status)}`;
     const busy = v.status === "working" || v.status === "starting";
-    const stopBtn = $("#d-stop-btn");
-    if (stopBtn) stopBtn.hidden = !busy;
-    const composerStop = $("#d-stop");
-    if (composerStop) composerStop.hidden = !busy;
     const menuInt = $("#menu-interrupt");
     if (menuInt) menuInt.hidden = !busy;
     const ms = state.machines || [];
@@ -3414,6 +3410,7 @@
     $("#input").placeholder = busy
       ? (v.kind === "codex" ? `正在执行，可直接输入补充指令向 ${KIND_LABEL[v.kind] || v.kind} 插话…` : `正在执行，可直接输入补充消息给 ${KIND_LABEL[v.kind] || v.kind || "Agent"}…`)
       : `给 ${KIND_LABEL[v.kind] || v.kind || "Agent"} 发消息…`;
+    syncComposerBtn($("#composer"));
     if ($("#thread")?._redraw) $("#thread")._redraw();
   }
 
@@ -3694,7 +3691,9 @@
     const input = form?.querySelector("textarea");
     if (!form || !input) { toast("这里没法发消息，去电脑上回答", "attn"); return; }
     input.value = b.dataset.text;
-    form.requestSubmit();
+    grow(input);
+    syncComposerBtn(form);
+    if (form._submit) form._submit(); else form.requestSubmit();
   });
   function isThreadActivelyWorking(el) {
     if (el.id === "thread") {
@@ -3934,8 +3933,9 @@
   function drawLive(l) {
     const prevLiveSt = lastLive?.status;
     lastLive = l;
-    if (prevLiveSt !== l.status && $("#thread")?._redraw) {
-      $("#thread")._redraw();
+    if (prevLiveSt !== l.status) {
+      syncComposerBtn($("#composer"));
+      if ($("#thread")?._redraw) $("#thread")._redraw();
     }
     $("#thread").classList.toggle("asking", l.status === "blocked" && !!l.approval);
     const box = $("#live");
@@ -4528,11 +4528,12 @@
     form._files = [];
     form._machine = machine;
     const draw = () => {
-      box.hidden = !form._files.length;
+      box.hidden = !form._files.length || Boolean(form._filesHidden);
       box.innerHTML = form._files.map((f, i) => `<span class="file ${f.err ? "err" : f.path ? "" : "busy"}" title="${esc(f.err || f.path || "上传中…")}">
         ${f.thumb ? `<img src="${f.thumb}" alt="">` : `<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`}
         <span class="fn">${esc(f.name)}</span><span class="fs">${f.err ? "失败" : f.path ? fmtSize(f.size) : "上传中"}</span>
         <button type="button" data-rm="${i}" title="移除">×</button></span>`).join("");
+      syncComposerBtn(form);
     };
     const add = (list) => {
       const taVal = $("textarea", form)?.value || "";
@@ -4620,32 +4621,158 @@
       + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
   }
 
+  async function doInterruptForm(form) {
+    if (!form) return;
+    if (form.id === "super-composer") {
+      form._sending = false;
+      syncComposerBtn(form);
+      await api("/api/super/router/interrupt", { body: {} });
+      toast("已中止 Collie 当前处理");
+      return;
+    }
+    if (form.id === "x-composer") {
+      if (!extCur || extCur.startsWith("h:")) return;
+      form._abortRequested = true;
+      form._sending = false;
+      const cur = ext.find((x) => x.id === extCur);
+      if (cur) { cur.status = "idle"; cur.live = false; renderExt(); renderExtHead(); }
+      syncComposerBtn(form);
+      await api(`/api/external/${encodeURIComponent(extCur)}/interrupt`, { body: {} });
+      toast("已中止当前任务");
+      setTimeout(() => loadExternal().catch(() => {}), 800);
+      return;
+    }
+    if (form.id === "composer") {
+      if (!current) return;
+      form._sending = false;
+      syncComposerBtn(form);
+      await api(paneURL(current, "interrupt"), { body: {} });
+      toast("已中止当前任务");
+    }
+  }
+
+  // Single bottom-right button state machine (Codex App / ChatGPT style):
+  // - Running & input box empty  -> crisp Stop square (■)
+  // - Input box has text/files   -> Send arrow (↑) so user can steer/interrupt with a new prompt
+  // - Idle & input box empty     -> subdued disabled Send arrow (↑)
+  function syncComposerBtn(form) {
+    if (!form) return;
+    const btn = $(".send", form), input = $("textarea", form);
+    if (!btn || !input) return;
+    const hasFiles = Boolean(form._files?.length && !form._filesHidden);
+    const hasDraft = Boolean(input.value.trim()) || hasFiles;
+    const canInput = !input.disabled;
+
+    let running = Boolean(form._sending);
+    let rawShellReady = false;
+    if (form.id === "super-composer") {
+      if (sup.router?.alive && (sup.router.status === "working" || sup.router.status === "starting")) running = true;
+    } else if (form.id === "x-composer") {
+      if (!running && extCur && !extCur.startsWith("h:")) {
+        const e = ext.find((x) => x.id === extCur);
+        if (e && extOnline(e) && e.live && e.status === "working" && (e.can_send || e.pid > 0 || e.kind === "agy")) {
+          running = true;
+        }
+      }
+    } else if (form.id === "composer") {
+      const v = find(current);
+      rawShellReady = Boolean(v && !v.is_agent);
+      if ((v && (v.status === "working" || v.status === "starting")) || lastLive?.status === "working") {
+        running = true;
+      }
+    }
+
+    if (running && !hasDraft) {
+      btn.classList.add("is-stop");
+      btn.type = "button";
+      btn.disabled = Boolean(form._interrupting);
+      btn.title = "中止当前任务";
+    } else {
+      btn.classList.remove("is-stop");
+      btn.type = "submit";
+      btn.disabled = !canInput || Boolean(form._sending) || (!hasDraft && !rawShellReady);
+      btn.title = running && hasDraft ? "发送补充指令（插话）" : "发送";
+    }
+  }
+
   function bindComposer(form, input, send, machine) {
     if (machine) bindFiles(form, machine);
-    input.addEventListener("input", () => grow(input));
+    const sendBtn = $(".send", form);
+    sendBtn?.addEventListener("mousedown", (ev) => {
+      if (sendBtn.classList.contains("is-stop")) ev.preventDefault();
+    });
+    sendBtn?.addEventListener("click", async (ev) => {
+      if (!sendBtn.classList.contains("is-stop")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (form._interrupting) return;
+      form._interrupting = true;
+      syncComposerBtn(form);
+      try { await doInterruptForm(form); }
+      catch (err) { toast(err.message, "attn"); }
+      finally { form._interrupting = false; syncComposerBtn(form); }
+    });
+
+    const submitNow = async () => {
+      if (form._sending || input.disabled) return;
+      const hasFiles = Boolean(form._files?.length && !form._filesHidden);
+      const rawShell = form.id === "composer" && Boolean(find(current) && !find(current).is_agent);
+      const rawDraft = input.value;
+      if (!rawDraft.trim() && !hasFiles && !rawShell) return;
+
+      // Clear textarea & file strip synchronously (<1ms) before any async await,
+      // and guard against trailing IME compositionend re-committing rawDraft.
+      form._sending = true;
+      form._abortRequested = false;
+      form._filesHidden = true;
+      const fileBox = $(".files", form);
+      if (fileBox) fileBox.hidden = true;
+      input.value = "";
+      grow(input);
+      requestAnimationFrame(() => {
+        if (form._sending && input.value === rawDraft) {
+          input.value = "";
+          grow(input);
+          syncComposerBtn(form);
+        }
+      });
+      syncComposerBtn(form);
+
+      try {
+        const text = await withFiles(form, rawDraft);
+        await send(text);
+        form._filesHidden = false;
+        form._clearFiles?.();
+        if (form._abortRequested && form.id === "x-composer" && extCur && !extCur.startsWith("h:")) {
+          api(`/api/external/${encodeURIComponent(extCur)}/interrupt`, { body: {} }).catch(() => {});
+        }
+      } catch (err) {
+        form._filesHidden = false;
+        if (fileBox && form._files?.length) fileBox.hidden = false;
+        if (!input.value) { input.value = rawDraft; grow(input); }
+        toast(err.message, "attn");
+      } finally {
+        form._sending = false;
+        syncComposerBtn(form);
+      }
+    };
+
+    input.addEventListener("input", () => { grow(input); syncComposerBtn(form); });
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
       const mod = e.metaKey || e.ctrlKey;
       // "mod": Enter makes a new line and ⌘/Ctrl+Enter sends.
-      if (prefs.sendKey() === "mod" ? mod : !mod) { e.preventDefault(); form.requestSubmit(); }
+      if (prefs.sendKey() === "mod" ? mod : !mod) {
+        e.preventDefault();
+        submitNow();
+      }
     });
-    form.addEventListener("submit", async (e) => {
+    form._submit = submitNow;
+    form.addEventListener("submit", (e) => {
       e.preventDefault();
-      const btn = $(".send", form);
-      btn.disabled = true;
-      const rawDraft = input.value;
-      try {
-        const text = await withFiles(form, rawDraft);
-        input.value = ""; grow(input);
-        await send(text);
-        form._clearFiles?.();
-      }
-      catch (err) {
-        if (!input.value) { input.value = rawDraft; grow(input); }
-        toast(err.message, "attn");
-      }
-      finally { btn.disabled = false; }
+      submitNow();
     });
+    syncComposerBtn(form);
   }
 
   bindComposer($("#composer"), $("#input"), async (text) => {
