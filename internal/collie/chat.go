@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -602,6 +603,14 @@ func (t *transcript) codexLine(line []byte) bool {
 				}
 				continue
 			}
+			if p.Role == "user" {
+				if replyText, ok := parseCodexQuestionReply(b.Text); ok {
+					if replyText != "" {
+						parts = append(parts, replyText)
+					}
+					continue
+				}
+			}
 			if p.Role == "assistant" || !noise(b.Text) {
 				if strings.TrimSpace(b.Text) != "" {
 					parts = append(parts, b.Text)
@@ -648,6 +657,19 @@ func (t *transcript) codexLine(line []byte) bool {
 		if len(args) == 0 {
 			args = p.Input
 		}
+		if p.Name == "send_message_to_user_async" || p.Name == "send_message_to_user" {
+			if msg := parseCodexUserFacingMessage(args); msg != "" {
+				t.add(&Message{Kind: "assistant", Text: msg})
+				return true
+			}
+		}
+		if m := askOf(p.Name, args); m != nil {
+			if p.CallID != "" {
+				t.tools[p.CallID] = m
+			}
+			t.add(m)
+			return true
+		}
 		m := &Message{Kind: "tool", Name: p.Name, Input: toolSummary(p.Name, args)}
 		if m.Name == "" {
 			m.Name = "shell"
@@ -660,6 +682,13 @@ func (t *transcript) codexLine(line []byte) bool {
 		changed := false
 		isViewOnly := false
 		if m := t.tools[p.CallID]; m != nil {
+			if m.Kind == "ask" {
+				if ans := formatCodexAskOutput(m.Name, txt); ans != "" {
+					m.Output = ans
+					changed = true
+				}
+				return changed
+			}
 			m.Output = clip(txt, maxOutput)
 			inp := strings.ToLower(m.Input)
 			isViewOnly = m.Name == "view_image" || (strings.Contains(inp, "view_image") && !strings.Contains(inp, "imagegen") && !strings.Contains(inp, "image_gen"))
@@ -1435,8 +1464,8 @@ func (s *Server) lastMessage(w http.ResponseWriter, r *http.Request) {
 			msgs := tr.view()
 			var reply, userQ string
 			for i := len(msgs) - 1; i >= 0; i-- {
-				if reply == "" && msgs[i].Kind == "assistant" {
-					reply = msgs[i].Text
+				if reply == "" && (msgs[i].Kind == "assistant" || msgs[i].Kind == "ask") {
+					reply = formatMessageSummary(msgs[i])
 				} else if reply != "" && msgs[i].Kind == "user" {
 					userQ = msgs[i].Text
 					break
@@ -1470,33 +1499,188 @@ func (s *Server) paneAsk(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"asking": true, "approval": parseApproval(res.Text)})
 }
 
+func formatMessageSummary(m *Message) string {
+	if m == nil {
+		return ""
+	}
+	if m.Kind == "ask" && len(m.Options) > 0 {
+		return strings.TrimSpace(m.Text) + "\n可选项：" + strings.Join(m.Options, " / ")
+	}
+	return m.Text
+}
+
+func unwrapJSONRaw(raw json.RawMessage) json.RawMessage {
+	var s string
+	if len(raw) > 0 && raw[0] == '"' && json.Unmarshal(raw, &s) == nil {
+		return json.RawMessage(s)
+	}
+	return raw
+}
+
+func parseCodexUserFacingMessage(raw json.RawMessage) string {
+	raw = unwrapJSONRaw(raw)
+	var in struct {
+		Message string `json:"message"`
+		Text    string `json:"text"`
+	}
+	if json.Unmarshal(raw, &in) != nil {
+		return ""
+	}
+	if strings.TrimSpace(in.Message) != "" {
+		return strings.TrimSpace(in.Message)
+	}
+	return strings.TrimSpace(in.Text)
+}
+
+func formatCodexAskOutput(toolName, txt string) string {
+	txt = strings.TrimSpace(txt)
+	if txt == "" {
+		return ""
+	}
+	var acc struct {
+		Accepted *bool `json:"accepted"`
+	}
+	if json.Unmarshal([]byte(txt), &acc) == nil && acc.Accepted != nil {
+		// request_user_input_async returns {"accepted":true} as soon as the question
+		// card is displayed; the real user reply arrives as a subsequent user message.
+		return ""
+	}
+	if toolName == "request_user_input_async" {
+		return ""
+	}
+	var syncAns struct {
+		Answers map[string]struct {
+			Answers []string `json:"answers"`
+		} `json:"answers"`
+	}
+	if json.Unmarshal([]byte(txt), &syncAns) == nil && len(syncAns.Answers) > 0 {
+		var parts []string
+		for _, v := range syncAns.Answers {
+			for _, a := range v.Answers {
+				if a = strings.TrimSpace(a); a != "" {
+					parts = append(parts, a)
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return clip(txt, maxOutput)
+}
+
+func parseCodexQuestionReply(s string) (string, bool) {
+	t := strings.TrimSpace(s)
+	const openTag = "<send_user_message_question_reply>"
+	const closeTag = "</send_user_message_question_reply>"
+	i := strings.Index(t, openTag)
+	if i < 0 {
+		return "", false
+	}
+	body := t[i+len(openTag):]
+	if j := strings.Index(body, closeTag); j >= 0 {
+		body = body[:j]
+	}
+	body = strings.TrimSpace(body)
+	var items []struct {
+		Question string `json:"question"`
+		Answer   string `json:"answer"`
+	}
+	if json.Unmarshal([]byte(body), &items) != nil || len(items) == 0 {
+		return "", true
+	}
+	var answers []string
+	for _, it := range items {
+		if a := strings.TrimSpace(it.Answer); a != "" {
+			answers = append(answers, a)
+		}
+	}
+	if len(answers) == 1 {
+		return answers[0], true
+	}
+	for idx := range answers {
+		answers[idx] = fmt.Sprintf("%d. %s", idx+1, answers[idx])
+	}
+	return strings.Join(answers, "\n"), true
+}
+
 // askOf turns a question to the human into an ask item: Claude's
-// AskUserQuestion, or the Claude app's end-of-turn box (its wrap_up tool,
-// whose buttons just send their label back as the human's reply).
+// AskUserQuestion, Codex's request_user_input / request_user_input_async, or
+// the Claude app's end-of-turn box (its wrap_up tool).
 func askOf(name string, raw json.RawMessage) *Message {
+	raw = unwrapJSONRaw(raw)
 	switch {
-	case name == "AskUserQuestion":
+	case name == "AskUserQuestion" || name == "request_user_input" || name == "request_user_input_async":
 		var in struct {
 			Questions []struct {
-				Question string `json:"question"`
-				Header   string `json:"header"`
-				Options  []struct {
-					Label string `json:"label"`
-				} `json:"options"`
+				Question string            `json:"question"`
+				Title    string            `json:"title"`
+				Header   string            `json:"header"`
+				Options  []json.RawMessage `json:"options"`
 			} `json:"questions"`
 		}
 		if json.Unmarshal(raw, &in) != nil || len(in.Questions) == 0 {
 			return nil
 		}
-		m := &Message{Kind: "ask", Name: name}
-		var qs []string
-		for _, q := range in.Questions {
-			qs = append(qs, q.Question)
+		type parsedQ struct {
+			text   string
+			header string
+			opts   []string
 		}
-		m.Text = strings.Join(qs, "\n")
-		if len(in.Questions) == 1 {
-			for _, o := range in.Questions[0].Options {
-				m.Options = append(m.Options, o.Label)
+		var parsed []parsedQ
+		for _, q := range in.Questions {
+			txt := strings.TrimSpace(q.Question)
+			if txt == "" {
+				txt = strings.TrimSpace(q.Title)
+			}
+			if txt == "" {
+				continue
+			}
+			var opts []string
+			for _, ro := range q.Options {
+				var os string
+				if json.Unmarshal(ro, &os) == nil {
+					if os = strings.TrimSpace(os); os != "" {
+						opts = append(opts, os)
+					}
+					continue
+				}
+				var oo struct {
+					Label string `json:"label"`
+					Title string `json:"title"`
+				}
+				if json.Unmarshal(ro, &oo) == nil {
+					lbl := strings.TrimSpace(oo.Label)
+					if lbl == "" {
+						lbl = strings.TrimSpace(oo.Title)
+					}
+					if lbl != "" {
+						opts = append(opts, lbl)
+					}
+				}
+			}
+			parsed = append(parsed, parsedQ{text: txt, header: strings.TrimSpace(q.Header), opts: opts})
+		}
+		if len(parsed) == 0 {
+			return nil
+		}
+		m := &Message{Kind: "ask", Name: name}
+		if len(parsed) == 1 {
+			m.Text = parsed[0].text
+			m.Input = parsed[0].header
+			m.Options = parsed[0].opts
+		} else {
+			qs := make([]string, len(parsed))
+			for idx, pq := range parsed {
+				if name == "AskUserQuestion" {
+					qs[idx] = pq.text
+				} else {
+					qs[idx] = fmt.Sprintf("%d. %s", idx+1, pq.text)
+				}
+			}
+			m.Text = strings.Join(qs, "\n")
+			for _, pq := range parsed {
+				if len(pq.opts) > 0 && len(m.Options) == 0 {
+					m.Options = pq.opts
+				}
 			}
 		}
 		return m

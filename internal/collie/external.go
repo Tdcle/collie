@@ -557,8 +557,8 @@ func (s *Server) externalLastMessage(w http.ResponseWriter, r *http.Request) {
 	msgs := tr.view()
 	var reply, userQ string
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if reply == "" && msgs[i].Kind == "assistant" {
-			reply = msgs[i].Text
+		if reply == "" && (msgs[i].Kind == "assistant" || msgs[i].Kind == "ask") {
+			reply = formatMessageSummary(msgs[i])
 		} else if reply != "" && msgs[i].Kind == "user" {
 			userQ = msgs[i].Text
 			break
@@ -723,9 +723,31 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	first, beat := true, time.Now()
 	checked := time.Now()
 	lastExtSt := ""
-	if e.desktop && e.Kind == "codex" && e.path != "" && codexTurnRunning(e.path) {
-		lastExtSt = "working"
-		_ = send("status", map[string]any{"live": true, "status": "working"})
+	lastCanSend := e.CanSend
+	codexLiveState := func(p string) (live bool, st string, canSend bool) {
+		running := codexTurnRunning(p)
+		asking := codexHasOpenQuestion(p)
+		if asking {
+			st = "blocked"
+		} else if running {
+			st = "working"
+		}
+		live = running || asking
+		canSend = e.CanSend
+		if e.desktop && isCodexApp(e.App) && s.codexDaemonSock() != "" {
+			if !running {
+				canSend = true
+			} else if e.via == "bg" {
+				canSend = false
+			}
+		}
+		return live, st, canSend
+	}
+	if e.desktop && e.Kind == "codex" && e.path != "" {
+		if live, st, cs := codexLiveState(e.path); live || cs != lastCanSend {
+			lastExtSt, lastCanSend = st, cs
+			_ = send("status", map[string]any{"live": live, "status": st, "can_send": cs})
+		}
 	}
 	for {
 		if tr != nil && (tr.update() || first) {
@@ -744,13 +766,10 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if e.desktop && e.Kind == "codex" && e.path != "" {
-				st := ""
-				if codexTurnRunning(e.path) {
-					st = "working"
-				}
-				if st != lastExtSt {
-					lastExtSt = st
-					_ = send("status", map[string]any{"live": st != "", "status": st})
+				live, st, cs := codexLiveState(e.path)
+				if st != lastExtSt || cs != lastCanSend {
+					lastExtSt, lastCanSend = st, cs
+					_ = send("status", map[string]any{"live": live, "status": st, "can_send": cs})
 					beat = time.Now()
 				}
 			}

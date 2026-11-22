@@ -2830,13 +2830,13 @@
       $("#x-status").className = "status ended";
     }
 
-    const busyElsewhere = !!(e.live && !e.can_send && e.status === "working");
+    const busyElsewhere = !!(e.live && !e.can_send && (e.status === "working" || e.status === "blocked"));
     const canChat = !!(on && !busyElsewhere && (e.can_send || e.can_take_over || e.session));
     $("#x-composer").hidden = false;
     $("#x-input").disabled = !canChat;
     $("#x-send").disabled = !canChat;
     $("#x-input").placeholder = !on ? `${machineName(e.machine)} 当前离线，上线后可直接继续对话…`
-      : busyElsewhere ? `正在 ${e.app || "原窗口"} 中执行，当前步骤完成后即可直接发消息…`
+      : busyElsewhere ? (e.status === "blocked" ? `正在 ${e.app || "原窗口"} 等待确认（当前回合仍由桌面端持有，可在桌面端直接回复，或等当前回合停下后在此回复）…` : `正在 ${e.app || "原窗口"} 中执行，当前步骤完成后即可直接发消息…`)
       : "输入消息继续对话…";
     $("#x-hint").textContent = canChat && e.machine ? machineName(e.machine) : "";
     renderExtChips(e.kind, e.machine, e.run, canChat && !e.hub, "x:" + e.id);
@@ -2925,8 +2925,12 @@
         if (cur) {
           cur.live = !!st.live;
           cur.status = st.status || "";
+          if (typeof st.can_send === "boolean") cur.can_send = st.can_send;
           renderExt();
-          if (mine()) renderExtHead();
+          if (mine()) {
+            renderExtHead();
+            if (el._redraw) el._redraw();
+          }
         }
       });
       es.addEventListener("messages", (ev) => { el._msgs = null; el._older = null; show(JSON.parse(ev.data)); }); // an older computer
@@ -3660,21 +3664,27 @@
       }
       if (m.kind === "ask") {
         // A question to you: AskUserQuestion is answered in the app it runs
-        // in; the Claude app's end-of-turn buttons just send their label.
+        // in; end-of-turn / Codex async question options send their label as a reply.
         const later = msgs.slice(i + 1).some((x) => x.kind === "user");
-        const box = m.name === "wrap_up";
-        const open = box ? !later : !m.output;
-        const opts = (m.options || []).map((o) => box && open
+        const replyable = m.name === "wrap_up" || m.name === "request_user_input_async";
+        const open = replyable ? !later && !m.output : !m.output && !later;
+        const form = el.closest("section.view")?.querySelector("form.composer:not([hidden])");
+        const canReplyHere = replyable && !/\n2\.\s/.test(m.text || "") && (!form || !form.querySelector("textarea")?.disabled);
+        const opts = (m.options || []).map((o) => canReplyHere && open
           ? `<button type="button" class="btn small" data-act="ask-reply" data-text="${esc(o)}">${esc(o)}</button>`
           : `<span class="opt">${esc(o)}</span>`).join("");
+        const whereHint = open && !canReplyHere
+          ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
+            ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
+            : m.name === "request_user_input_async"
+              ? `<div class="where">${form && !form.querySelector("textarea")?.disabled ? "在下方输入框直接回复即可继续" : "可在电脑端 Codex 直接回答，或等当前后台步骤停下后在此回复"}</div>`
+              : el.id === "thread" ? "" : `<div class="where">在电脑上的会话里回答</div>`)
+          : "";
         html += `<div class="ask-card ${open ? "open" : ""}">`
           + (m.input ? `<div class="recap">${esc(m.input)}</div>` : "")
           + `<div class="q"><span class="dot ${open ? "blocked" : "unknown"}"></span>${esc(m.text)}</div>`
           + (opts ? `<div class="opts">${opts}</div>` : "")
-          + (m.output ? `<div class="answer">${esc(m.output)}</div>`
-            : open && !box ? (el.id === "x-thread" && /^cd-/.test(extCur || "")
-              ? `<div class="where"><button type="button" class="btn small" data-act="ask-reveal">去 Claude 桌面版回答</button><span>这个对话框只能在电脑上答</span></div>`
-              : el.id === "thread" ? "" : `<div class="where">在电脑上的会话里回答</div>`) : "")
+          + (m.output ? `<div class="answer">${esc(m.output)}</div>` : whereHint)
           + `</div>`;
         cut();
         i++;

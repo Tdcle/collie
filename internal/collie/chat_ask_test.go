@@ -2,6 +2,8 @@ package collie
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -16,6 +18,67 @@ func TestAskOf(t *testing.T) {
 	}
 	if m := askOf("mcp__ccd_turn__wrap_up", json.RawMessage(`{"recap":"R"}`)); m == nil || m.Name != "recap" || m.Input != "R" {
 		t.Fatalf("recap only: %+v", m)
+	}
+	// Codex Desktop request_user_input_async (JSON-encoded string arguments, string options)
+	codexAsyncArgs, _ := json.Marshal(`{"questions":[{"title":"这台 Hub 希望怎么访问？","options":["HTTPS 直连","SSH 隧道"]}]}`)
+	cm := askOf("request_user_input_async", codexAsyncArgs)
+	if cm == nil || cm.Kind != "ask" || cm.Name != "request_user_input_async" || cm.Text != "这台 Hub 希望怎么访问？" || len(cm.Options) != 2 || cm.Options[0] != "HTTPS 直连" {
+		t.Fatalf("Codex request_user_input_async: %+v", cm)
+	}
+}
+
+func TestCodexAsyncQuestionTranscriptAndOpenStatus(t *testing.T) {
+	dir := t.TempDir()
+	rollout := filepath.Join(dir, "rollout-test.jsonl")
+
+	lUser := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"现在有打包 zip 的功能，需要加上多选的功能。\n"}]}}`
+	lAsk := `{"type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","arguments":"{\"questions\":[{\"title\":\"用于部署的阿里云控制台现在停在登录页。请在已打开的页面完成登录，然后告诉我；我会继续发布到原网址。\"}]}","call_id":"call_ask_1"}}`
+	lAskOut := `{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_ask_1","output":"{\"accepted\":true}"}}`
+	lAsyncMsg := `{"type":"response_item","payload":{"type":"function_call","name":"send_message_to_user_async","arguments":"{\"message\":\"本地测试已全部通过，等待登录确认。\"}","call_id":"call_msg_1"}}`
+	lTaskDone := `{"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1"}}`
+
+	if err := os.WriteFile(rollout, []byte(lUser+"\n"+lAsk+"\n"+lAskOut+"\n"+lAsyncMsg+"\n"+lTaskDone+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Transcript must surface ask card (open, Output=="") and async assistant message, NOT hide them in tool steps.
+	tr := newTranscript(rollout, "codex")
+	tr.openTail()
+	msgs := tr.view()
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages (user, ask, assistant), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[1].Kind != "ask" || msgs[1].Name != "request_user_input_async" || msgs[1].Output != "" {
+		t.Fatalf("expected unanswered ask card (Output empty despite accepted:true), got %+v", msgs[1])
+	}
+	if msgs[2].Kind != "assistant" || msgs[2].Text != "本地测试已全部通过，等待登录确认。" {
+		t.Fatalf("expected send_message_to_user_async as assistant message, got %+v", msgs[2])
+	}
+
+	// 2. Rollout open-question detector must report true while unanswered (even after task_complete!).
+	if !codexHasOpenQuestion(rollout) {
+		t.Fatal("expected codexHasOpenQuestion=true while request_user_input_async has no user reply")
+	}
+
+	// 3. User answers via Codex Desktop card (<send_user_message_question_reply>):
+	// must NOT be dropped as XML noise and must clear codexHasOpenQuestion!
+	lCardReply := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<send_user_message_question_reply>\n[{\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_ask_1\\\",0]\",\"question\":\"用于部署的阿里云控制台现在停在登录页...\",\"answer\":\"已登录\"}]\n</send_user_message_question_reply>\n"}]}}`
+	f, err := os.OpenFile(rollout, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(lCardReply + "\n")
+	f.Close()
+
+	if !tr.update() {
+		t.Fatal("expected tr.update()=true on <send_user_message_question_reply>")
+	}
+	msgs = tr.view()
+	if len(msgs) != 4 || msgs[3].Kind != "user" || msgs[3].Text != "已登录" {
+		t.Fatalf("expected clean user reply '已登录', got %+v", msgs)
+	}
+	if codexHasOpenQuestion(rollout) {
+		t.Fatal("expected codexHasOpenQuestion=false after user answered")
 	}
 }
 

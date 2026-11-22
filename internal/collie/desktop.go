@@ -53,6 +53,7 @@ type desktopRow struct {
 	path, format        string
 	created, updated    time.Time
 	running             bool // the app says a turn is running (Codex, Antigravity)
+	asking              bool // Codex has an unanswered request_user_input question
 	waiting             bool // stopped, with something still to come (an Antigravity timer)
 	run                 *[2]string
 }
@@ -118,8 +119,10 @@ func (s *Server) desktopSessions(regs map[int]*claudeReg, listed map[string]bool
 				e.CanTakeOver = (e.path != "" || e.Session != "") && e.Cwd != ""
 			}
 		case "codex":
-			e.Live = d.running
-			if d.running {
+			e.Live = d.running || d.asking
+			if d.asking {
+				e.Status = "blocked"
+			} else if d.running {
 				e.Status = "working"
 			}
 			canResume := !d.running && e.Session != "" && e.Cwd != ""
@@ -557,6 +560,7 @@ func (s *Server) codexAppRows() []desktopRow {
 		if isFile(rollout) {
 			d.path, d.format = rollout, "codex"
 			d.running = codexTurnRunning(rollout)
+			d.asking = codexHasOpenQuestion(rollout)
 		}
 		rows = append(rows, d)
 	}
@@ -578,6 +582,114 @@ func codexTurnRunning(path string) bool {
 		return false
 	}
 	return lastTurnOpen(f, fi.Size())
+}
+
+// codexHasOpenQuestion reports whether the tail of a recent Codex rollout has
+// an unanswered `request_user_input` / `request_user_input_async` question to
+// the human (so sidebar, header, and Feishu notifications surface `blocked`).
+func codexHasOpenQuestion(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() == 0 || time.Since(fi.ModTime()) > 24*time.Hour {
+		return false
+	}
+	const tailWindow = 512 << 10
+	off := max(fi.Size()-tailWindow, int64(0))
+	buf := make([]byte, fi.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+		return false
+	}
+	if !bytes.Contains(buf, []byte("request_user_input")) {
+		return false
+	}
+	lines := bytes.Split(buf, []byte{'\n'})
+	startIdx := 0
+	if off > 0 && len(lines) > 1 {
+		startIdx = 1 // skip potentially truncated first line
+	}
+	type openAsk struct {
+		seq   int
+		async bool
+	}
+	openByCall := map[string]openAsk{}
+	lastAskSeq := -1
+	lastUserSeq := -1
+	for i := startIdx; i < len(lines); i++ {
+		l := bytes.TrimSpace(lines[i])
+		if len(l) == 0 || !bytes.Contains(l, []byte(`"response_item"`)) {
+			if bytes.Contains(l, []byte(`"turn_aborted"`)) {
+				lastUserSeq = i
+			}
+			continue
+		}
+		if bytes.Contains(l, []byte(`"function_call"`)) && bytes.Contains(l, []byte(`"request_user_input`)) {
+			var ev struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Type   string `json:"type"`
+					Name   string `json:"name"`
+					CallID string `json:"call_id"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(l, &ev) == nil && ev.Type == "response_item" && ev.Payload.Type == "function_call" &&
+				(ev.Payload.Name == "request_user_input" || ev.Payload.Name == "request_user_input_async") {
+				isAsync := ev.Payload.Name == "request_user_input_async"
+				if ev.Payload.CallID != "" {
+					openByCall[ev.Payload.CallID] = openAsk{seq: i, async: isAsync}
+				}
+				lastAskSeq = i
+			}
+			continue
+		}
+		if bytes.Contains(l, []byte(`"function_call_output"`)) && len(openByCall) > 0 {
+			var ev struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Type   string          `json:"type"`
+					CallID string          `json:"call_id"`
+					Output json.RawMessage `json:"output"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(l, &ev) == nil && ev.Type == "response_item" && ev.Payload.CallID != "" {
+				if oa, ok := openByCall[ev.Payload.CallID]; ok && !oa.async {
+					txt, _ := textAndImagesOf(ev.Payload.Output)
+					if formatCodexAskOutput("request_user_input", txt) != "" {
+						delete(openByCall, ev.Payload.CallID)
+					}
+				}
+			}
+			continue
+		}
+		if bytes.Contains(l, []byte(`"role":"user"`)) {
+			var ev struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Type    string          `json:"type"`
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(l, &ev) == nil && ev.Type == "response_item" && ev.Payload.Type == "message" && ev.Payload.Role == "user" {
+				txt := strings.TrimSpace(textOf(ev.Payload.Content))
+				if _, isReply := parseCodexQuestionReply(txt); isReply || !noise(txt) {
+					lastUserSeq = i
+				}
+			}
+		}
+	}
+	if lastAskSeq < 0 || lastUserSeq > lastAskSeq {
+		return false
+	}
+	for _, oa := range openByCall {
+		if oa.seq > lastUserSeq {
+			return true
+		}
+	}
+	return len(openByCall) == 0 && lastAskSeq > lastUserSeq
 }
 
 func lastTurnOpen(r io.ReaderAt, size int64) bool {
