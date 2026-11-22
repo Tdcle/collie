@@ -515,7 +515,11 @@ func (s *Server) collectAllExternal(forceFresh bool) []*External {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, m := range s.herdr.Machines() {
-		if m.Local || !m.Online {
+		if m.Local {
+			continue
+		}
+		if !m.Online {
+			all = append(all, s.offlineExternalSnapshot(m.ID)...)
 			continue
 		}
 		if !forceFresh {
@@ -616,7 +620,55 @@ func (s *Server) refreshRemoteExternal(m Machine) []*External {
 		c.at, c.list = time.Now(), list
 	}
 	r.Unlock()
+	if list != nil {
+		s.saveExternalSnapshot(m.ID, list)
+	}
 	return list
+}
+
+func (s *Server) saveExternalSnapshot(machine string, list []*External) {
+	if machine == "" || s.sup == nil || s.sup.db == nil {
+		return
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return
+	}
+	_, _ = s.sup.db.Exec(`INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, "ext_snapshot:"+machine, string(b))
+}
+
+func (s *Server) offlineExternalSnapshot(machine string) []*External {
+	if machine == "" {
+		return nil
+	}
+	var src []*External
+	remoteExternal.Lock()
+	if c := remoteExternal.m[machine]; c != nil && len(c.list) > 0 {
+		src = c.list
+	}
+	remoteExternal.Unlock()
+	if len(src) == 0 && s.sup != nil && s.sup.db != nil {
+		var raw string
+		if s.sup.db.QueryRow(`SELECT v FROM kv WHERE k=?`, "ext_snapshot:"+machine).Scan(&raw) == nil && raw != "" {
+			_ = json.Unmarshal([]byte(raw), &src)
+		}
+	}
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*External, 0, len(src))
+	for _, e := range src {
+		if e == nil {
+			continue
+		}
+		cp := *e
+		cp.Live = false
+		cp.Status = ""
+		cp.CanSend = false
+		cp.CanTakeOver = false
+		out = append(out, &cp)
+	}
+	return out
 }
 
 func (s *Server) fetchRemoteExternal(m Machine) []*External {

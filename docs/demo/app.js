@@ -2701,14 +2701,17 @@
           const hasBlocked = items.some((x) => x.isBlocked);
           const hasRunning = items.some((x) => x.isRunning);
           const open = sideStatus ? true : (hasActive || isProjOpen(p.id));
+          const mOn = extOnline({ machine: p.machine });
           const where = many && sideMachine === null ? machineName(p.machine) : "";
-          const badgeParts = [where, items.length ? String(items.length) : ""].filter(Boolean).join(" · ");
+          const badgeParts = [where, !mOn ? "离线" : "", items.length ? String(items.length) : ""].filter(Boolean).join(" · ");
           const collapsedDot = !open && (hasBlocked || hasRunning)
             ? `<span class="dot ${hasBlocked ? "blocked" : "working"}"></span>` : "";
           const childHTML = open
             ? `<ul class="list proj-sessions">${items.length
                 ? items.map((x) => x.html).join("")
-                : `<li><button type="button" class="empty-proj-sess" data-proj-new="${esc(p.id)}">${PLUS_ICO}<span>在此项目新建会话</span></button></li>`
+                : !mOn
+                  ? `<li class="empty-hint">${esc(machineName(p.machine))} 当前离线，重连后自动同步会话</li>`
+                  : `<li><button type="button" class="empty-proj-sess" data-proj-new="${esc(p.id)}">${PLUS_ICO}<span>在此项目新建会话</span></button></li>`
               }</ul>`
             : "";
           return `<div class="proj-node ${open ? "open" : ""}" data-proj-id="${esc(p.id)}">
@@ -2922,6 +2925,14 @@
       es.addEventListener("gone", () => { closeExt(); if (mine()) renderExtHead(true); });
       es.onerror = () => {
         if (es.readyState !== EventSource.CLOSED || extStream !== es || !mine()) return;
+        const curE = ext.find((x) => x.id === id);
+        if (curE && !extOnline(curE)) {
+          if (!el.querySelector(".msg")) {
+            el.innerHTML = `<div class="thread-empty">${esc(machineName(curE.machine))} 当前离线，电脑重新连接后即可加载对话内容并继续发消息。</div>`;
+          }
+          setTimeout(() => { if (extStream === es && mine()) connect(); }, 5000);
+          return;
+        }
         if (++tries > 20) { renderExtHead(true); return; }
         if (!el.querySelector(".msg")) el.innerHTML = `<div class="thread-empty">连不上那台电脑，正在重试…</div>`;
         setTimeout(() => { if (extStream === es && mine()) connect(); }, Math.min(1000 * tries, 5000));
