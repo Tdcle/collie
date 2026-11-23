@@ -228,7 +228,7 @@ func larkCard(ns []notice, base string) string {
 	}
 	for _, n := range ns {
 		switch {
-		case n.tone == "blocked":
+		case n.needsYou():
 			title, color = n.label(), "orange"
 		case n.tone == "error" && color != "orange":
 			title, color = n.label(), "red"
@@ -245,6 +245,13 @@ func larkCard(ns []notice, base string) string {
 		}
 		if len(ns) > 1 && n.tone != "" && n.tone != "collie" {
 			t = "**" + n.label() + "**\n" + t
+		}
+		if len(n.options) > 0 {
+			var opts []string
+			for _, o := range n.options {
+				opts = append(opts, "「"+larkEscape(o)+"」")
+			}
+			t += "\n\n<font color='grey'>可选：" + strings.Join(opts, " · ") + "</font>"
 		}
 		els = append(els, map[string]any{"tag": "markdown", "content": t})
 	}
@@ -316,11 +323,14 @@ var mdMarks = strings.NewReplacer("**", "", "__", "", "`", "")
 
 func cardSummary(ns []notice) string {
 	pick := ns[len(ns)-1]
-	for _, tone := range []string{"error", "blocked"} {
-		for _, n := range ns {
-			if n.tone == tone {
-				pick = n
-			}
+	for _, n := range ns {
+		if n.tone == "error" {
+			pick = n
+		}
+	}
+	for _, n := range ns {
+		if n.needsYou() {
+			pick = n
 		}
 	}
 	for _, l := range strings.Split(pick.text, "\n") {

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -130,15 +131,16 @@ func progressHash(screen string) string {
 
 // ---------------------------------------------------------------- outbox & notifications
 
-func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote) {
+func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote, check bool, opts ...string) {
 	if sp.st.Settings.NotifyWebhook == "" && !sp.st.Settings.NotifyLark {
 		return
 	}
-	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" {
+	if sp.st.Settings.NotifyLevel == "quiet" && role == "collie" && len(opts) == 0 && !check {
 		return
 	}
 	hash := "/#/collie"
 	btnLabel := "打开 Collie 对话"
+	needsYou := tone == "blocked" || len(opts) > 0 || check
 	if re != nil && re.Worker != "" {
 		if w := sp.st.Workers[re.Worker]; w != nil && w.PaneID != "" && !w.Ended {
 			hash = "/#/p/" + url.PathEscape(w.PaneID)
@@ -148,15 +150,17 @@ func (sp *Super) queueNotifyLocked(role, text, tone string, re *Quote) {
 				btnLabel = "打开该任务会话"
 			}
 		}
-	} else if tone == "blocked" {
+	} else if needsYou {
 		btnLabel = "前往处理确认"
 	}
-	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re, hash: hash, btnLabel: btnLabel})
+	sp.notifyBuf = append(sp.notifyBuf, notice{tone: tone, text: text, re: re, options: opts, check: check, hash: hash, btnLabel: btnLabel})
 }
 
 type notice struct {
 	tone, text string
 	re         *Quote
+	options    []string
+	check      bool
 	title      string
 	hash       string
 	btnLabel   string
@@ -215,7 +219,133 @@ func (sp *Super) collieQuoteLocked(id string) *Quote {
 			return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
 		}
 	}
+	if sp.db != nil {
+		var raw string
+		var e Entry
+		if sp.db.QueryRow(`SELECT data FROM entries WHERE id = ?`, id).Scan(&raw) == nil &&
+			json.Unmarshal([]byte(raw), &e) == nil && e.Role == "collie" {
+			return &Quote{Entry: e.ID, Who: "Collie", Text: clip(e.Text, 600)}
+		}
+	}
 	return nil
+}
+
+// pendingMaxAge bounds unanswered quick-option or --check prompts so forgotten
+// topics from past weeks never pile up as stale badges.
+const pendingMaxAge = 7 * 24 * time.Hour
+
+// PendingItem is one Collie message in chat:main (--opt or --check) still
+// awaiting the human's answer, review or dismissal.
+type PendingItem struct {
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Summary string    `json:"summary"`
+	Options []string  `json:"options,omitempty"`
+	Check   bool      `json:"check,omitempty"`
+}
+
+// Dismiss marks one pending message as handled/ignored by the human and persists it.
+func (sp *Super) Dismiss(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	sp.mu.Lock()
+	if sp.st.Dismissed == nil {
+		sp.st.Dismissed = map[string]bool{}
+	}
+	changed := !sp.st.Dismissed[id]
+	if changed {
+		sp.st.Dismissed[id] = true
+		sp.changed()
+	}
+	hasDB := sp.db != nil
+	sp.mu.Unlock()
+	if changed && hasDB {
+		sp.flush()
+	}
+}
+
+// pendingLocked computes unanswered --opt and --check Collie messages in chat:main.
+func (sp *Super) pendingLocked(now time.Time) []PendingItem {
+	es := sp.st.Entries
+	var out []PendingItem
+	for i, e := range es {
+		if e.Role != "collie" || (e.Thread != "" && e.Thread != mainThread) || e.ID == "" {
+			continue
+		}
+		if len(e.Options) == 0 && !e.Check {
+			continue
+		}
+		if sp.st.Dismissed[e.ID] {
+			continue
+		}
+		if !now.IsZero() && !e.At.IsZero() && now.Sub(e.At) > pendingMaxAge {
+			continue
+		}
+		opts := cleanOptions(e.Options)
+		if len(opts) == 0 && !e.Check {
+			continue
+		}
+		resolved, otherCollie := false, false
+		for j := i + 1; j < len(es); j++ {
+			next := es[j]
+			if next.Thread != "" && next.Thread != mainThread {
+				continue
+			}
+			switch next.Role {
+			case "user":
+				reID := ""
+				if next.Re != nil {
+					reID = next.Re.Entry
+				}
+				if reID == e.ID || (reID == "" && !otherCollie) {
+					resolved = true
+				}
+			case "collie":
+				otherCollie = true
+			}
+			if resolved {
+				break
+			}
+		}
+		if !resolved {
+			out = append(out, PendingItem{
+				ID:      e.ID,
+				At:      e.At,
+				Summary: pendingSummary(e.Text, opts),
+				Options: opts,
+				Check:   len(opts) == 0 && e.Check,
+			})
+		}
+	}
+	return out
+}
+
+var (
+	pendingFenceRe = regexp.MustCompile("(?s)```.*?```")
+	pendingImgRe   = regexp.MustCompile(`\[image:[^\]]+\]`)
+	pendingLinkRe  = regexp.MustCompile(`\[([^\]\n]+)\]\([^)\n]+\)`)
+	pendingListRe  = regexp.MustCompile(`^\s*(?:[#>*•\-]+|\d+[.)])\s+`)
+)
+
+func pendingSummary(text string, opts []string) string {
+	s := pendingFenceRe.ReplaceAllString(text, " ")
+	s = pendingImgRe.ReplaceAllString(s, " ")
+	s = pendingLinkRe.ReplaceAllString(s, "$1")
+	var parts []string
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimSpace(pendingListRe.ReplaceAllString(l, ""))
+		l = strings.TrimSpace(mdMarks.Replace(l))
+		if l != "" {
+			parts = append(parts, l)
+		}
+	}
+	out := oneLine(strings.Join(parts, " "))
+	if out == "" {
+		out = strings.Join(opts, " / ")
+	}
+	return clip(out, 120)
 }
 
 func humanText(t string) string {
@@ -231,14 +361,18 @@ func humanText(t string) string {
 	return strings.TrimSpace(t)
 }
 
+func (n notice) needsYou() bool {
+	return n.tone == "blocked" || len(n.options) > 0 || n.check
+}
+
 func (n notice) label() string {
 	if n.title != "" {
 		return n.title
 	}
-	switch n.tone {
-	case "blocked":
+	switch {
+	case n.needsYou():
 		return "Collie · 需要你"
-	case "error":
+	case n.tone == "error":
 		return "Collie · 出错了"
 	}
 	return "Collie"
@@ -250,6 +384,9 @@ func noticesText(ns []notice) string {
 		p := n.label() + "：" + clip(n.text, 400)
 		if n.re != nil {
 			p = "↩ " + n.re.line() + "\n" + p
+		}
+		if len(n.options) > 0 {
+			p += "\n可选：" + strings.Join(n.options, " / ")
 		}
 		parts = append(parts, p)
 	}

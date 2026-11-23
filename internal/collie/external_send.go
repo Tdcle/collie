@@ -280,6 +280,7 @@ type codexRPC struct {
 	mu      sync.Mutex
 	next    int64
 	pending map[int64]chan codexReply
+	onNotif func(method string, params json.RawMessage)
 }
 
 type codexReply struct {
@@ -315,14 +316,27 @@ func dialCodex(ctx context.Context, sock string) (*codexRPC, error) {
 			var m struct {
 				ID     *int64          `json:"id"`
 				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
 				Result json.RawMessage `json:"result"`
 				Error  *struct {
 					Code    int    `json:"code"`
 					Message string `json:"message"`
 				} `json:"error"`
 			}
-			if json.Unmarshal(b, &m) != nil || m.ID == nil || m.Method != "" {
-				continue // notifications and server requests: not ours to answer
+			if json.Unmarshal(b, &m) != nil {
+				continue
+			}
+			if m.ID == nil && m.Method != "" {
+				c.mu.Lock()
+				fn := c.onNotif
+				c.mu.Unlock()
+				if fn != nil {
+					fn(m.Method, m.Params)
+				}
+				continue
+			}
+			if m.ID == nil || m.Method != "" {
+				continue // server requests: not ours to answer
 			}
 			c.mu.Lock()
 			ch := c.pending[*m.ID]
@@ -522,13 +536,130 @@ func (s *Server) codexMarkThreadRead(ctx context.Context, thread string) {
 	}, nil)
 }
 
-func (s *Server) watchCodexBgTurnCompletion(thread, path string) {
+type codexStreamBuf struct {
+	mu      sync.Mutex
+	text    string
+	phase   string
+	itemID  string
+	updated time.Time
+}
+
+var codexStreamHub = struct {
+	sync.Mutex
+	byThread map[string]*codexStreamBuf
+}{byThread: map[string]*codexStreamBuf{}}
+
+func getCodexStreamSnapshot(thread string) (text, phase string) {
+	codexStreamHub.Lock()
+	buf := codexStreamHub.byThread[thread]
+	codexStreamHub.Unlock()
+	if buf == nil {
+		return "", ""
+	}
+	buf.mu.Lock()
+	defer buf.mu.Unlock()
+	if time.Since(buf.updated) > 2*time.Minute {
+		return "", ""
+	}
+	return buf.text, buf.phase
+}
+
+func clearCodexStream(thread string) {
+	codexStreamHub.Lock()
+	delete(codexStreamHub.byThread, thread)
+	codexStreamHub.Unlock()
+}
+
+func appendCodexStreamDelta(thread, itemID, delta, phase string) {
+	if thread == "" || delta == "" {
+		return
+	}
+	codexStreamHub.Lock()
+	buf := codexStreamHub.byThread[thread]
+	if buf == nil {
+		buf = &codexStreamBuf{}
+		codexStreamHub.byThread[thread] = buf
+	}
+	codexStreamHub.Unlock()
+
+	buf.mu.Lock()
+	if itemID != "" && itemID != buf.itemID {
+		buf.itemID = itemID
+		buf.text = ""
+	}
+	if phase != "" {
+		buf.phase = phase
+	}
+	buf.text += delta
+	buf.updated = time.Now()
+	buf.mu.Unlock()
+}
+
+func attachCodexDeltaCapture(c *codexRPC, wantThread string) {
+	c.mu.Lock()
+	c.onNotif = func(method string, params json.RawMessage) {
+		switch method {
+		case "item/started":
+			var p struct {
+				ThreadID string `json:"threadId"`
+				Item     struct {
+					ID    string `json:"id"`
+					Type  string `json:"type"`
+					Phase string `json:"phase"`
+				} `json:"item"`
+			}
+			if json.Unmarshal(params, &p) == nil && (wantThread == "" || p.ThreadID == wantThread) && p.Item.Type == "agentMessage" {
+				codexStreamHub.Lock()
+				buf := codexStreamHub.byThread[p.ThreadID]
+				if buf == nil {
+					buf = &codexStreamBuf{}
+					codexStreamHub.byThread[p.ThreadID] = buf
+				}
+				codexStreamHub.Unlock()
+				buf.mu.Lock()
+				buf.itemID = p.Item.ID
+				buf.phase = p.Item.Phase
+				buf.text = ""
+				buf.updated = time.Now()
+				buf.mu.Unlock()
+			}
+		case "item/agentMessage/delta":
+			var p struct {
+				ThreadID string `json:"threadId"`
+				ItemID   string `json:"itemId"`
+				Delta    string `json:"delta"`
+			}
+			if json.Unmarshal(params, &p) == nil && (wantThread == "" || p.ThreadID == wantThread) {
+				appendCodexStreamDelta(p.ThreadID, p.ItemID, p.Delta, "")
+			}
+		case "item/completed", "turn/completed":
+			var p struct {
+				ThreadID string `json:"threadId"`
+				Item     struct {
+					Type string `json:"type"`
+				} `json:"item"`
+			}
+			if json.Unmarshal(params, &p) == nil && (wantThread == "" || p.ThreadID == wantThread) {
+				if method == "turn/completed" || p.Item.Type == "agentMessage" {
+					clearCodexStream(p.ThreadID)
+				}
+			}
+		}
+	}
+	c.mu.Unlock()
+}
+
+func (s *Server) watchCodexBgTurnCompletion(thread, path string, streamConn *codexRPC) {
 	go func() {
+		if streamConn != nil {
+			defer streamConn.close()
+		}
+		defer clearCodexStream(thread)
 		// Wait briefly for the turn to appear in the rollout, then wait until it finishes.
 		deadline := time.Now().Add(45 * time.Minute)
 		sawRunning := false
 		for i := 0; time.Now().Before(deadline); i++ {
-			time.Sleep(1200 * time.Millisecond)
+			time.Sleep(800 * time.Millisecond)
 			if path == "" {
 				path, _ = s.findCodexRolloutSingle(thread)
 			}
@@ -537,7 +668,7 @@ func (s *Server) watchCodexBgTurnCompletion(thread, path string) {
 				sawRunning = true
 				continue
 			}
-			if sawRunning || i >= 3 {
+			if sawRunning || i >= 4 {
 				if consumeCollieCodexTurn(thread) {
 					s.codexMarkThreadRead(context.Background(), thread)
 				}
@@ -563,11 +694,22 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 	if sock == "" {
 		return errors.New("这台电脑上没有运行 Codex 后台")
 	}
-	c, err := dialCodex(ctx, sock)
+	// Use a background context for the WebSocket connection so it stays open
+	// while the turn runs and streams token deltas into codexStreamHub!
+	bgCtx, bgCancel := context.WithTimeout(context.Background(), 46*time.Minute)
+	c, err := dialCodex(bgCtx, sock)
 	if err != nil {
+		bgCancel()
 		return err
 	}
-	defer c.close()
+	keepOpen := false
+	defer func() {
+		if !keepOpen {
+			c.close()
+			bgCancel()
+		}
+	}()
+	attachCodexDeltaCapture(c, thread)
 	ids, err := c.loaded()
 	if err != nil {
 		return err
@@ -630,7 +772,8 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 		if err := c.call("turn/start", turnParams, nil); err != nil {
 			return err
 		}
-		s.watchCodexBgTurnCompletion(thread, read.Thread.Path)
+		keepOpen = true
+		s.watchCodexBgTurnCompletion(thread, read.Thread.Path, c)
 		s.invalidateExternalCaches()
 		return nil
 	}
@@ -639,10 +782,11 @@ func (s *Server) codexDaemonSend(ctx context.Context, thread, text, model, effor
 	if err := c.call("turn/start", turnParams, nil); err != nil {
 		return err
 	}
-	// Keep the thread loaded while its turn runs so mid-turn steering (`turn/steer`)
-	// and task interruption (`turn/interrupt`) work from Collie; watchCodexBgTurnCompletion
-	// marks the turn read and unsubscribes automatically as soon as it finishes.
-	s.watchCodexBgTurnCompletion(thread, read.Thread.Path)
+	// Keep the thread loaded and the WebSocket open while its turn runs so
+	// token-by-token `item/agentMessage/delta` streaming, mid-turn steering
+	// (`turn/steer`) and interruption (`turn/interrupt`) all work seamlessly!
+	keepOpen = true
+	s.watchCodexBgTurnCompletion(thread, read.Thread.Path, c)
 	s.invalidateExternalCaches()
 	return nil
 }

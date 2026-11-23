@@ -1,7 +1,7 @@
 // Collie Cross-Machine Artifact Cards & Rich File Viewer Module (zero-build).
 // Detects non-image deliverables (.pdf, .docx, .xlsx, .pptx, .csv, .tsv, .tex,
 // .zip, .html, .ipynb, .md, etc.) mentioned in messages, renders compact
-// preview/download cards, and renders inline PDF / CSV-table / Markdown previews.
+// preview/download cards, and renders inline PDF / CSV-table / Office previews.
 (() => {
   "use strict";
 
@@ -11,28 +11,28 @@
   ]);
 
   const BADGE_META = {
-    pdf: { badge: "PDF", tone: "pdf", canPreview: true },
-    csv: { badge: "CSV", tone: "sheet", canPreview: true },
-    tsv: { badge: "TSV", tone: "sheet", canPreview: true },
-    xls: { badge: "XLS", tone: "sheet", canPreview: false },
-    xlsx: { badge: "XLSX", tone: "sheet", canPreview: false },
-    doc: { badge: "DOC", tone: "doc", canPreview: false },
-    docx: { badge: "DOCX", tone: "doc", canPreview: false },
-    ppt: { badge: "PPT", tone: "slide", canPreview: false },
-    pptx: { badge: "PPTX", tone: "slide", canPreview: false },
-    zip: { badge: "ZIP", tone: "zip", canPreview: false },
-    tar: { badge: "TAR", tone: "zip", canPreview: false },
-    gz: { badge: "GZ", tone: "zip", canPreview: false },
-    tgz: { badge: "TGZ", tone: "zip", canPreview: false },
-    "7z": { badge: "7Z", tone: "zip", canPreview: false },
-    rar: { badge: "RAR", tone: "zip", canPreview: false },
-    tex: { badge: "TeX", tone: "code", canPreview: true },
-    bib: { badge: "BIB", tone: "code", canPreview: true },
-    ipynb: { badge: "IPYNB", tone: "code", canPreview: true },
-    html: { badge: "HTML", tone: "code", canPreview: true },
-    json: { badge: "JSON", tone: "code", canPreview: true },
-    md: { badge: "MD", tone: "doc", canPreview: true },
-    markdown: { badge: "MD", tone: "doc", canPreview: true },
+    pdf: { badge: "PDF", tone: "is-pdf", canPreview: true },
+    csv: { badge: "CSV", tone: "is-table", canPreview: true },
+    tsv: { badge: "TSV", tone: "is-table", canPreview: true },
+    xls: { badge: "XLS", tone: "is-table", canPreview: false },
+    xlsx: { badge: "XLSX", tone: "is-table", canPreview: false },
+    doc: { badge: "DOC", tone: "is-doc", canPreview: false },
+    docx: { badge: "DOCX", tone: "is-doc", canPreview: false },
+    ppt: { badge: "PPT", tone: "is-slide", canPreview: false },
+    pptx: { badge: "PPTX", tone: "is-slide", canPreview: false },
+    zip: { badge: "ZIP", tone: "is-zip", canPreview: false },
+    tar: { badge: "TAR", tone: "is-zip", canPreview: false },
+    gz: { badge: "GZ", tone: "is-zip", canPreview: false },
+    tgz: { badge: "TGZ", tone: "is-zip", canPreview: false },
+    "7z": { badge: "7Z", tone: "is-zip", canPreview: false },
+    rar: { badge: "RAR", tone: "is-zip", canPreview: false },
+    tex: { badge: "TeX", tone: "is-code", canPreview: true },
+    bib: { badge: "BIB", tone: "is-code", canPreview: true },
+    ipynb: { badge: "IPYNB", tone: "is-code", canPreview: true },
+    html: { badge: "HTML", tone: "is-code", canPreview: true },
+    json: { badge: "JSON", tone: "is-code", canPreview: true },
+    md: { badge: "MD", tone: "is-doc", canPreview: true },
+    markdown: { badge: "MD", tone: "is-doc", canPreview: true },
   };
 
   // Matches angle-bracketed links <C:/path with spaces/report.pdf> and standard paths ~/a/b.docx, /tmp/x.pdf, D:\rev\paper.pdf
@@ -48,7 +48,6 @@
 
   function extractArtifacts(text) {
     if (!text) return [];
-    // Strip fenced code blocks so multi-line bash/python snippets don't clutter cards, while keeping inline `path.pdf` references!
     const stripped = String(text).replace(/```[\s\S]*?(```|$)/g, " ");
     const rawHits = [];
     for (const m of stripped.matchAll(ANGLE_FILE_RE)) rawHits.push(m[1]);
@@ -62,25 +61,25 @@
       raw = raw.replace(/:\d+(?:[-:]\d+)?$/, "").trim();
       const ext = extOf(raw);
       if (!ARTIFACT_EXTS.has(ext)) continue;
-      // Ignore hidden internal config files like ~/.claude/settings.json
       if (/[\\\/]\.(?:claude|codex|collie|gemini)[\\\/]/i.test(raw)) continue;
       if (seen.has(raw)) continue;
       seen.add(raw);
-      out.push({ path: raw, ext, meta: BADGE_META[ext] || { badge: ext.toUpperCase(), tone: "doc", canPreview: false } });
+      out.push({ path: raw, ext, meta: BADGE_META[ext] || { badge: ext.toUpperCase(), tone: "is-doc", canPreview: false } });
       if (out.length >= 6) break;
     }
     return out;
   }
 
-  function parseDelimitedTable(text, sep = ",", maxRows = 120) {
+  function parseDelimitedTable(text, sep = ",", maxRows = 150) {
+    const clean = String(text || "").replace(/^\uFEFF/, "");
     const rows = [];
     let cur = [], field = "", inQuotes = false;
-    const n = text.length;
+    const n = clean.length;
     for (let i = 0; i < n; i++) {
-      const ch = text[i];
+      const ch = clean[i];
       if (inQuotes) {
         if (ch === '"') {
-          if (text[i + 1] === '"') { field += '"'; i++; }
+          if (clean[i + 1] === '"') { field += '"'; i++; }
           else inQuotes = false;
         } else {
           field += ch;
@@ -90,7 +89,7 @@
       } else if (ch === sep) {
         cur.push(field); field = "";
       } else if (ch === "\n" || ch === "\r") {
-        if (ch === "\r" && text[i + 1] === "\n") i++;
+        if (ch === "\r" && clean[i + 1] === "\n") i++;
         cur.push(field); field = "";
         if (cur.length > 1 || (cur[0] || "").trim() !== "") rows.push(cur);
         cur = [];
@@ -106,8 +105,10 @@
     return rows;
   }
 
+  const NUM_CELL_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?%?$/;
+
   function initArtifacts(deps) {
-    const { $, esc, tilde, fmtSize, toast, routeReq, fileTries, findFile, machineName, getMachinesCount, mdRender, showFilePane } = deps;
+    const { $, esc, tilde, fmtSize, toast, routeReq, fileTries, machineName, getMachinesCount, mdRender, setFileHead } = deps;
 
     function artifactsIn(text) {
       const list = extractArtifacts(text);
@@ -174,9 +175,9 @@
       const where = getMachinesCount() > 1 ? machineName(f.machine) + " · " : "";
       $("#fv-path").textContent = where + f.path + (f.size ? " · " + fmtSize(f.size) : "");
 
-      const dlBar = `<div class="fv-toolbar">
+      const makeToolbar = (extra = "") => `<div class="fv-toolbar">
         <span class="fv-kind-pill">${esc((BADGE_META[ext]?.badge) || ext.toUpperCase() || f.kind.toUpperCase())}</span>
-        <span class="muted">${fmtSize(f.size)}</span>
+        ${extra ? `<span class="fv-dim-meta">${extra}</span>` : `<span class="muted">${fmtSize(f.size)}</span>`}
         <span class="spacer"></span>
         <button type="button" class="btn small" id="fv-top-dl-btn">下载到本地</button>
       </div>`;
@@ -186,7 +187,6 @@
       };
 
       if (f.kind === "pdf") {
-        // Fetch with as=pdf if needed or construct PDF Blob directly
         let pdfBlob = f.blob;
         if (!pdfBlob || pdfBlob.size === 0) {
           const q = `/api/file?path=${encodeURIComponent(path)}${f.machine ? "&machine=" + encodeURIComponent(f.machine) : ""}&as=pdf`;
@@ -195,8 +195,10 @@
           if (res.ok) pdfBlob = await res.blob();
         }
         if (pdfBlob && pdfBlob.size > 0) {
+          if (setFileHead) setFileHead("PDF", "", false);
+          body.classList.add("is-flush");
           const url = setObjectURL(new Blob([pdfBlob], { type: "application/pdf" }));
-          body.innerHTML = `${dlBar}<iframe class="fv-pdf" src="${url}#toolbar=1&navpanes=0" title="${esc(path)}"></iframe>`;
+          body.innerHTML = `${makeToolbar()}<iframe class="fv-pdf" src="${url}#toolbar=1&navpanes=0" title="${esc(path)}"></iframe>`;
           bindDl();
           return true;
         }
@@ -204,14 +206,31 @@
 
       if (f.kind === "csv" || ext === "csv" || ext === "tsv") {
         const text = await f.blob.text();
-        const rows = parseDelimitedTable(text, ext === "tsv" ? "\t" : ",", 120);
+        const rows = parseDelimitedTable(text, ext === "tsv" ? "\t" : ",", 150);
         if (rows.length >= 1) {
-          const head = rows[0];
-          const dataRows = rows.slice(1, 101);
-          const moreNote = rows.length > 101 ? `<p class="fv-note muted">表格较大，预览前 100 行数据；完整数据可点击右上角下载。</p>` : "";
-          body.innerHTML = `${dlBar}<div class="fv-csv-wrap"><table class="fv-csv">
-            <thead><tr>${head.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
-            <tbody>${dataRows.map((r) => `<tr>${head.map((_, i) => `<td>${esc(r[i] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody>
+          if (setFileHead) setFileHead(ext === "tsv" ? "TSV" : "CSV", text, true);
+          body.classList.add("is-flush");
+          const colCount = rows.reduce((m, r) => Math.max(m, r.length), rows[0].length);
+          const head = Array.from({ length: colCount }, (_, i) => (rows[0][i] ?? "").trim() || `Col ${i + 1}`);
+          const dataRows = rows.slice(1, 121);
+          const isNumCol = head.map((_, ci) => {
+            let nums = 0, nonEmpty = 0;
+            for (const r of dataRows) {
+              const v = (r[ci] ?? "").trim();
+              if (!v) continue;
+              nonEmpty++;
+              if (NUM_CELL_RE.test(v)) nums++;
+            }
+            return nonEmpty > 0 && nums / nonEmpty >= 0.8;
+          });
+          const dimInfo = `${dataRows.length}${rows.length > 121 ? "+" : ""} 行 × ${colCount} 列 · ${fmtSize(f.size)}`;
+          const moreNote = rows.length > 121 ? `<p class="fv-note muted" style="padding:0 14px 16px">表格较大，在线展示前 120 行；完整数据可点击右上角「下载到本地」。</p>` : "";
+          body.innerHTML = `${makeToolbar(esc(dimInfo))}<div class="fv-csv-wrap"><table class="fv-csv" id="fv-code-src">
+            <thead><tr><th class="idx">#</th>${head.map((c, ci) => `<th class="${isNumCol[ci] ? "num" : ""}" title="${esc(c)}">${esc(c)}</th>`).join("")}</tr></thead>
+            <tbody>${dataRows.map((r, ri) => `<tr><td class="idx">${ri + 1}</td>${head.map((_, ci) => {
+              const v = (r[ci] ?? "").trim();
+              return `<td class="${isNumCol[ci] ? "num" : ""}" title="${esc(v)}">${esc(v)}</td>`;
+            }).join("")}</tr>`).join("")}</tbody>
           </table></div>${moreNote}`;
           bindDl();
           return true;
@@ -219,6 +238,7 @@
       }
 
       if (f.kind === "office" || f.kind === "archive" || f.kind === "binary") {
+        if (setFileHead) setFileHead((BADGE_META[ext]?.badge) || "", "", false);
         const typeDesc = f.kind === "office" ? "Office 文档（Word / Excel / PPT）" : f.kind === "archive" ? "压缩归档包" : "二进制文件";
         const canDl = f.size > 0 && f.size <= (50 << 20);
         body.innerHTML = `<div class="fv-binary-card">
@@ -233,20 +253,15 @@
 
       if (f.kind === "markdown" || /\.(md|markdown|mdx)$/i.test(path)) {
         const text = await f.blob.text();
-        const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件共 ${fmtSize(f.size)}，当前预览前 1 MB。</p>` : "";
-        body.innerHTML = `${dlBar}<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}`;
+        if (setFileHead) setFileHead("Markdown", text, true);
+        body.classList.add("is-flush");
+        const cut = f.size > f.blob.size ? `<p class="fv-note muted" style="padding:0 20px 16px">文件共 ${fmtSize(f.size)}，当前预览前 1 MB。</p>` : "";
+        body.innerHTML = `${makeToolbar()}<div class="msg assistant fv-md" id="fv-code-src" style="padding:14px 20px 24px">${mdRender(text)}</div>${cut}`;
         bindDl();
         return true;
       }
 
-      if (f.kind === "text") {
-        const text = await f.blob.text();
-        const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件共 ${fmtSize(f.size)}，当前预览前 1 MB。</p>` : "";
-        body.innerHTML = `${dlBar}<pre class="fv-pre">${esc(text)}</pre>${cut}`;
-        bindDl();
-        return true;
-      }
-
+      // Let openFile render source code / plain text with sticky line numbers + offline syntax highlighting!
       return false;
     }
 

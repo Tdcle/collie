@@ -239,3 +239,4 @@ func findBinPlatform(name, home string) string {
 
 func registerDaemonAutoStart(_, _ string, _ []string) {}
 func unregisterDaemonAutoStart(_ string)              {}
+func applySystemProxyEnv(_ *exec.Cmd)                 {}

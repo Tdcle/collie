@@ -73,6 +73,7 @@ func startHerdrServer() bool {
 	}
 	cmd := exec.Command(bin, "server")
 	cmd.Dir = home
+	applySystemProxyEnv(cmd)
 	detachCmd(cmd) // outlives us, like the one a terminal starts
 	if err := cmd.Start(); err != nil {
 		log.Printf("start herdr server: %v", err)
@@ -92,6 +93,9 @@ func (e *HerdrError) Error() string { return e.Code + ": " + e.Message }
 
 // call sends one request on a fresh connection and returns the raw result.
 func (h *herdrConn) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if h == nil || h.dial == nil {
+		return nil, fmt.Errorf("herdr socket not configured")
+	}
 	if params == nil {
 		params = map[string]any{}
 	}

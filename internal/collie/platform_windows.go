@@ -18,6 +18,7 @@ import (
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 const (
@@ -604,4 +605,75 @@ func unregisterDaemonAutoStart(name string) {
 	)
 	hideCmd(cmd)
 	_ = cmd.Run()
+}
+
+// systemProxyURL reads Windows WinINET Internet Settings (used by Clash / Mihomo /
+// v2rayN / 0dcloud "System Proxy" mode) and returns an http://host:port URL if
+// ProxyEnable == 1 and the local port accepts TCP connections.
+func systemProxyURL() string {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	en, _, err := k.GetIntegerValue("ProxyEnable")
+	if err != nil || en == 0 {
+		return ""
+	}
+	raw, _, err := k.GetStringValue("ProxyServer")
+	if err != nil {
+		return ""
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// ProxyServer can be "127.0.0.1:17891" or "http=127.0.0.1:7890;https=127.0.0.1:7890"
+	picked := raw
+	if strings.Contains(raw, "=") {
+		picked = ""
+		for _, part := range strings.Split(raw, ";") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(strings.ToLower(part), "https=") {
+				picked = strings.TrimSpace(part[6:])
+				break
+			}
+			if strings.HasPrefix(strings.ToLower(part), "http=") && picked == "" {
+				picked = strings.TrimSpace(part[5:])
+			}
+		}
+	}
+	picked = strings.TrimPrefix(strings.TrimPrefix(picked, "http://"), "https://")
+	if picked == "" || !strings.Contains(picked, ":") {
+		return ""
+	}
+	c, err := net.DialTimeout("tcp", picked, 80*time.Millisecond)
+	if err != nil {
+		return ""
+	}
+	_ = c.Close()
+	return "http://" + picked
+}
+
+func applySystemProxyEnv(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if os.Getenv("HTTPS_PROXY") != "" || os.Getenv("https_proxy") != "" || os.Getenv("HTTP_PROXY") != "" || os.Getenv("http_proxy") != "" {
+		return
+	}
+	u := systemProxyURL()
+	if u == "" {
+		return
+	}
+	env := cmd.Env
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	env = append(env,
+		"HTTP_PROXY="+u,
+		"HTTPS_PROXY="+u,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+	)
+	cmd.Env = env
 }

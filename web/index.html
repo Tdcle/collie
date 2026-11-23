@@ -64,7 +64,7 @@
       <a class="nav-item" id="nav-collie" href="#/collie">
         <span class="nav-ico"><img src="/icon.svg" alt=""></span>
         <span class="body"><div class="name">和 Collie 对话</div><div class="sub" id="nav-collie-sub">休眠中</div></span>
-        <span class="dot" id="nav-collie-dot"></span>
+        <span class="nav-right"><span class="count-pill attn" id="nav-pending" hidden></span><span class="dot" id="nav-collie-dot"></span></span>
       </a>
       <div class="side-create">
         <button type="button" class="create-btn" id="btn-new-project" title="绑定常用代码库目录，在左侧顶部固定为项目">
@@ -224,6 +224,10 @@
       </div>
 
       <form class="composer" id="super-composer">
+        <div class="pending-wrap" id="pending-wrap" hidden>
+          <div class="pending-list" id="pending-list" hidden></div>
+          <div class="pending-bar" id="pending-bar"></div>
+        </div>
         <div class="cbox">
           <div class="re-draft" id="re-draft" hidden><span class="re-who">Collie</span><span class="re-t"></span><button type="button" title="取消引用">×</button></div>
           <div class="files" hidden></div>
@@ -360,6 +364,14 @@
     <header class="fv-head">
       <button class="icon-btn fv-back" data-fv-close title="返回"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
       <h3 id="fv-name"></h3>
+      <span class="fv-lang" id="fv-lang" hidden></span>
+      <span class="fv-copy" id="fv-copy-wrap" hidden>
+        <button type="button" class="icon-btn fv-copy-btn" id="fv-copy" title="复制全文" aria-label="复制全文">
+          <svg class="ic-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+          <svg class="ic-ok" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        </button>
+        <span class="fv-copy-tip" role="status" aria-live="polite"></span>
+      </span>
       <button class="icon-btn fv-x" data-fv-close title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
     <p class="muted mono" id="fv-path"></p>
@@ -567,6 +579,7 @@
 <div class="quota-pop" id="quota-pop" hidden></div>
 <div class="toasts" id="toasts"></div>
 
+<script src="/highlight.js"></script>
 <script src="/quota.js"></script>
 <script src="/artifacts.js"></script>
 <script src="/app.js"></script>

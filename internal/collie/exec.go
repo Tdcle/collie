@@ -47,6 +47,7 @@ func runLocalShellCommand(parent context.Context, home, rawCwd, command string, 
 		cmd = exec.CommandContext(ctx, "sh", "-lc", command)
 	}
 	hideCmd(cmd)
+	applySystemProxyEnv(cmd)
 	dir := expandIn(home, rawCwd)
 	if isDir(dir) {
 		cmd.Dir = dir

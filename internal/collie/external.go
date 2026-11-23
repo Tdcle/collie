@@ -745,6 +745,7 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 	first, beat := true, time.Now()
 	checked := time.Now()
 	lastExtSt := ""
+	lastStreamSig := ""
 	lastCanSend := e.CanSend
 	codexLiveState := func(p string) (live bool, st string, canSend bool) {
 		running := codexTurnRunning(p)
@@ -786,6 +787,29 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		first = false
+		if e.Kind == "codex" && e.Session != "" {
+			stxt, sphase := getCodexStreamSnapshot(e.Session)
+			if stxt != "" && tr != nil {
+				msgs := tr.view()
+				for k := len(msgs) - 1; k >= 0; k-- {
+					if msgs[k].Kind == "user" {
+						break
+					}
+					if msgs[k].Kind == "assistant" && strings.TrimSpace(msgs[k].Text) == strings.TrimSpace(stxt) {
+						stxt = ""
+						break
+					}
+				}
+			}
+			sig := sphase + "|" + stxt
+			if sig != lastStreamSig {
+				lastStreamSig = sig
+				if !send("streaming", map[string]any{"text": stxt, "phase": sphase}) {
+					return
+				}
+				beat = time.Now()
+			}
+		}
 		if time.Since(checked) >= time.Second {
 			checked = time.Now()
 			if !e.desktop && !alive(e.PID) {

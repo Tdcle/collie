@@ -1,6 +1,7 @@
 package collie
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -24,6 +26,7 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("GET /api/super/events", s.superEvents)
 	api("POST /api/super/say", s.superSay)
 	api("POST /api/super/reply", s.superReply)
+	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
 	api("POST /api/super/report", s.superReport)
@@ -77,8 +80,10 @@ type superView struct {
 	Router  routerView `json:"router"`
 	Entries []*Entry   `json:"entries"`
 	Earlier bool       `json:"earlier,omitempty"` // older chat than Entries: /api/super/earlier
-	Workers []*Worker  `json:"workers"`
-	Queued  int        `json:"queued"`
+	// Pending: Collie's --opt / --check messages in chat:main still waiting on the human.
+	Pending []PendingItem `json:"pending"`
+	Workers []*Worker     `json:"workers"`
+	Queued  int           `json:"queued"`
 	// QueuedRouter: those waiting for Collie itself, not for a worker.
 	QueuedRouter int  `json:"queued_router"`
 	Paused       bool `json:"paused"`
@@ -131,6 +136,10 @@ func (s *Server) superState(ctx context.Context) superView {
 		v.Earlier = true
 	}
 	v.Entries = append([]*Entry{}, es...)
+	v.Pending = sp.pendingLocked(time.Now())
+	if v.Pending == nil {
+		v.Pending = []PendingItem{}
+	}
 	v.Workers = []*Worker{}
 	for _, w := range sp.st.Workers {
 		if !w.Ended || time.Since(w.CreatedAt) < 12*time.Hour {
@@ -342,35 +351,41 @@ func (s *Server) superSay(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Text   string `json:"text"`
-		Thread string `json:"thread"`
-		Re     string `json:"re"`
+		Text    string   `json:"text"`
+		Thread  string   `json:"thread"`
+		Re      string   `json:"re"`
+		Options []string `json:"options"`
+		Check   bool     `json:"check"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	text := strings.TrimSpace(body.Text)
-	if text == "" {
+	if strings.TrimSpace(body.Text) == "" {
 		writeJSON(w, 400, map[string]any{"error": "empty reply"})
 		return
 	}
-	if body.Thread == "" {
-		body.Thread = mainThread
-	}
-	sp := s.sup
-	sp.mu.Lock()
-	limit := sp.st.Settings.ReplyChars
-	re := sp.quoteLocked(body.Re)
-	e := sp.addEntryReLocked("collie", body.Thread, text, "", "", re)
-	sp.mu.Unlock()
+	e, warn := s.sup.Reply(body.Thread, body.Text, body.Re, body.Options, body.Check)
 	res := map[string]any{"ok": true, "entry": e.ID}
-	if body.Re != "" && re == nil {
-		res["warning"] = "--re " + body.Re + " is not an event or message I know; the reply went out without it"
-	}
-	if n := replyLen(text); limit > 0 && n > limit {
-		res["warning"] = fmt.Sprintf("reply is %d characters; chat replies are usually ≤%d. Fine if the human asked for detail or the result needs a list; otherwise keep the next one shorter", n, limit)
+	if warn != "" {
+		res["warning"] = warn
 	}
 	writeJSON(w, 200, res)
+}
+
+func (s *Server) superDismiss(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	if id == "" {
+		writeJSON(w, 400, map[string]any{"error": "id is required"})
+		return
+	}
+	s.sup.Dismiss(id)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // replyLen is a reply's length as people read it: each Chinese/Japanese/Korean
@@ -498,20 +513,75 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	sp := s.sup
-	sp.mu.Lock()
-	wk := sp.st.Workers[body.To]
-	if wk == nil || wk.Ended {
-		sp.mu.Unlock()
-		writeJSON(w, 404, map[string]any{"error": "no running worker named " + body.To})
+	to := strings.TrimSpace(body.To)
+	text := strings.TrimSpace(body.Text)
+	if to == "" || text == "" {
+		writeJSON(w, 400, map[string]any{"error": "target and text are required"})
 		return
 	}
-	if body.Thread == "" {
-		body.Thread = wk.Thread
+	sp := s.sup
+	sp.mu.Lock()
+	wk := sp.st.Workers[to]
+	if wk != nil && !wk.Ended {
+		th := body.Thread
+		if th == "" {
+			th = wk.Thread
+		}
+		t := sp.ingestLocked("router", th, routerName, body.Text, "", to, "")
+		sp.mu.Unlock()
+		writeJSON(w, 202, map[string]any{"trigger": t.ID, "note": "queued; delivered when the worker is free"})
+		return
 	}
-	t := sp.ingestLocked("router", body.Thread, routerName, body.Text, "", body.To, "")
 	sp.mu.Unlock()
-	writeJSON(w, 202, map[string]any{"trigger": t.ID, "note": "queued; delivered when the worker is free"})
+
+	// Allow Collie to also steer or dispatch into an existing sidebar session
+	// (either a live herdr pane like `w9:p1@wlc` or an external/Desktop session
+	// like `cx-01a20149...@wlc` from `collie list`), using the exact same path
+	// as the sidebar chat composer!
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if strings.Contains(to, ":") {
+		if err := s.herdr.Prompt(ctx, to, text); err != nil {
+			writeJSON(w, 409, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "pane_id": to, "note": "delivered directly to existing pane session; run `collie show " + to + "` later to inspect its reply"})
+		return
+	}
+	if strings.HasPrefix(to, "cx-") || strings.HasPrefix(to, "cl-") || strings.HasPrefix(to, "ag-") || strings.HasPrefix(to, "gm-") {
+		local, machine := split(to)
+		rawBody, _ := json.Marshal(map[string]string{"text": text})
+		if machine != "" {
+			c, err := s.herdr.Client(machine)
+			if err != nil {
+				writeJSON(w, 502, map[string]any{"error": err.Error()})
+				return
+			}
+			req, _ := http.NewRequestWithContext(ctx, "POST", "http://node/api/external/"+url.PathEscape(local)+"/send", bytes.NewReader(rawBody))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := c.Do(req)
+			if err != nil {
+				writeJSON(w, 502, map[string]any{"error": err.Error()})
+				return
+			}
+			defer resp.Body.Close()
+			out, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode < 300 && s.sup != nil {
+				s.sup.noteExternalSent(to)
+			}
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(resp.StatusCode)
+			w.Write(out)
+			return
+		}
+		// Local external session on Hub
+		req, _ := http.NewRequestWithContext(ctx, "POST", "/api/external/"+url.PathEscape(local)+"/send", bytes.NewReader(rawBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.SetPathValue("id", local)
+		s.sendExternal(w, req)
+		return
+	}
+	writeJSON(w, 404, map[string]any{"error": "no running worker or session named " + to + " (run `collie list` to see workers and sidebar sessions)"})
 }
 
 func (s *Server) superReport(w http.ResponseWriter, r *http.Request) {
@@ -650,7 +720,46 @@ func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, out)
 		return
 	}
-	http.Error(w, "nothing found for "+id+" (ids look like t12, a thread like chat:main, or a worker name)", 404)
+	if strings.Contains(id, ":") && id != mainThread && !strings.HasPrefix(id, "chat:") && !strings.HasPrefix(id, "github:") && !strings.HasPrefix(id, "feishu:") {
+		cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		reply, userQ := s.sup.paneLastReply(cctx, id)
+		var b strings.Builder
+		fmt.Fprintf(&b, "session pane %s\n", id)
+		if userQ != "" {
+			fmt.Fprintf(&b, "last user message:\n%s\n", clip(userQ, 600))
+		}
+		if reply != "" {
+			fmt.Fprintf(&b, "\nlast assistant reply:\n%s\n", clip(reply, 1600))
+		}
+		if rr, err := s.herdr.Read(cctx, id, "recent_unwrapped", "text", 40); err == nil && strings.TrimSpace(rr.Text) != "" {
+			fmt.Fprintf(&b, "\nrecent screen:\n%s\n", tailLines(rr.Text, 30))
+		}
+		if b.Len() > 0 {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			io.WriteString(w, b.String())
+			return
+		}
+	}
+	if strings.HasPrefix(id, "cx-") || strings.HasPrefix(id, "cl-") || strings.HasPrefix(id, "ag-") || strings.HasPrefix(id, "gm-") {
+		cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		reply, userQ := s.sup.externalLastReply(cctx, id)
+		var b strings.Builder
+		fmt.Fprintf(&b, "external session %s\n", id)
+		if userQ != "" {
+			fmt.Fprintf(&b, "last user message:\n%s\n", clip(userQ, 600))
+		}
+		if reply != "" {
+			fmt.Fprintf(&b, "\nlast assistant reply:\n%s\n", clip(reply, 1800))
+		} else {
+			b.WriteString("\n(no assistant reply captured yet)\n")
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, b.String())
+		return
+	}
+	http.Error(w, "nothing found for "+id+" (ids look like t12, a thread like chat:main, a worker name, or a session id from `collie list`)", 404)
 }
 
 func (s *Server) superList(w http.ResponseWriter, r *http.Request) {
@@ -688,8 +797,54 @@ func (s *Server) superTriggers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) superTimers(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"timers": sp.st.Timers})
+	out := sortedTimers(sp.st.Timers)
+	sp.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"timers": out})
+}
+
+// sortedTimers returns enabled timers ordered by soonest NextRun, followed by
+// ended timers ordered by most recent LastRun (ties broken by ID).
+func sortedTimers(in []*Timer) []*Timer {
+	out := make([]*Timer, len(in))
+	copy(out, in)
+	slices.SortStableFunc(out, func(a, b *Timer) int {
+		if a.Enabled != b.Enabled {
+			if a.Enabled {
+				return -1
+			}
+			return 1
+		}
+		if a.Enabled {
+			if c := a.NextRun.Compare(b.NextRun); c != 0 {
+				return c
+			}
+		} else {
+			var at, bt time.Time
+			if a.LastRun != nil {
+				at = *a.LastRun
+			}
+			if b.LastRun != nil {
+				bt = *b.LastRun
+			}
+			if c := bt.Compare(at); c != 0 {
+				return c
+			}
+		}
+		return idNumCmp(a.ID, b.ID)
+	})
+	return out
+}
+
+func idNumCmp(a, b string) int {
+	na, nb := idNum(a), idNum(b)
+	switch {
+	case na < nb:
+		return -1
+	case na > nb:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
 }
 
 func (s *Server) superAddTimer(w http.ResponseWriter, r *http.Request) {
@@ -993,8 +1148,35 @@ func (s *Server) superInterruptRouter(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	live, _ := sp.liveAgents(ctx)
 	a, ok := live[routerName]
+
+	// Drain any queued triggers bound for Collie so the next tick does NOT
+	// immediately wake Collie right back up 1s after the human clicked Stop!
+	sp.mu.Lock()
+	wasBusy := !sp.routerAskedAt.IsZero() || (ok && a.Status == "working")
+	sp.routerAskedAt = time.Time{}
+	sp.lastRouter = nil
+	sp.routerNudged = false
+	drained := 0
+	for _, t := range sp.st.Triggers {
+		if t.Status != "queued" {
+			continue
+		}
+		if len(t.Targets) == 0 || contains(t.Targets, routerName) {
+			t.Targets = remove(t.Targets, routerName)
+			if len(t.Targets) == 0 {
+				t.Status = "ignored"
+				drained++
+			}
+		}
+	}
+	if wasBusy || drained > 0 {
+		sp.addEntryLocked("event", mainThread, "已按你的指令中止当前编排", "", "info")
+		sp.changed()
+	}
+	sp.mu.Unlock()
+
 	if !ok || a.Pane == "" {
-		writeJSON(w, 200, map[string]any{"ok": true})
+		writeJSON(w, 200, map[string]any{"ok": true, "drained": drained})
 		return
 	}
 	_ = s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": a.Pane, "keys": []string{"esc"}}, nil)
@@ -1008,7 +1190,7 @@ func (s *Server) superInterruptRouter(w http.ResponseWriter, r *http.Request) {
 	if kinds[a.Kind] == "codex" && sess != "" {
 		_ = s.stopCodexTurn(ctx, m, sess)
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	writeJSON(w, 200, map[string]any{"ok": true, "drained": drained})
 }
 
 // ---------------------------------------------------------------- webhooks
@@ -1244,6 +1426,7 @@ func (s *Server) superAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sp.mu.Lock()
+	sp.noteAnsweredLocked(wk.PaneID)
 	sp.addEntryLocked("event", wk.Thread, "替 "+wk.Name+" 选了："+clip(label, 80), wk.Name, "info")
 	sp.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"ok": true, "picked": label})

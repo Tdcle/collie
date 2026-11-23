@@ -297,9 +297,14 @@ func TestHostCodexProjectSyncAndDismiss(t *testing.T) {
 
 func TestEnsureNonBlockingAgentArgs(t *testing.T) {
 	got := ensureNonBlockingAgentArgs("codex", []string{"resume", "abc-123"})
-	want := []string{"-c", "check_for_update_on_startup=false", "resume", "abc-123"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("unexpected codex args: %v", got)
+	want := []string{"--no-daemon", "-c", "check_for_update_on_startup=false", "-c", "features.respect_system_proxy=true", "resume", "abc-123"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected codex args len: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected codex args[%d]: got %q, want %q (%v)", i, got[i], want[i], got)
+		}
 	}
 	// Idempotent if already specified
 	got2 := ensureNonBlockingAgentArgs("codex", got)

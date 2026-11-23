@@ -18,6 +18,9 @@ import (
 func (sp *Super) routerDir() string { return filepath.Join(sp.dir, "router") }
 
 func (sp *Super) ensureRouter(ctx context.Context) {
+	if sp.s == nil || sp.s.herdr == nil {
+		return
+	}
 	sp.mu.Lock()
 	if sp.routerLaunching || time.Since(sp.routerLaunchAt) < 45*time.Second {
 		sp.mu.Unlock()
@@ -47,7 +50,10 @@ func (sp *Super) ensureRouter(ctx context.Context) {
 		sp.setRouterRun([2]string{model, effort})
 		sp.mu.Unlock()
 
-		sp.closeStaleRouterWorkspaces(context.Background())
+		// Inspect any stale Router pane before closing it so if the previous
+		// Router crashed at startup (e.g. auth/network timeout), the human sees
+		// the exact reason instead of silent repeated wakeups.
+		sp.inspectAndCloseStaleRouterWorkspaces(context.Background())
 		if err := sp.writeRouterFilesFor(targetMachine); err != nil {
 			log.Printf("router files: %v", err)
 		}
@@ -166,9 +172,14 @@ func (sp *Super) RestartRouter(ctx context.Context) error {
 			}
 		}
 	}
+	sp.closeStaleRouterWorkspaces(ctx)
 	sp.mu.Lock()
 	sp.routerLaunchAt = time.Time{}
 	sp.routerActiveMachine = ""
+	sp.routerAskedAt = time.Time{}
+	sp.routerFresh = false
+	sp.routerRetries = 0
+	sp.routerNudged = false
 	sp.mu.Unlock()
 	sp.ensureRouter(ctx)
 	return nil
@@ -305,28 +316,50 @@ func (sp *Super) answerTrust(ctx context.Context, pane, dir string) bool {
 			tld = tildeIn(mc.Home, dir)
 		}
 	}
-	rr, err := sp.s.herdr.Read(ctx, pane, "visible", "text", 0)
+	rr, err := sp.s.herdr.Read(ctx, pane, "detection", "text", 0)
 	if err != nil || !trustDialogFor(rr.Text, dir, tld) {
 		return false
 	}
 	for _, c := range parseApproval(rr.Text).Choices {
-		l := strings.ToLower(c.Label)
-		if strings.HasPrefix(l, "yes") && strings.Contains(l, "trust") {
-			return sp.choose(ctx, pane, c) == nil
+		if isTrustChoice(c.Label) {
+			if sp.choose(ctx, pane, c) == nil {
+				sp.mu.Lock()
+				sp.noteAnsweredLocked(pane)
+				sp.mu.Unlock()
+				return true
+			}
+			return false
 		}
 	}
 	return false
 }
 
+func isTrustChoice(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	if strings.HasPrefix(l, "yes") && strings.Contains(l, "trust") {
+		return true
+	}
+	return strings.HasPrefix(l, "trust and continue") || l == "trust"
+}
+
+func (sp *Super) noteAnsweredLocked(pane string) {
+	if pane == "" {
+		return
+	}
+	if sp.lastAnswer == nil {
+		sp.lastAnswer = map[string]time.Time{}
+	}
+	sp.lastAnswer[pane] = time.Now()
+}
+
 func (sp *Super) choose(ctx context.Context, pane string, c Choice) error {
+	if len(c.Keys) > 0 {
+		return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": c.Keys}, nil)
+	}
 	if c.Text != "" {
 		return sp.s.herdr.Call(ctx, "pane.send_text", map[string]any{"pane_id": pane, "text": c.Text}, nil)
 	}
-	keys := c.Keys
-	if len(keys) == 0 {
-		keys = []string{"enter"}
-	}
-	return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": keys}, nil)
+	return sp.s.herdr.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"enter"}}, nil)
 }
 
 func pickChoice(a Approval, want string) (Choice, bool) {
@@ -381,6 +414,38 @@ func (sp *Super) closeStaleRouterWorkspaces(ctx context.Context) {
 	}
 }
 
+func (sp *Super) inspectAndCloseStaleRouterWorkspaces(ctx context.Context) {
+	wss, err := sp.s.herdr.Workspaces(ctx)
+	if err != nil {
+		return
+	}
+	var staleWS []string
+	for _, ws := range wss {
+		if ws.Label == routerLabel {
+			staleWS = append(staleWS, ws.ID)
+		}
+	}
+	if len(staleWS) == 0 {
+		return
+	}
+	panes, _ := sp.s.herdr.Panes(ctx)
+	for _, p := range panes {
+		if !contains(staleWS, p.WorkspaceID) || p.Agent != nil {
+			continue
+		}
+		if res, err := sp.s.herdr.Read(ctx, p.ID, "recent_unwrapped", "text", 30); err == nil {
+			if why := deathReason(res.Text); why != "" {
+				sp.mu.Lock()
+				sp.recordRouterLaunchErrorLocked(errors.New(why))
+				sp.mu.Unlock()
+			}
+		}
+	}
+	for _, wsID := range staleWS {
+		sp.s.herdr.Call(ctx, "workspace.close", map[string]any{"workspace_id": wsID}, nil)
+	}
+}
+
 var agentErrRe = regexp.MustCompile(`(?i)(api error|please run /login|invalid api key|quota exceeded|daily limit|rate.?limit(ed)?\b|overloaded|unauthori[sz]ed|credit balance|unexpected status \d{3}|^[\W]*(⚠|■|error\b|error:))`)
 
 func (sp *Super) routerSettled(ctx context.Context, pane string) {
@@ -391,6 +456,7 @@ func (sp *Super) routerSettled(ctx context.Context, pane string) {
 		return
 	}
 	sp.routerAskedAt = time.Time{}
+	sp.lastRouter = nil
 	replied := false
 	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
 		e := sp.st.Entries[i]

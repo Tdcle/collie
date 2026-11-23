@@ -66,7 +66,7 @@ func TestLarkNotify(t *testing.T) {
 
 	// Looking at Collie: held back.
 	sp.Seen("http://hub:7788")
-	sp.queueNotifyLocked("collie", "做完了", "", nil)
+	sp.queueNotifyLocked("collie", "做完了", "", nil, false)
 	sp.sendNotifications()
 	if _, err := os.Stat(sent); err == nil {
 		t.Fatal("sent while you were looking")
@@ -75,7 +75,7 @@ func TestLarkNotify(t *testing.T) {
 	// Away: sent, as the bot, to the logged-in user, with a link.
 	sp.seenAt = time.Now().Add(-5 * time.Minute)
 	sp.notifyAt = time.Time{}
-	sp.queueNotifyLocked("collie", "报告：都好了", "", nil)
+	sp.queueNotifyLocked("collie", "报告：都好了", "", nil, false)
 	sp.sendNotifications()
 	b, err := os.ReadFile(sent)
 	if err != nil {

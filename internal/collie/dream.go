@@ -238,7 +238,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 	sp.dream = &dreamRun{at: time.Now(), reason: reason}
 	at := sp.dream.at
 	st := sp.st.Settings
-	sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
+	entry := sp.addEntryLocked("event", mainThread, "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", "", "info")
 	sp.mu.Unlock()
 
 	go func() {
@@ -289,8 +289,13 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 						cwd = sp.routerDirOn(mc)
 					}
 				}
-				sp.s.remember(&Ended{Kind: k, Machine: rm, Cwd: cwd, Name: routerName, Session: a.Session, Ended: time.Now(),
-					Title: "Collie · 做梦前的会话（" + time.Now().Format("01-02 15:04") + "）"})
+				e := &Ended{Kind: k, Machine: rm, Cwd: cwd, Name: routerName, Session: a.Session, Ended: time.Now(),
+					Title: "Collie · 做梦前的会话（" + time.Now().Format("01-02 15:04") + "）"}
+				sp.s.remember(e)
+				sp.mu.Lock()
+				entry.Ref = "h:" + e.ID
+				sp.changed()
+				sp.mu.Unlock()
 			}
 		}
 		sp.closeWorkspaces(bg, routerLabel)

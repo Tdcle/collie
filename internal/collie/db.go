@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -87,6 +88,16 @@ func loadState(db *sql.DB, home string) (*State, error) {
 	if v, ok := kv["policies"]; ok {
 		json.Unmarshal([]byte(v), &st.Policies)
 	}
+	if v, ok := kv["dismissed"]; ok {
+		var ids []string
+		if json.Unmarshal([]byte(v), &ids) == nil {
+			for _, id := range ids {
+				if id != "" {
+					st.Dismissed[id] = true
+				}
+			}
+		}
+	}
 
 	var trig []*Trigger
 	err = loadRows(db, `SELECT data FROM (SELECT data, n FROM triggers ORDER BY n DESC LIMIT 600) ORDER BY n`, func(t *Trigger) { trig = append(trig, t) })
@@ -128,6 +139,20 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 	put(`INSERT INTO kv(k,v) VALUES('seq',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.Itoa(st.Seq))
 	put(`INSERT INTO kv(k,v) VALUES('settings',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Settings))
 	put(`INSERT INTO kv(k,v) VALUES('policies',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Policies))
+	dismissed := make([]string, 0, len(st.Dismissed))
+	for id, on := range st.Dismissed {
+		if on && id != "" {
+			dismissed = append(dismissed, id)
+		}
+	}
+	sort.Slice(dismissed, func(i, j int) bool {
+		ni, nj := idNum(dismissed[i]), idNum(dismissed[j])
+		if ni != nj {
+			return ni < nj
+		}
+		return dismissed[i] < dismissed[j]
+	})
+	put(`INSERT INTO kv(k,v) VALUES('dismissed',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(dismissed))
 	for _, t := range st.Triggers {
 		put(`INSERT INTO triggers(id,n,at,status,source,thread,data) VALUES(?,?,?,?,?,?,?)
 		     ON CONFLICT(id) DO UPDATE SET status=excluded.status, data=excluded.data`,

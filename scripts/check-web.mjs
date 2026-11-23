@@ -1,6 +1,7 @@
-// Runtime smoke test for Collie's zero-build frontend (quota.js + artifacts.js + app.js).
-// Catches Temporal Dead Zone (TDZ) ReferenceErrors, missing globals, and render crashes
-// across login, #/collie, artifact cards, quota popover, and ⌘K search.
+// Runtime smoke test for Collie's zero-build frontend (highlight.js + quota.js + artifacts.js + app.js).
+// Catches Temporal Dead Zone (TDZ) ReferenceErrors, missing globals, CSS class collisions,
+// and render crashes across login, #/collie, CSV/PDF artifact cards, quick-reply options,
+// pending confirmation bar, offline syntax highlighting, and quota popover.
 import fs from "node:fs";
 import vm from "node:vm";
 
@@ -20,6 +21,7 @@ function runScenario(authed) {
       },
       removeEventListener() {}, append() {}, after() {}, remove() {}, insertAdjacentHTML() {},
       setAttribute() {}, removeAttribute() {}, focus() {}, select() {}, click() {},
+      scrollTo() {},
       getBoundingClientRect() { return { left: 0, top: 0, right: 900, bottom: 40, width: 80, height: 32 }; },
       querySelector: (s) => getEl(s),
       querySelectorAll: () => [],
@@ -43,7 +45,8 @@ function runScenario(authed) {
     clearTimeout() {},
     setInterval: () => 1,
     clearInterval() {},
-    requestAnimationFrame: (fn) => fn(),
+    requestAnimationFrame: (fn) => { fn(); return 1; },
+    cancelAnimationFrame() {},
     URL, URLSearchParams, Blob, TextEncoder, TextDecoder, CSS: { escape: (s) => s },
     innerWidth: 1280, innerHeight: 800, isSecureContext: true,
     navigator: { platform: "MacIntel", clipboard: { writeText: async () => {} } },
@@ -67,7 +70,7 @@ function runScenario(authed) {
     dispatchEvent() {},
     addEventListener() {},
     document: {
-      hidden: false, body: makeEl("body"), documentElement: makeEl("html"), activeElement: null,
+      hidden: false, title: "Collie", body: makeEl("body"), documentElement: makeEl("html"), activeElement: null,
       hasFocus: () => true,
       getElementById: (id) => getEl("#" + id),
       querySelector: (s) => getEl(s),
@@ -92,13 +95,23 @@ function runScenario(authed) {
         };
       }
       if (String(u).includes("/api/super")) {
+        const now = new Date().toISOString();
         return {
           ok: true, status: 200, headers: { get: () => "" },
           json: async () => ({
             router: { alive: true, status: "idle", kind: "codex", machine: "mac" },
             entries: [
-              { id: "e1", role: "user", text: "生成实验报告", at: new Date().toISOString() },
-              { id: "e2", role: "collie", text: "已生成报告 ~/Desktop/ablation_report.pdf 和指标表 D:\\Paper\\metrics.csv，请查收。", at: new Date().toISOString() },
+              { id: "e1", role: "user", text: "生成实验报告", at: now },
+              {
+                id: "e2",
+                role: "collie",
+                text: "已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
+                options: ["继续启动", "先不跑"],
+                at: now,
+              },
+            ],
+            pending: [
+              { id: "e2", at: now, summary: "是否继续启动评估？", options: ["继续启动", "先不跑"] },
             ],
             workers: [],
           }),
@@ -117,6 +130,7 @@ function runScenario(authed) {
   ctx.window = ctx;
   ctx.self = ctx;
   vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/highlight.js", "utf8"), ctx, { filename: "web/highlight.js" });
   vm.runInContext(fs.readFileSync("web/quota.js", "utf8"), ctx, { filename: "web/quota.js" });
   vm.runInContext(fs.readFileSync("web/artifacts.js", "utf8"), ctx, { filename: "web/artifacts.js" });
   vm.runInContext(fs.readFileSync("web/app.js", "utf8"), ctx, { filename: "web/app.js" });
@@ -130,16 +144,30 @@ if (unauth.getEl("#login").hidden !== false) {
   throw new Error("Expected #login to be visible when /api/session returns 401");
 }
 
-// 2. Authenticated user on #/collie?quotas=1 must see #app, #v-collie, artifact cards, and #quota-pop!
+// 2. Authenticated user on #/collie?quotas=1 must see #app, #v-collie, non-colliding is-table CSV badge,
+//    syntax-highlighted Go codeblock, quick-reply buttons, pending bar, and #quota-pop!
 const auth = runScenario(true);
 await new Promise((r) => setTimeout(r, 50));
 if (auth.getEl("#app").hidden !== false || auth.getEl("#v-collie").hidden !== false) {
   throw new Error("Expected #app and #v-collie to be visible when authenticated");
 }
-if (!auth.getEl("#super-thread").innerHTML.includes("artifact-cards")) {
-  throw new Error("Expected artifact-cards to render inside #super-thread");
+const threadHTML = auth.getEl("#super-thread").innerHTML;
+if (!threadHTML.includes("artifact-cards") || !threadHTML.includes("art-badge is-table")) {
+  throw new Error("Expected artifact-cards with non-colliding 'art-badge is-table' for CSV");
+}
+if (threadHTML.includes("art-badge sheet")) {
+  throw new Error("Regression: 'art-badge sheet' collides with dialog.sheet!");
+}
+if (!threadHTML.includes("hl-k") || !threadHTML.includes('data-lang="go"')) {
+  throw new Error("Expected offline syntax highlighting in Markdown fenced codeblocks");
+}
+if (!threadHTML.includes("reply-opts") || !threadHTML.includes('data-opt="继续启动"')) {
+  throw new Error("Expected quick-reply --opt buttons in #super-thread");
+}
+if (auth.getEl("#pending-wrap").hidden !== false || !auth.getEl("#pending-bar").innerHTML.includes("待你确认")) {
+  throw new Error("Expected #pending-bar to be visible for unanswered --opt message");
 }
 if (!auth.getEl("#quota-pop").innerHTML.includes("模型剩余用量")) {
   throw new Error("Expected #quota-pop to render quota summary");
 }
-console.log("Frontend runtime smoke test passed (login + #/collie + artifacts + quotas).");
+console.log("Frontend runtime smoke test passed (login + #/collie + CSV is-table + syntax highlight + pending --opt + quotas).");

@@ -259,7 +259,7 @@ func TestActivityLine(t *testing.T) {
 		"✻ Reading (src/main.go)\n❯ ": "Reading (src/main.go)",
 	}
 	for in, want := range cases {
-		text, meta := activityLine(in)
+		text, meta, _ := activityLine(in)
 		got := text
 		if meta != "" {
 			got += "|" + meta
@@ -267,5 +267,17 @@ func TestActivityLine(t *testing.T) {
 		if got != want {
 			t.Errorf("activityLine(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestExtractStreamingBubble(t *testing.T) {
+	screen := "› Write a poem\n\n• All night the maple loosens its red leaves.\n  By dawn they blur the edges of the street.\n  A sparrow\n\n› Ask Codex to do anything\n  GPT-6.2-Astra high · /private/tmp\n"
+	text, _, streaming := activityLine(screen)
+	if text != "" {
+		t.Fatalf("expected streaming text to go into streaming bubble rather than status tail, got tail=%q", text)
+	}
+	want := "All night the maple loosens its red leaves.\nBy dawn they blur the edges of the street.\nA sparrow"
+	if streaming != want {
+		t.Fatalf("unexpected streaming bubble:\ngot:  %q\nwant: %q", streaming, want)
 	}
 }

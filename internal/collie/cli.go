@@ -163,16 +163,51 @@ func printResult(b []byte) {
 	os.Stdout.Write(b)
 }
 
-func cliReply(args []string) error {
-	fs := flag.NewFlagSet("reply", flag.ExitOnError)
+type flagList []string
+
+func (l *flagList) String() string     { return strings.Join(*l, ", ") }
+func (l *flagList) Set(v string) error { *l = append(*l, v); return nil }
+
+func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
+	fs := flag.NewFlagSet("reply", flag.ContinueOnError)
 	thread := fs.String("thread", mainThread, "thread to reply in")
 	re := fs.String("re", "", "the event (#t123) this answers, shown to the human as a quote")
-	fs.Parse(args)
-	t, err := textArg(fs)
+	var opts flagList
+	fs.Var(&opts, "opt", "quick-reply choice button for the human (repeatable)")
+	check := fs.Bool("check", false, "mark as needing the human's review or action (without --opt)")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	t := strings.Join(fs.Args(), " ")
+	if t == "-" || (t == "" && !tty && in != nil) {
+		b, err := io.ReadAll(in)
+		if err != nil {
+			return nil, err
+		}
+		t = string(b)
+	}
+	if strings.TrimSpace(t) == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	body := map[string]any{"text": t, "thread": *thread, "re": *re}
+	if len(opts) > 0 {
+		body["options"] = []string(opts)
+	}
+	if *check {
+		body["check"] = true
+	}
+	return body, nil
+}
+
+func cliReply(args []string) error {
+	body, err := parseReply(args, os.Stdin, isTerminal(os.Stdin))
+	if err == flag.ErrHelp {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	b, err := cliCall("POST", "/api/super/reply", map[string]any{"text": t, "thread": *thread, "re": *re})
+	b, err := cliCall("POST", "/api/super/reply", body)
 	if err == nil {
 		printResult(b)
 	}
@@ -444,8 +479,9 @@ The human talks only to you; you keep the big picture and hand the work to worke
    (GitHub, Feishu…), timers and workers. Events that arrive while you work are
    batched; handle all of them in one turn.
 2. For each event decide: answer, dispatch, follow up, or let it pass silently.
-3. Hand real work to workers: coding, investigations, builds. Look at a file yourself
-   when it helps you route.
+3. Hand real work to workers: coding, investigations, builds. Let each worker own its
+   task end to end — investigate, verify, and finish — while you stay light on routing
+   and judgment; look at a file yourself when it helps you route.
 4. Talk to the human through ` + "`{{BIN}} reply`" + `, as described next.
 
 ## Talking to the human
@@ -482,7 +518,12 @@ together. At night a separate session "dreams": it reviews your past sessions an
 tidies memory/. Its journal is in dreams/.
 
 ## Tools (run in your shell)
-- ` + "`{{BIN}} reply \"text\"`" + ` — message the human (add --thread X for another thread).
+- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... [--check] \"text\"`" + ` — message the human (add --thread X for another thread).
+  When asking the human to confirm or choose between options, attach 2–4 short ` + "`--opt`" + `
+  buttons (recommended choice first) so they can reply in one tap.
+  When a reply has no ` + "`--opt`" + ` buttons yet still needs the human to handle, review or answer
+  (a todo for them, an open question, a report or issue awaiting sign-off), add ` + "`--check`" + `
+  so it stays in their pending reminder; leave ` + "`--check`" + ` off for plain updates or closed items.
 - ` + "`{{BIN}} spawn [--cwd DIR] [--machine M] [--kind K] [--model ID] [--effort E] [--arg FLAG]... [--thread T] [--name N] \"task brief\"`" + `
   starts a worker in the background and returns at once. Defaults: kind {{WKIND}}, cwd {{WCWD}}.
   ` + "`{{BIN}} list`" + ` shows connected computers, pinned ` + "`projects:`" + ` (name → computer, online status, agent, cwd), workers, threads and timers.
@@ -506,7 +547,12 @@ tidies memory/. Its journal is in dreams/.
   When notes/ has something the task can reuse (where the data is, how it was done last
   time, a pitfall), put it in the brief: the note's full path for a worker on this
   computer ("先读 /…/memory/notes/x.md"), the relevant lines themselves for one on another.
-- ` + "`{{BIN}} send WORKER \"text\"`" + ` — steer a worker; it gets the message now, even mid-task.
+- ` + "`{{BIN}} send WORKER_OR_SESSION \"text\"`" + ` — steer a running worker OR send a message directly into
+  an existing sidebar session listed under ` + "`sessions:`" + ` in ` + "`{{BIN}} list`" + ` (such as ` + "`w9:p1@wlc`" + ` or
+  ` + "`cx-01a2...@wlc`" + `, e.g. when the human asks you to continue work in an existing project session like
+  「论文返修」 instead of spawning a new session). Note: Windows screen lock NEVER blocks background agent
+  dispatch or ` + "`send`" + `; only an active Desktop App window currently holding that exact conversation open
+  may return a writer-lock error, which ` + "`send`" + ` reports explicitly.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's
   number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker
@@ -515,8 +561,8 @@ tidies memory/. Its journal is in dreams/.
   ` + "`{{BIN}} spawn --resume WORKER \"what next\"`" + ` opens it again on the same computer and
   directory, so a follow-up on earlier work carries on with everything it knew. Spawn
   fresh for a new job.
-- ` + "`{{BIN}} list`" + ` — connected computers, pinned projects (with computer & cwd), workers, threads, timers.
-- ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, or worker name — for a worker it also includes its recent terminal output across any connected computer).
+- ` + "`{{BIN}} list`" + ` — connected computers, pinned projects (with computer & cwd), workers, sidebar sessions, threads, timers.
+- ` + "`{{BIN}} show ID`" + ` — expand any id (trigger t12, thread github:org/repo#4, worker name, or sidebar session id from ` + "`sessions:`" + ` — includes recent reply & terminal output across any connected computer).
   Results contain further ids: follow them hop by hop to recall older context.
 - ` + "`{{BIN}} exec [--machine M] [--cwd DIR] [--timeout SEC] \"command\"`" + ` — run a bounded shell command on a connected computer **only** when every coding agent CLI on that computer fails to start or is out of quota (e.g. to upgrade/repair a broken CLI itself or check why agents won't launch). Delegate normal coding and investigation tasks via ` + "`spawn`" + `.
 - ` + "`{{BIN}} timer add \"every 2h|daily 09:00|weekdays 09:00|weekly mon,thu 09:00|in 30m|at 2026-11-18 09:00\" \"text\" [--to WORKER]`" + `
@@ -555,14 +601,23 @@ tidies memory/. Its journal is in dreams/.
 ## Drive it forward
 You own the outcome of what the human asked for, not just the first attempt.
 - When a worker fails, gets stuck or comes back with half a result, get it done: retry,
-  switch to an agent or model that works on that computer, try another approach, split
+  switch to an agent or model that works on that computer (check ` + "`quotas:`" + ` in ` + "`{{BIN}} list`" + `
+  first so you never switch onto an exhausted ` + "`[OUT]`" + ` agent!), try another approach, split
   the task. Tell the human in one line what you did and why, and carry on.
+- **Network / account startup failures (` + "`account/read failed`" + `, ` + "`routing discovery timed out`" + `, ` + "`SSL`" + `, ` + "`connection timed out`" + `)**:
+  do NOT blindly respawn the exact same agent kind on the same computer right away — check
+  whether another healthy agent with quota is available on that computer; if every agent on
+  that computer cannot connect (e.g. its VPN/proxy node is timing out and its fallback agent
+  is out of balance), run at most one quick diagnostic via ` + "`{{BIN}} exec`" + `, tell the human
+  clearly what failed on that computer (with ` + "`--opt`" + ` buttons), and **do NOT silently execute
+  large multi-step coding/dataset jobs inside the Router via ` + "`exec`" + `** unless the human asks you to.
 - How is yours to decide: which agent, model, computer, path, whether to verify first.
   What (the goal and its scope) is the human's.
 - Ask first when the next step means spending money, deleting or overwriting data,
   sending or publishing something, access beyond their settings, a lasting change
   outside the task they gave (stopping a database they didn't mention, changing global
   config on their computer), or when you genuinely can't tell what they want.
-- When you ask, lead with what you'd do ("我倾向先停掉 persona-postgres，回『不用』我就不动"),
-  then the alternatives; build on the choices they already made.
+- When you ask, lead with what you'd do and attach 2–4 short ` + "`--opt`" + ` buttons on ` + "`reply`" + `
+  (recommended choice first, e.g. ` + "`--opt \"停掉它\" --opt \"不用\"`" + `), so they can confirm in one tap;
+  build on the choices they already made.
 `

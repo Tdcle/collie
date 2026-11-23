@@ -1085,7 +1085,7 @@ type Approval struct {
 var (
 	numberedRe = regexp.MustCompile(`^\s*([❯›>▸●➜→]\s*)?(\d)[.)]\s+(.{1,90}?)\s*$`)
 	cursorRe   = regexp.MustCompile(`^\s*[❯›>▸●➜→]\s+(.{1,90}?)\s*$`)
-	hintRe     = regexp.MustCompile(`(?i)(enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue)`)
+	hintRe     = regexp.MustCompile(`(?i)(enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue|choose)`)
 	frameRe    = regexp.MustCompile(`^[\s│┃|╭╮╰╯─━═┌┐└┘╌┄┈]*$`)
 	ruleRe     = regexp.MustCompile(`[─━═]{12,}`)
 )
@@ -1187,20 +1187,22 @@ func parseApproval(screen string) Approval {
 	}
 
 	cur := -1
+	var rawChoices []struct {
+		c    Choice
+		line int
+	}
 	opts := lines[start : end+1]
 	for i, l := range opts {
 		if t := strings.TrimSpace(l); t != "" && (cursorRe.MatchString(l) || strings.ContainsAny(t[:1], "❯›>▸●➜→")) {
-			cur = i
+			cur = len(rawChoices)
 		}
-	}
-	for i, l := range opts {
 		if numbered {
 			m := numberedRe.FindStringSubmatch(l)
 			if m == nil {
-				if n := len(a.Choices); n > 0 && wrapped(l) {
+				if n := len(rawChoices); n > 0 && wrapped(l) {
 					// The terminal wraps a line only when the next word does
 					// not fit; a line that would have fit explains the option.
-					c, t := &a.Choices[n-1], strings.TrimSpace(l)
+					c, t := &rawChoices[n-1].c, strings.TrimSpace(l)
 					above := strings.TrimRight(opts[i-1], " ")
 					switch {
 					case c.Desc != "":
@@ -1213,24 +1215,27 @@ func parseApproval(screen string) Approval {
 				}
 				continue
 			}
-			a.Choices = append(a.Choices, Choice{Label: m[3], Text: m[2], Current: m[1] != ""})
+			rawChoices = append(rawChoices, struct {
+				c    Choice
+				line int
+			}{c: Choice{Label: m[3], Text: m[2], Current: m[1] != ""}, line: i})
 			continue
 		}
 		label := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "❯›>▸●➜→"))
 		if label == "" {
 			continue
 		}
-		var keys []string
-		if cur >= 0 {
-			for d := cur; d < i; d++ {
-				keys = append(keys, "down")
-			}
-			for d := cur; d > i; d-- {
-				keys = append(keys, "up")
-			}
+		rawChoices = append(rawChoices, struct {
+			c    Choice
+			line int
+		}{c: Choice{Label: label, Current: len(rawChoices) == cur}, line: i})
+	}
+	for idx, rc := range rawChoices {
+		c := rc.c
+		if !numbered || cur >= 0 {
+			c.Keys = moveKeys(cur, idx)
 		}
-		keys = append(keys, "enter")
-		a.Choices = append(a.Choices, Choice{Label: label, Keys: keys, Current: i == cur})
+		a.Choices = append(a.Choices, c)
 	}
 	if len(a.Choices) < 2 || len(a.Choices) > 9 {
 		a.Choices = nil
@@ -1244,6 +1249,19 @@ func parseApproval(screen string) Approval {
 	}
 	a.Question = strings.Join(trimBlank(lines[from:start]), "\n")
 	return a
+}
+
+func moveKeys(cur, idx int) []string {
+	var keys []string
+	if cur >= 0 {
+		for d := cur; d < idx; d++ {
+			keys = append(keys, "down")
+		}
+		for d := cur; d > idx; d-- {
+			keys = append(keys, "up")
+		}
+	}
+	return append(keys, "enter")
 }
 
 // cells: how many terminal columns s takes (CJK and full-width take two).
@@ -1294,16 +1312,87 @@ func tailLines(s string, n int) string {
 // key hints and the spinner, which mean nothing outside the terminal. The
 // status line's own counters ("42s · ↓ 1.8k tokens") come back as meta.
 var (
-	liveHint    = regexp.MustCompile(`\s*[(（][^()（）]*(esc to (interrupt|cancel)|ctrl\+c)[^()（）]*[)）]`)
-	liveParen   = regexp.MustCompile(`\s*[(（]([^()（）]*)[)）]\s*$`)
-	liveKey     = regexp.MustCompile(`(?i)\besc\b|ctrl\+|to (interrupt|cancel|expand)`)
-	liveDigit   = regexp.MustCompile(`\d`)
-	liveChrome  = regexp.MustCompile(`(?i)esc to (interrupt|cancel)|shift\+tab|for shortcuts|auto mode|bypass permissions|accept edits|plan mode|ctrl\+[a-z] to |^[❯>›]( |$)|^[⏵▸►»⏎]|⏎ send`)
-	liveBullet  = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*•◐◓◑◒◔◕○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]+\s*`)
-	liveSpinner = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*◐◓◑◒◔◕⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]`) // animated: a status line
+	liveHint      = regexp.MustCompile(`\s*[(（][^()（）]*(esc to (interrupt|cancel)|ctrl\+c)[^()（）]*[)）]`)
+	liveParen     = regexp.MustCompile(`\s*[(（]([^()（）]*)[)）]\s*$`)
+	liveKey       = regexp.MustCompile(`(?i)\besc\b|ctrl\+|to (interrupt|cancel|expand)`)
+	liveDigit     = regexp.MustCompile(`\d`)
+	liveChrome    = regexp.MustCompile(`(?i)esc to (interrupt|cancel)|shift\+tab|for shortcuts|← for agents|⚠\s*\d+\s*warnings?|auto mode|bypass permissions|accept edits|plan mode|ctrl\+[a-z] to |^[❯>›]( |$)|^[⏵▸►»⏎]|⏎ send`)
+	liveBullet    = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*•◐◓◑◒◔◕○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]+\s*`)
+	liveReplyLead = regexp.MustCompile(`^\s*[•●⏺]\s+`)
+	livePromptTop = regexp.MustCompile(`^\s*[❯>›]\s`)
+	liveSpinner   = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*◐◓◑◒◔◕⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]`) // animated: a status line
+	liveWorkedEnd = regexp.MustCompile(`(?i)^worked for \d`)
 )
 
-func activityLine(screen string) (text, meta string) {
+// extractStreamingBubble extracts an assistant reply currently being streamed
+// live on the terminal screen (e.g. Codex TUI's `• ...` / Claude TUI's `⏺ ...`
+// block after the last `›`/`❯` user prompt) before the final JSONL line is flushed.
+func extractStreamingBubble(screen string) string {
+	rawLines := strings.Split(screen, "\n")
+	// 1. Cut off the bottom input box & status footer (last `› ...` / `❯ ...` line near bottom).
+	bottomCut := len(rawLines)
+	for i := len(rawLines) - 1; i >= max(0, len(rawLines)-8); i-- {
+		t := strings.TrimSpace(rawLines[i])
+		if livePromptTop.MatchString(t) && (strings.Contains(t, "Ask Codex") || strings.Contains(t, "Try ") || i >= len(rawLines)-5) {
+			bottomCut = i
+			break
+		}
+	}
+	rawLines = rawLines[:bottomCut]
+	// 2. Locate the latest user prompt (`› ...` / `❯ ...`) above that, and the last `• ` / `⏺ ` reply block below it.
+	userIdx := -1
+	for i := len(rawLines) - 1; i >= 0; i-- {
+		if livePromptTop.MatchString(rawLines[i]) {
+			userIdx = i
+			break
+		}
+	}
+	replyIdx := -1
+	for i := len(rawLines) - 1; i > userIdx; i-- {
+		t := strings.TrimSpace(rawLines[i])
+		if !liveReplyLead.MatchString(rawLines[i]) {
+			continue
+		}
+		// Skip status/tool bullets like `• Working (3s • esc to interrupt)` or `(ctrl+o to expand)`
+		rest := strings.TrimSpace(liveReplyLead.ReplaceAllString(t, ""))
+		if liveHint.MatchString(t) || liveKey.MatchString(t) || strings.HasPrefix(strings.ToLower(rest), "working") || strings.HasPrefix(strings.ToLower(rest), "thinking") || strings.HasPrefix(strings.ToLower(rest), "running ") {
+			continue
+		}
+		replyIdx = i
+		break
+	}
+	if replyIdx < 0 {
+		return ""
+	}
+	var out []string
+	for i := replyIdx; i < len(rawLines); i++ {
+		raw := strings.TrimRight(rawLines[i], " \t\r")
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
+			}
+			continue
+		}
+		if liveHint.MatchString(trimmed) || liveSpinner.MatchString(trimmed) || liveChrome.MatchString(trimmed) || liveWorkedEnd.MatchString(trimmed) || strings.Trim(trimmed, "─━═╭╮╰╯ ") == "" {
+			break
+		}
+		if i == replyIdx {
+			out = append(out, strings.TrimSpace(liveReplyLead.ReplaceAllString(raw, "")))
+		} else if strings.HasPrefix(raw, "  ") {
+			out = append(out, raw[2:])
+		} else {
+			out = append(out, trimmed)
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func activityLine(screen string) (text, meta, streaming string) {
+	streaming = extractStreamingBubble(screen)
 	var keep []string
 	status, statusMeta := "", ""
 	for _, l := range strings.Split(screen, "\n") {
@@ -1314,7 +1403,7 @@ func activityLine(screen string) (text, meta string) {
 			l, m = splitCounters(l)
 		}
 		l = strings.TrimSpace(liveHint.ReplaceAllString(l, ""))
-		if l == "" || strings.Trim(l, "─━═╭╮╰╯ ") == "" || liveChrome.MatchString(l) {
+		if l == "" || strings.Trim(l, "─━═╭╮╰╯ ") == "" || liveChrome.MatchString(l) || liveWorkedEnd.MatchString(l) {
 			continue
 		}
 		spun := liveSpinner.MatchString(l)
@@ -1325,9 +1414,12 @@ func activityLine(screen string) (text, meta string) {
 		keep = append(keep, l)
 	}
 	if status != "" {
-		return status, statusMeta
+		return status, statusMeta, streaming
 	}
-	return strings.Join(tailSlice(keep, 2), "\n"), ""
+	if streaming != "" {
+		return "", "", streaming
+	}
+	return strings.Join(tailSlice(keep, 2), "\n"), "", ""
 }
 
 // splitCounters takes a status line's closing parenthetical apart:
@@ -1437,14 +1529,39 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Live card: progress while working, the question while blocked.
+		// Live card: progress + live streaming assistant bubble while working, the question while blocked.
 		live := map[string]any{"status": status}
 		if status == "working" || status == "blocked" {
 			if res, e := s.herdr.Read(ctx, id, "detection", "text", 0); e == nil {
 				if status == "blocked" {
 					live["approval"] = parseApproval(res.Text)
 				} else {
-					live["tail"], live["meta"] = activityLine(res.Text)
+					tail, metaStr, streaming := activityLine(res.Text)
+					if tail != "" {
+						live["tail"] = tail
+					}
+					if metaStr != "" {
+						live["meta"] = metaStr
+					}
+					if streaming != "" {
+						// Only emit streaming text if it isn't already identical to the last flushed assistant message in tr.
+						alreadyFlushed := false
+						if tr != nil {
+							msgs := tr.view()
+							for k := len(msgs) - 1; k >= 0; k-- {
+								if msgs[k].Kind == "user" {
+									break
+								}
+								if msgs[k].Kind == "assistant" && strings.TrimSpace(msgs[k].Text) == streaming {
+									alreadyFlushed = true
+									break
+								}
+							}
+						}
+						if !alreadyFlushed {
+							live["streaming"] = streaming
+						}
+					}
 				}
 			}
 		}
@@ -1461,10 +1578,14 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 			sse.comment()
 			beat = time.Now()
 		}
+		wait := 700 * time.Millisecond
+		if status == "working" {
+			wait = 240 * time.Millisecond
+		}
 		select {
 		case <-r.Context().Done():
 			return
-		case <-time.After(700 * time.Millisecond):
+		case <-time.After(wait):
 		}
 	}
 }

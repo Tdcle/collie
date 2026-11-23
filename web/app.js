@@ -471,7 +471,11 @@
   addEventListener("focus", seen);
   addEventListener("blur", seen);
 
-  function normSup(s) { s.entries ||= []; s.workers ||= []; s.router ||= { status: "asleep" }; return s; }
+  function normSup(s) {
+    s.hasPending = Array.isArray(s.pending);
+    s.entries ||= []; s.workers ||= []; s.pending ||= []; s.router ||= { status: "asleep" };
+    return s;
+  }
   const isWorker = (name) => sup.workers.some((w) => w.name === name && !w.ended);
   const paneOf = (name) => state.agents.find((a) => a.name === name)?.pane_id;
   // A worker's status as the sidebar shows it (which knows when it waits on
@@ -648,7 +652,7 @@
             n++;
           }
           for (const h of hist) {
-            if (h.name === ROUTER || sup.workers.some((w) => w.name === h.name) || !mm(h.machine)) continue;
+            if (h.name === ROUTER || !mm(h.machine)) continue;
             const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
             if (meta?.deleted || meta?.archived) continue;
             const ck = canonSessKey(h.kind, h.machine, h.session);
@@ -684,7 +688,9 @@
     $("#herdr-status").textContent = !online ? (allMachines.some((m) => !m.local) ? `0/${countMachines.length} 台电脑在线` : "herdr 不可用")
       : countMachines.length > 1 || allMachines.some((m) => !m.local) ? `${online}/${countMachines.length} 台电脑在线` : `${state.agents.length} 个 agent`;
     if (!state.ok && state.error) $("#herdr-status").title = state.error;
-    document.title = blockedAll.length ? `(${blockedAll.length}) Collie` : "Collie";
+    const pend = activePending();
+    const attnTotal = blockedAll.length + pend.length;
+    document.title = attnTotal ? `(${attnTotal}) Collie` : "Collie";
 
     const r = sup.router || {};
     const active = sup.workers.filter((w) => !w.ended);
@@ -694,6 +700,12 @@
     $("#nav-collie-sub").textContent = stText + (running ? ` · ${running} 个任务在跑` : active.length ? ` · 派出 ${active.length} 个` : f?.next ? ` · ${whenShort(f.next)} 跟进` : "");
     $("#nav-collie-sub").title = f?.next ? `Collie 计划下次跟进：${whenShort(f.next)} · ${f.next_text || ""}` : "";
     $("#nav-collie-dot").className = "dot " + collieDot(r.status);
+    const np = $("#nav-pending");
+    if (np) {
+      np.hidden = pend.length === 0;
+      np.textContent = pend.length || "";
+      np.title = pend.length ? `${pend.length} 条待你确认` : "";
+    }
     $("#nav-queue").hidden = !sup.queued;
     $("#nav-queue").textContent = sup.queued;
     const tmrCount = $("#nav-timer-count");
@@ -770,6 +782,7 @@
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (PANEL_VIEWS.has(view) && next !== view) clearInterval(autoTimer);
     if (view === "devices" && next !== "devices") clearInterval(devTimer);
+    if (next !== "collie") pendingOpen = false;
     view = next;
     current = next === "ext" ? null : id;
     extCur = next === "ext" ? id : null;
@@ -830,9 +843,97 @@
   const routerQueued = () => sup.queued_router ?? sup.queued;
   // Messages you sent that the hub's stream hasn't shown yet.
   const pendingSays = [];
+  // Items dismissed locally via × or 已看 before the hub's next stream frame lands.
+  const dismissedLocal = new Set();
+  const ICON_X = `<svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>`;
+  let pendingOpen = false, pendingBarSig = "", pendingListSig = "", flashEntry = { id: "", until: 0 }, jumpSeq = 0;
+  let prevCrewSig = "";
+
+  function optimisticallyResolved(id, list = chatEntries()) {
+    if (dismissedLocal.has(id)) return true;
+    if (!pendingSays.length) return false;
+    if (pendingSays.some((m) => m.re?.entry === id)) return true;
+    if (!pendingSays.some((m) => !m.re?.entry)) return false;
+    const idx = list.findIndex((e) => e.id === id);
+    if (idx < 0) return false;
+    for (let j = idx + 1; j < list.length; j++) {
+      if (list[j].role === "collie") return false;
+    }
+    return true;
+  }
+  function activePending() {
+    const list = sup.pending || [];
+    if (!list.length) return [];
+    const entries = pendingSays.length ? chatEntries() : sup.entries;
+    return list.filter((p) => p?.id && !optimisticallyResolved(p.id, entries));
+  }
+  function renderPendingBar() {
+    const wrap = $("#pending-wrap"), bar = $("#pending-bar"), listEl = $("#pending-list");
+    if (!wrap || !bar || !listEl) return;
+    const list = activePending();
+    if (list.length < 2) pendingOpen = false;
+    if (!list.length) {
+      wrap.hidden = true;
+      wrap.classList.remove("open");
+      listEl.hidden = true;
+      pendingBarSig = pendingListSig = "";
+      return;
+    }
+    wrap.hidden = false;
+    wrap.classList.toggle("open", pendingOpen);
+    const latest = list[list.length - 1];
+    const barSig = `${list.length}:${latest.id}:${latest.summary}`;
+    if (barSig !== pendingBarSig) {
+      pendingBarSig = barSig;
+      if (list.length === 1) {
+        bar.innerHTML = `<button type="button" class="pending-main" data-goto-pending="${esc(latest.id)}" title="${esc(latest.summary)}">
+            <span class="pending-dot"></span><span class="pending-label">待你确认</span><span class="pending-sep">·</span><span class="pending-sum">${esc(latest.summary)}</span>
+          </button><button type="button" class="pending-x" data-dismiss="${esc(latest.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>`;
+      } else {
+        bar.innerHTML = `<button type="button" class="pending-main" data-toggle-pending aria-expanded="${pendingOpen}" title="${esc(latest.summary)}">
+            <span class="pending-dot"></span><span class="pending-label">待你确认 (${list.length})</span><span class="pending-sep">·</span><span class="pending-sum">${esc(latest.summary)}</span>
+            <svg class="pending-chev" viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg>
+          </button>`;
+      }
+    } else {
+      bar.querySelector("[data-toggle-pending]")?.setAttribute("aria-expanded", String(pendingOpen));
+    }
+    if (list.length >= 2 && pendingOpen) {
+      const listSig = JSON.stringify(list.map((p) => [p.id, p.summary, p.at]));
+      if (listSig !== pendingListSig) {
+        pendingListSig = listSig;
+        const items = [...list].reverse();
+        listEl.innerHTML = items.map((p) => `<div class="pending-item">
+          <button type="button" class="pending-jump" data-goto-pending="${esc(p.id)}" title="${esc(p.summary)}">
+            <span class="pending-dot"></span><span class="pending-sum">${esc(p.summary)}</span><span class="pending-time">${esc(sepTime(p.at))}</span>
+          </button><button type="button" class="pending-x" data-dismiss="${esc(p.id)}" title="忽略" aria-label="忽略">${ICON_X}</button>
+        </div>`).join("");
+      }
+      listEl.hidden = false;
+    } else {
+      listEl.hidden = true;
+      pendingListSig = "";
+    }
+  }
+  async function dismissPending(id) {
+    if (!id || dismissedLocal.has(id)) return;
+    dismissedLocal.add(id);
+    if (replyTo?.entry === id) setReply(null);
+    renderSide();
+    if (view === "collie") renderSuper();
+    try {
+      await api("/api/super/dismiss", { body: { id } });
+    } catch (err) {
+      dismissedLocal.delete(id);
+      renderSide();
+      if (view === "collie") renderSuper();
+      toast(err.message, "attn");
+    }
+  }
+
   // Older chat, loaded a page at a time when you ask: the hub only sends the
   // latest 200 lines. olderMore: whether there is more before that.
-  let older = [], olderMore = null, olderBusy = false;
+  let older = [], olderMore = null, olderBusy = false, superScrollRAF = 0;
   function chatEntries() {
     const have = new Set(sup.entries.map((e) => e.id));
     for (let i = pendingSays.length - 1; i >= 0; i--) if (pendingSays[i].id && have.has(pendingSays[i].id)) pendingSays.splice(i, 1);
@@ -841,20 +942,68 @@
   }
   // More before what is shown? Until asked, guess from a full page.
   const canLoadOlder = () => olderMore ?? !!sup.earlier;
-  async function loadOlder() {
+  async function loadOlder(keepPos = true) {
     const first = chatEntries().find((e) => e.id);
-    if (olderBusy || !first) return;
+    if (olderBusy || !first) return false;
     olderBusy = true;
     renderSuper();
     const scroller = $("#super-thread").parentElement, fromBottom = scroller.scrollHeight - scroller.scrollTop;
+    let added = false;
     try {
       const r = await api(`/api/super/earlier?before=${encodeURIComponent(first.id)}`);
-      older = [...(r.entries || []), ...older];
-      olderMore = !!r.more;
-    } catch (e) { toast(e.message, "attn"); }
+      const batch = r.entries || [];
+      if (batch.length) {
+        older = [...batch, ...older];
+        added = true;
+      }
+      olderMore = batch.length ? !!r.more : false;
+    } catch (e) { olderMore = false; toast(e.message, "attn"); }
     olderBusy = false;
     renderSuper();
-    scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
+    if (keepPos) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+      scroller.scrollTop = scroller.scrollHeight - fromBottom; // stay where you were reading
+    }
+    return added;
+  }
+  async function jumpToEntry(id) {
+    if (!id) return;
+    const seq = ++jumpSeq;
+    pendingOpen = false;
+    renderPendingBar();
+    const sel = `#v-collie .msg[data-id="${CSS.escape(id)}"]`;
+    let m = document.querySelector(sel);
+    let guards = 0;
+    while (!m && canLoadOlder() && guards++ < 25) {
+      while (olderBusy) await new Promise((r) => setTimeout(r, 35));
+      if (seq !== jumpSeq) return;
+      m = document.querySelector(sel);
+      if (m) break;
+      const ok = await loadOlder(false);
+      if (seq !== jumpSeq) return;
+      m = document.querySelector(sel);
+      if (!ok) break;
+    }
+    if (!m) { toast("这条消息太早了，已经不在这里"); return; }
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+    const sc = $("#super-thread").parentElement;
+    const sr = sc.getBoundingClientRect(), mr = m.getBoundingClientRect();
+    const want = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, sc.scrollTop + (mr.top - sr.top) - Math.max(24, (sc.clientHeight - mr.height) / 2)));
+    const dist = want - sc.scrollTop;
+    if (Math.abs(dist) > sc.clientHeight * 2.2) {
+      sc.scrollTop = want - Math.sign(dist) * sc.clientHeight * 0.9;
+    }
+    flashEntry = { id, until: Date.now() + 1650 };
+    m.classList.remove("flash");
+    void m.offsetWidth;
+    m.classList.add("flash");
+    if (typeof sc.scrollTo === "function") sc.scrollTo({ top: want, behavior: "smooth" });
+    else sc.scrollTop = want;
+    setTimeout(() => {
+      if (flashEntry.id === id && Date.now() >= flashEntry.until) {
+        document.querySelector(sel)?.classList.remove("flash");
+      }
+    }, 1700);
   }
   function renderSuper(force) {
     const r = sup.router || {};
@@ -899,12 +1048,15 @@
     const active = sup.workers.filter((w) => !w.ended);
     if (view === "collie") renderTarget();
     const multiM = runnableMachines().length > 1 || (state.machines || []).some((m) => !m.local);
-    $("#crew").innerHTML = active.length ? `<span class="crew-label">执行中</span>` + active.map((w) => {
+    const crewHTML = active.length ? `<span class="crew-label">执行中</span>` + active.map((w) => {
       const pane = paneOf(w.name);
       const wWhere = multiM && w.machine ? `<span class="wm">@${esc(machineName(w.machine))}</span>` : "";
       const tip = [STATUS_LABEL[workerStatus(w)] || workerStatus(w), w.task || ""].filter(Boolean).join(" · ");
       return `<span class="chip-wrap"><a class="chip" ${pane ? `href="#/p/${encodeURIComponent(pane)}"` : ""} title="${esc(tip)}"><span class="dot ${esc(workerStatus(w))}"></span>${esc(w.name)}${wWhere}<span class="k">${esc(KIND_LABEL[w.kind] || w.kind)}</span></a><button type="button" class="chip-stop" data-stop-worker="${esc(w.name)}" title="停止 ${esc(w.name)}">×</button></span>`;
     }).join("") : "";
+    const crewChanged = crewHTML !== prevCrewSig;
+    prevCrewSig = crewHTML;
+    $("#crew").innerHTML = crewHTML;
 
     const box = $("#super-thread");
     const scroller = box.parentElement;
@@ -922,6 +1074,36 @@
     } else {
       let prev = "", lastAt = 0;
       let lastUser = "", sinceUser = 0, lastEvent = "", lastCollie = "", sinceCollie = 0, lastQuoted = "";
+      const allEntries = chatEntries();
+      const pendIds = new Set(activePending().map((p) => p.id));
+      const entryPending = (idx, id) => {
+        if (!id) return false;
+        if (sup.hasPending) return pendIds.has(id);
+        if (dismissedLocal.has(id)) return false;
+        let otherCollie = false;
+        for (let j = idx + 1; j < allEntries.length; j++) {
+          const next = allEntries[j];
+          if (next.role === "user") {
+            const reId = next.re?.entry || "";
+            if (reId === id || (!reId && !otherCollie)) return false;
+          } else if (next.role === "collie") {
+            otherCollie = true;
+          }
+        }
+        return true;
+      };
+      const replyOpts = (e, idx) => {
+        const opts = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()) : [];
+        if (opts.length) {
+          if (!entryPending(idx, e.id)) return "";
+          return `<div class="reply-opts" data-entry="${esc(e.id)}">${opts.map((o) =>
+            `<button type="button" class="reply-opt" data-opt="${esc(o)}">${esc(o)}</button>`).join("")}</div>`;
+        }
+        if (e.check && entryPending(idx, e.id)) {
+          return `<div class="reply-opts reply-check" data-entry="${esc(e.id)}"><button type="button" class="reply-ack" data-ack="${esc(e.id)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>已看</button></div>`;
+        }
+        return "";
+      };
       const quote = (e) => {
         const q = e.re;
         if (!q) return "";
@@ -935,7 +1117,8 @@
         return `<a class="re" ${attr} title="${esc(q.text)}"><span class="re-who">${esc(q.who)}</span>${esc(plainLine(q.text))}</a>`;
       };
       const EV_BADGE = { spawn: "派出", done: "回报", blocked: "待确认", error: "异常" };
-      for (const e of chatEntries()) {
+      for (let ei = 0; ei < allEntries.length; ei++) {
+        const e = allEntries[ei];
         if (e.ref === ROUTER && e.tone === "info" && e.role !== "user" && e.role !== "collie") continue;
         if (e.role === "event" && workerChatter(e)) continue;
         const at = +new Date(e.at) || 0;
@@ -953,13 +1136,15 @@
           html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++; lastQuoted = "";
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${artifactsIn(e.text)}${msgActs(e, at)}</div></div>`;
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${artifactsIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at)}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
-          const past = e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
-          const pane = !past && e.ref ? paneOf(e.ref) : null;
-          const href = past ? `#/h/${encodeURIComponent(past.id)}` : pane ? `#/p/${encodeURIComponent(pane)}` : "";
+          const hid = e.ref?.startsWith("h:") ? e.ref.slice(2)
+            : (!e.ref && (e.text?.includes("换了一个新会话") || (e.text?.includes("睡一会儿") && e.text?.includes("做梦"))) ? routerHist(e.at)?.id : "");
+          const past = !hid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
+          const pane = !hid && !past && e.ref ? paneOf(e.ref) : null;
+          const href = hid ? `#/h/${encodeURIComponent(hid)}` : past ? `#/h/${encodeURIComponent(past.id)}` : pane ? `#/p/${encodeURIComponent(pane)}` : "";
           const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
           const busy = w && workerBusy(w);
           const stuck = w && !w.ended && w.status === "blocked";
@@ -975,7 +1160,8 @@
             const tail = `<span class="ev-tail">${wState ? `<span>${wState}</span>` : ""}${href ? `<a class="ev-open" href="${href}" title="查看完整会话">会话 →</a>` : isLong ? `<span>${isExp ? "收起" : "展开"}</span>` : ""}</span>`;
             html += `<div class="event ${toneCls}${isLong ? " expandable" : ""}${isExp ? " expanded" : ""}" ${isLong && e.id ? `data-ev-id="${esc(e.id)}"` : ""}><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span class="ev-badge">${badge}</span><span class="ev-text">${esc(e.text)}</span>${tail}</div>`;
           } else {
-            const tail = `<span class="ev-tail">${wState ? `<span>${wState}</span>` : ""}<span class="ev-open">查看 →</span></span>`;
+            const openLbl = hid ? (e.text?.includes("做梦") ? "做梦前对话 →" : "交接前对话 →") : "查看 →";
+            const tail = `<span class="ev-tail">${wState ? `<span>${wState}</span>` : ""}<span class="ev-open">${openLbl}</span></span>`;
             html += `<a href="${href}" class="event ${toneCls}"><span class="dot ${tone}"></span><span class="when">${hhmm(e.at)}</span><span class="ev-badge">${badge}</span><span class="ev-text">${esc(e.text)}</span>${tail}</a>`;
           }
         }
@@ -999,11 +1185,30 @@
         <span class="go">处理 →</span></a>`;
       }).join("") + `</div>`;
     }
+    renderPendingBar();
     if (olderBusy) html = `<div class="earlier-row">加载中…</div>` + html;
-    if (html === superSig && !force) return;
-    superSig = html;
-    box.innerHTML = html;
-    if (atBottom || force) scroller.scrollTop = scroller.scrollHeight;
+    if (html !== superSig || force) {
+      superSig = html;
+      box.innerHTML = html;
+      if (flashEntry.until > Date.now() && flashEntry.id) {
+        box.querySelector(`.msg[data-id="${CSS.escape(flashEntry.id)}"]`)?.classList.add("flash");
+      }
+    } else if (!crewChanged) {
+      return;
+    }
+    const jumping = flashEntry.until > Date.now();
+    if ((atBottom && !jumping) || force) {
+      scroller.scrollTop = scroller.scrollHeight;
+      const set = scroller.scrollTop;
+      if (typeof requestAnimationFrame === "function") {
+        if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(superScrollRAF);
+        superScrollRAF = requestAnimationFrame(() => {
+          if (scroller.scrollTop === set && scroller.scrollHeight > scroller.clientHeight) {
+            scroller.scrollTop = scroller.scrollHeight;
+          }
+        });
+      }
+    }
   }
   $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
 
@@ -1065,7 +1270,7 @@
     if (b.dataset.choice != null) {
       const c = superAsks.get(pane)?.a?.choices?.[+b.dataset.choice];
       if (!c) return;
-      if (c.text) send("text", { text: c.text }); else send("keys", { keys: c.keys || ["enter"] });
+      if (c.keys?.length) send("keys", { keys: c.keys }); else if (c.text) send("text", { text: c.text }); else send("keys", { keys: ["enter"] });
     } else if (b.dataset.k) send("keys", { keys: [b.dataset.k] });
     else return;
     card.style.opacity = ".5";
@@ -1386,22 +1591,21 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest(".re-btn[data-re]");
     if (!b) return;
-    const e = sup.entries.find((x) => x.id === b.dataset.re);
+    const e = chatEntries().find((x) => x.id === b.dataset.re);
     if (e) setReply(e);
   });
 
-  bindComposer($("#super-composer"), $("#super-input"), async (text) => {
+  async function sendSuper(text, re, restoreRe) {
     const ov = overrideOpen && target ? { ...target } : null;
     const sendMachine = ov?.machine || "";
     const sendKind = ov?.kind || "";
     const sendModel = sendKind ? (ov?.model || "") : "";
     const sendEffort = sendKind ? (ov?.effort || "") : "";
     const hasOverride = Boolean(sendMachine || sendKind || sendModel || sendEffort);
-    const re = replyTo;
-    setReply(null);
     // Your message shows at once; the hub's copy takes its place when it arrives.
     const mine = { id: "", role: "user", text, at: new Date().toISOString(), pending: true, re };
     pendingSays.push(mine);
+    renderSide();
     renderSuper(true);
     let r;
     try {
@@ -1415,8 +1619,10 @@
         override: hasOverride,
       } });
     } catch (err) {
-      pendingSays.splice(pendingSays.indexOf(mine), 1);
-      if (re && !replyTo) setReply(sup.entries.find((x) => x.id === re.entry));
+      const idx = pendingSays.indexOf(mine);
+      if (idx >= 0) pendingSays.splice(idx, 1);
+      if (restoreRe && re && !replyTo) setReply(chatEntries().find((x) => x.id === re.entry));
+      renderSide();
       renderSuper(true);
       throw err;
     }
@@ -1428,8 +1634,53 @@
     }
     // The hub's copy may already be here (its push beat the reply): swap now.
     mine.id = r?.entry || "";
-    if (!mine.id || sup.entries.some((e) => e.id === mine.id)) { pendingSays.splice(pendingSays.indexOf(mine), 1); renderSuper(true); }
+    if (!mine.id || sup.entries.some((e) => e.id === mine.id)) {
+      const idx = pendingSays.indexOf(mine);
+      if (idx >= 0) pendingSays.splice(idx, 1);
+      renderSide();
+      renderSuper(true);
+    }
     if (!sup.router?.alive) toast("正在唤醒 Collie…");
+  }
+
+  $("#super-thread").addEventListener("click", async (ev) => {
+    const ack = ev.target.closest(".reply-ack[data-ack]");
+    if (ack) { ev.preventDefault(); dismissPending(ack.dataset.ack); return; }
+    const b = ev.target.closest(".reply-opt[data-opt]");
+    if (!b) return;
+    const grp = b.closest(".reply-opts[data-entry]");
+    if (!grp || grp.dataset.busy) return;
+    grp.dataset.busy = "1";
+    grp.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    const id = grp.dataset.entry, text = b.dataset.opt;
+    if (replyTo?.entry === id) setReply(null);
+    const e = chatEntries().find((x) => x.id === id);
+    try {
+      await sendSuper(text, e ? { entry: e.id, who: "Collie", text: e.text } : { entry: id, who: "Collie", text: "" }, false);
+    } catch (err) {
+      toast(err.message, "attn");
+    }
+  });
+
+  $("#pending-wrap")?.addEventListener("click", (ev) => {
+    const dis = ev.target.closest("[data-dismiss]");
+    if (dis) { ev.preventDefault(); ev.stopPropagation(); dismissPending(dis.dataset.dismiss); return; }
+    if (ev.target.closest("[data-toggle-pending]")) { ev.preventDefault(); pendingOpen = !pendingOpen; renderPendingBar(); return; }
+    const go = ev.target.closest("[data-goto-pending]");
+    if (go) { ev.preventDefault(); jumpToEntry(go.dataset.gotoPending); }
+  });
+  document.addEventListener("click", (ev) => {
+    const pw = $("#pending-wrap");
+    if (pendingOpen && pw && !ev.target?.closest?.("#pending-wrap")) { pendingOpen = false; renderPendingBar(); }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && pendingOpen) { pendingOpen = false; renderPendingBar(); }
+  });
+
+  bindComposer($("#super-composer"), $("#super-input"), async (text) => {
+    const re = replyTo;
+    setReply(null);
+    await sendSuper(text, re, true);
   }, (draftText) => resolveSuperUploadMachine(draftText));
 
   // ───────────────────────────── panel views (执行轨迹 / 长期记忆 / 定时任务 / 外部触发 / 设置)
@@ -1964,13 +2215,25 @@
         </form>
       </div>
       <div class="card">
-        <div class="card-h"><span class="card-h-main">已配置的定时任务</span><span class="card-h-sub">${ts.length ? `共 ${ts.length} 项` : "暂无任务"}</span></div>
-        ${ts.length ? `<ul class="rows">${ts.map((t) => `<li class="row">
-          <span class="badge ${t.enabled ? "queued" : "ignored"}">${t.enabled ? "启用中" : "已结束"}</span>
-          <div><div class="meta"><b title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b><span>→ ${esc(t.target || "Collie")}</span>${t.enabled ? `<span>下次触发：${when(t.next_run)}</span>` : ""}${t.owner ? `<span>${t.owner === "you" ? "手动创建" : esc(t.owner) + " 创建"}</span>` : ""}</div>
-          <div class="text">${esc(t.text)}</div></div>
-          <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`).join("")}</ul>`
-        : `<div class="empty-state"><span class="es-ico">${clockIco}</span><b>还没有配置定时任务</b><span>可在上方直接点击「常用模板」一键填入，或在聊天中直接对 Collie 说「每天早上 9 点帮我检查一次进展」。</span></div>`}
+        <div class="card-h"><span class="card-h-main">已配置的定时任务</span><span class="card-h-sub">${ts.length ? `共 ${ts.length} 项（${activeCnt} 项启用中）` : "暂无任务"}</span></div>
+        ${(() => {
+          if (!ts.length) {
+            return `<div class="empty-state"><span class="es-ico">${clockIco}</span><b>还没有配置定时任务</b><span>可在上方直接点击「常用模板」一键填入，或在聊天中直接对 Collie 说「每天早上 9 点帮我检查一次进展」。</span></div>`;
+          }
+          const activeList = ts.filter((t) => t.enabled);
+          const endedList = ts.filter((t) => !t.enabled);
+          const endedOpen = !!document.querySelector("details[data-ended-timers]")?.open;
+          const rowHTML = (t) => `<li class="row">
+            <span class="badge ${t.enabled ? "queued" : "ignored"}">${t.enabled ? "启用中" : "已结束"}</span>
+            <div><div class="meta"><b title="${esc(t.spec)}">${esc(describeSpec(t.spec))}</b><span>→ ${esc(t.target || "Collie")}</span>${t.enabled ? `<span>下次触发：${when(t.next_run)}</span>` : t.last_run ? `<span>上次执行：${when(t.last_run)}</span>` : ""}${t.owner ? `<span>${t.owner === "you" ? "手动创建" : esc(t.owner) + " 创建"}</span>` : ""}</div>
+            <div class="text">${esc(t.text)}</div></div>
+            <button class="btn ghost small" data-del-timer="${esc(t.id)}">删除</button></li>`;
+          let out = activeList.length ? `<ul class="rows">${activeList.map(rowHTML).join("")}</ul>` : "";
+          if (endedList.length) {
+            out += `<details class="tm-ended" data-ended-timers ${endedOpen || !activeList.length ? "open" : ""}><summary>已结束的定时任务（${endedList.length}）</summary><ul class="rows">${endedList.map(rowHTML).join("")}</ul></details>`;
+          }
+          return out;
+        })()}
       </div>`;
   }
   // Timer form: mode, days, presets and quick times are buttons; everything re-describes the spec.
@@ -2457,6 +2720,17 @@
     for (const h of hist) if (h.name === name && new Date(h.ended) >= t && (!best || new Date(h.ended) < new Date(best.ended))) best = h;
     return best;
   };
+  const routerHist = (at) => {
+    const t = +new Date(at);
+    if (!t) return null;
+    let best = null, bestDiff = 10 * 60e3;
+    for (const h of hist) {
+      if (h.name !== ROUTER) continue;
+      const d = Math.abs(+new Date(h.ended) - t);
+      if (d < bestDiff) { best = h; bestDiff = d; }
+    }
+    return best;
+  };
   async function loadHistory() {
     if (document.hidden && hist.length) return;
     try { hist = (await api("/api/history")).sessions || []; } catch { return; }
@@ -2656,10 +2930,11 @@
         <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
     const histRow = (h, inProj = false) => {
+      const wPast = sup.workers.find((w) => w.name === h.name || (w.session && w.session === h.session));
       const sub = [KIND_LABEL[h.kind] || h.kind, !inProj && many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
       return `<li class="s-li"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a>
+        <span class="body"><div class="name">${wPast ? `<span class="nm">${esc(histName(h))}</span><span class="by-collie">Collie 派出</span>` : esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a>
         <button type="button" class="item-more" data-smenu="h:${esc(h.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
     const paneRow = (a, inProj = false, lastT = 0) => {
@@ -2680,7 +2955,7 @@
     };
 
     const matchM = (m) => sideMachine === null || (m || "") === sideMachine;
-    const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
+    const isInternalHist = (name) => name === ROUTER || name === "collie-dream";
     const extTimeMap = new Map();
     for (const e of ext) {
       const ck = canonSessKey(e.kind, e.machine, e.session);
@@ -2700,7 +2975,8 @@
       const isBlocked = a.status === "blocked";
       const isRunning = isActivelyRunning(a.status);
       const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "failed" ? 2 : 3;
-      const t = (ck && extTimeMap.get(ck)) || +new Date(meta?.updated_at || 0) || 0;
+      const wLive = sup.workers.find((w) => w.name === a.name && !w.ended);
+      const t = (ck && extTimeMap.get(ck)) || +new Date(wLive?.created_at || 0) || +new Date(meta?.updated_at || 0) || 0;
       const proj = projectOfSession(a.kind, a.machine, a.session, a.cwd, "p:" + a.pane_id);
       pool.push({
         key: "p:" + a.pane_id,
@@ -2709,6 +2985,26 @@
         isRunning, isBlocked, groupRank, t,
         active: view === "pane" && current === a.pane_id,
         html: paneRow(a, !!proj, t),
+      });
+    }
+
+    const liveWorkerNames = new Set(state.agents.map((a) => a.name).filter(Boolean));
+    for (const w of (sup.workers || [])) {
+      if (w.ended || w.status !== "starting" || liveWorkerNames.has(w.name)) continue;
+      if (!matchM(w.machine)) continue;
+      const t = +new Date(w.created_at) || Date.now();
+      const proj = projectOfSession(w.kind, w.machine, w.session || "", w.cwd || "", "");
+      const where = [!proj && many && w.machine ? machineName(w.machine) : "", KIND_LABEL[w.kind] || w.kind, "启动中…"].filter(Boolean).join(" · ");
+      pool.push({
+        key: "w:" + w.name,
+        proj,
+        archived: false,
+        isRunning: true, isBlocked: false, groupRank: 1, t,
+        active: false,
+        html: `<li class="s-li"><a class="item" href="#/trace" title="${esc(w.task || "")}">
+          <span class="glyph">${GLYPHS[w.kind] || GLYPHS.agent}</span>
+          <span class="body"><div class="name"><span class="nm">${esc(w.name)}</span><span class="by-collie">Collie 派出</span></div><div class="sub">${esc(where)}</div></span>
+          ${sideDotHTML("starting")}</a></li>`,
       });
     }
 
@@ -2735,7 +3031,7 @@
     }
 
     for (const h of hist) {
-      if (collieRan(h.name) || !matchM(h.machine)) continue;
+      if (isInternalHist(h.name) || !matchM(h.machine)) continue;
       const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
       if (meta?.deleted) continue;
       const ck = canonSessKey(h.kind, h.machine, h.session);
@@ -2991,6 +3287,7 @@
     if (id.startsWith("h:")) return openHist(id.slice(2));
     const el = $("#x-thread");
     el._msgs = null;
+    el._streaming = null;
     primeThread(el, "x:" + id);
     resetEarlier(el, (c) => `/api/external/${encodeURIComponent(id)}/earlier?before=${c}`);
     extSoonN = 0;
@@ -3010,8 +3307,15 @@
       const show = (msgs) => { keepThread("x:" + id, msgs); if (mine()) { drawThread(msgs, el, "这个会话还没有消息。"); extWorking(); } };
       el._redraw = () => show(threadMsgs(el));
       es.addEventListener("patch", (ev) => mine() && show(applyPatch(el, JSON.parse(ev.data))));
+      es.addEventListener("streaming", (ev) => {
+        if (!mine()) return;
+        const d = JSON.parse(ev.data);
+        el._streaming = d && d.text ? { text: d.text, phase: d.phase || "streaming" } : null;
+        if (el._redraw) el._redraw();
+      });
       es.addEventListener("status", (ev) => {
         const st = JSON.parse(ev.data);
+        if (!st.live || st.status !== "working") el._streaming = null;
         const cur = ext.find((x) => x.id === id);
         if (cur) {
           cur.live = !!st.live;
@@ -3578,7 +3882,7 @@
     $("#thread").classList.remove("asking");
     $("#live").hidden = true;
     $("#live").innerHTML = "";
-    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._pending = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
+    $("#thread")._sig = ""; $("#thread")._msgs = null; $("#thread")._pending = null; $("#thread")._streaming = null; $("#thread")._blocks = null; $("#thread")._older = null; showRaw = false;
   }
   function openChat(id) {
     stream = openES(paneURL(id, "chat"));
@@ -3642,10 +3946,26 @@
     if (idx >= 0) el._pending.splice(idx, 1);
     el._redraw ? el._redraw() : drawThread(threadMsgs(el), el);
   }
-  // A thread's messages: the older ones loaded on request, then the live view, plus optimistic pending sends.
+  // A thread's messages: the older ones loaded on request, then the live view, plus optimistic pending sends and live streaming bubble.
   const threadMsgs = (el) => {
     reconcilePendingThreadMsgs(el);
-    return (el._older || []).concat(el._msgs || []).concat(el._pending || []);
+    const base = (el._older || []).concat(el._msgs || []).concat(el._pending || []);
+    const s = el._streaming;
+    if (s && s.text && String(s.text).trim()) {
+      const want = normMsgText(s.text);
+      let dup = false;
+      for (let k = base.length - 1; k >= 0; k--) {
+        if (base[k].kind === "user") break;
+        if (base[k].kind === "assistant" && normMsgText(base[k].text) === want) {
+          dup = true;
+          break;
+        }
+      }
+      if (!dup) {
+        return base.concat([{ kind: "assistant", text: s.text, phase: s.phase || "streaming", streaming: true }]);
+      }
+    }
+    return base;
   };
   const earlierCursor = (el) => (el._older ? el._olderEarlier : el._liveEarlier) || 0;
   function resetEarlier(el, url) {
@@ -3887,7 +4207,7 @@
           emitAsk(mk, k);
           continue;
         }
-        const isFinal = k === finalIdx || (mk.kind === "assistant" && mk.phase === "final_answer");
+        const isFinal = k === finalIdx || (mk.kind === "assistant" && (mk.phase === "final_answer" || mk.phase === "streaming" || mk.streaming));
         const isProc = !isFinal && (
           mk.kind === "tool"
           || mk.phase === "commentary"
@@ -3904,7 +4224,7 @@
         const rendered = md(mk.text);
         const extraImgs = imagesIn(mk.text);
         const extraArts = artifactsIn(mk.text);
-        html += `<div class="msg assistant">${rendered}${extraImgs}${extraArts}</div>`;
+        html += `<div class="msg assistant${mk.streaming ? " streaming" : ""}">${rendered}${extraImgs}${extraArts}</div>`;
         cut();
       }
       flushProcessGroup(procBuf, procStart, segWorking);
@@ -3960,18 +4280,23 @@
   let lastLive = null;
   function drawLive(l) {
     const prevLiveSt = lastLive?.status;
+    const prevStream = lastLive?.streaming || "";
     lastLive = l;
-    if (prevLiveSt !== l.status) {
-      syncComposerBtn($("#composer"));
-      if ($("#thread")?._redraw) $("#thread")._redraw();
+    const th = $("#thread");
+    const nextStream = l.status === "working" && l.streaming ? l.streaming : "";
+    if (th) {
+      th._streaming = nextStream ? { text: nextStream, phase: "streaming" } : null;
+    }
+    if (prevLiveSt !== l.status || prevStream !== nextStream) {
+      if (prevLiveSt !== l.status) syncComposerBtn($("#composer"));
+      if (th?._redraw) th._redraw();
     }
     $("#thread").classList.toggle("asking", l.status === "blocked" && !!l.approval);
     const box = $("#live");
-    const th = $("#thread");
     const was = nearBottom(th);
     let html = "";
-    if (l.status === "working" && l.tail) {
-      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail)}</pre><span class="meta"></span></div>`;
+    if (l.status === "working" && (l.tail || (!nextStream && l.meta))) {
+      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail || "正在生成回复…")}</pre><span class="meta"></span></div>`;
     } else if (l.status === "blocked" && l.approval) {
       const v = find(current);
       html = askHTML(l.approval, v ? title(v) : "agent");
@@ -4206,11 +4531,27 @@
     if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = ""; }
   });
 
+  const HL = window.CollieHighlight || { HL_MAX_BYTES: 200 * 1024, HL_MAX_LINES: 5000, detectCodeLang: () => null, highlightCode: (c) => esc(c) };
+  let fileRawText = "";
+  function setFileHead(langLabel = "", rawText = "", copyable = false) {
+    fileRawText = rawText || "";
+    const lEl = $("#fv-lang"), cWrap = $("#fv-copy-wrap"), cBtn = $("#fv-copy");
+    if (lEl) { lEl.hidden = !langLabel; lEl.textContent = langLabel; }
+    if (cWrap) cWrap.hidden = !copyable;
+    if (cBtn) {
+      cBtn.removeAttribute("data-copied");
+      cBtn.removeAttribute("data-failed");
+      if (cBtn.nextElementSibling) cBtn.nextElementSibling.textContent = "";
+    }
+  }
+
   async function openFile(path) {
     if (IMG_EXT.test((path || "").split(/[?#]/)[0])) {
       return openImageModal(path);
     }
     const body = $("#fv-body"), seq = ++fileSeq;
+    body.classList.remove("is-code", "is-flush");
+    setFileHead("", "", false);
     $("#fv-name").textContent = path.split(/[\\/]/).pop();
     $("#fv-path").textContent = path;
     body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
@@ -4236,19 +4577,45 @@
       fileUrl = URL.createObjectURL(blob);
       return fileUrl;
     };
-    if (await artifactUI.renderRichFilePane(path, f, setObjectURL)) return;
+    if (await artifactUI.renderRichFilePane(path, f, setObjectURL)) {
+      body.scrollTop = body.scrollLeft = 0;
+      return;
+    }
+    if (seq !== fileSeq) return;
     const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
     $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
     const text = await f.blob.text();
+    if (seq !== fileSeq) return;
     const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
-    body.innerHTML = MD_EXT.test(path) ? `<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}` : `<pre class="fv-pre">${esc(text)}</pre>${cut}`;
+    if (MD_EXT.test(path)) {
+      setFileHead("Markdown", text, true);
+      body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${mdRender(text)}</div>${cut}`;
+      body.scrollTop = body.scrollLeft = 0;
+      return;
+    }
+    const lang = HL.detectCodeLang(path, true);
+    setFileHead(lang ? lang.label : "", text, true);
+    const norm = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
+    let lines = 1;
+    for (let i = 0; i < norm.length && lines <= HL.HL_MAX_LINES + 1; i++) if (norm.charCodeAt(i) === 10) lines++;
+    if (lang && norm.length <= HL.HL_MAX_BYTES && lines <= HL.HL_MAX_LINES) {
+      const nums = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+      body.classList.add("is-code");
+      body.innerHTML = `<div class="fv-code"><div class="fv-ln" aria-hidden="true">${nums}</div><pre class="fv-pre"><code id="fv-code-src">${HL.highlightCode(norm, lang.id)}</code></pre></div>${cut}`;
+    } else if (lang) {
+      body.classList.add("is-code");
+      body.innerHTML = `<pre class="fv-pre fv-large" id="fv-code-src">${esc(norm)}</pre>${cut}`;
+    } else {
+      body.innerHTML = `<pre class="fv-pre" id="fv-code-src">${esc(text)}</pre>${cut}`;
+    }
+    body.scrollTop = body.scrollLeft = 0;
   }
   const artifactUI = window.CollieArtifacts
     ? window.CollieArtifacts.initArtifacts({
         $, esc, tilde, fmtSize, toast, routeReq, fileTries, findFile,
         machineName, getMachinesCount: () => (state.machines || []).length,
         mdRender: (s) => mdRender(s), showFilePane: () => showFilePane(),
-        openFile: (p) => openFile(p),
+        openFile: (p) => openFile(p), setFileHead,
       })
     : { artifactsIn: () => "", renderRichFilePane: async () => false };
   const artifactsIn = (t) => artifactUI.artifactsIn(t);
@@ -4292,6 +4659,33 @@
     ta.remove();
     return ok;
   }
+  const copyTimers = new WeakMap();
+  let lastCopyMsg = "";
+  function reportCopy(button, ok) {
+    const tip = button.nextElementSibling;
+    clearTimeout(copyTimers.get(button));
+    button.removeAttribute("data-copied");
+    button.removeAttribute("data-failed");
+    let msg = ok ? "已复制" : "复制失败";
+    if (msg === lastCopyMsg) msg += "\u00A0";
+    lastCopyMsg = msg;
+    if (tip) tip.textContent = "";
+    void button.offsetWidth;
+    button.setAttribute(ok ? "data-copied" : "data-failed", "");
+    if (tip) requestAnimationFrame(() => { tip.textContent = msg; });
+    copyTimers.set(button, setTimeout(() => {
+      button.removeAttribute("data-copied");
+      button.removeAttribute("data-failed");
+      if (tip) tip.textContent = "";
+    }, 1800));
+  }
+  $("#fv-copy")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const text = fileRawText || $("#fv-code-src")?.textContent || "";
+    if (!text) return;
+    reportCopy(btn, await copyText(text));
+  });
+
   document.addEventListener("click", async (ev) => {
     const cc = ev.target.closest("[data-copy-code]");
     if (cc) {
@@ -4307,7 +4701,7 @@
     }
     const b = ev.target.closest("[data-copy]");
     if (!b) return;
-    const e = sup.entries.find((x) => x.id === b.dataset.copy);
+    const e = chatEntries().find((x) => x.id === b.dataset.copy);
     if (e) toast(await copyText(e.text) ? "已复制" : "复制失败", "");
   });
   // A reply's quote of your message: take you to it.
@@ -4315,10 +4709,7 @@
     const a = e.target.closest("a.re[data-goto]");
     if (!a) return;
     e.preventDefault();
-    const m = document.querySelector(`#v-collie .msg[data-id="${CSS.escape(a.dataset.goto)}"]`);
-    if (!m) return toast("这条消息太早了，已经不在这里");
-    m.scrollIntoView({ block: "center", behavior: "smooth" });
-    m.classList.remove("flash"); void m.offsetWidth; m.classList.add("flash");
+    jumpToEntry(a.dataset.goto);
   });
   // No hover on a phone: tap a Collie chat message to see when it was said.
   document.addEventListener("click", (e) => {
@@ -4395,13 +4786,29 @@
   }
   function mdRender(src) {
     const blocks = [];
-    let text = String(src || "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
-      const l = (lang || "").trim().split(/\s+/)[0];
-      blocks.push(`<div class="codeblock"><div class="code-bar"><span class="code-lang">${esc(l || "code")}</span><button type="button" class="code-copy" data-copy-code>${ICON_COPY}<span>复制</span></button></div><pre><code>${esc(code.replace(/\n$/, ""))}</code></pre></div>`);
+    let text = String(src || "").replace(/[\u0000\u0001]/g, "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
+      const raw = code.replace(/\n$/, "");
+      const tag = (lang || "").trim().split(/\s+/)[0];
+      const detected = HL.detectCodeLang(lang, false);
+      const label = detected ? detected.label : (tag || "code");
+      const rendered = detected ? HL.highlightCode(raw, detected.id) : esc(raw);
+      blocks.push(`<div class="codeblock"><div class="code-bar"><span class="code-lang">${esc(label)}</span><button type="button" class="code-copy" data-copy-code>${ICON_COPY}<span>复制</span></button></div><pre><code${detected ? ` data-lang="${esc(detected.id)}"` : ""}>${rendered}</code></pre></div>`);
       return `\u0000${blocks.length - 1}\u0000`;
     });
     text = esc(text);
     const URL_RE = /(?<![="'>\w\/])https?:\/\/[^\s<>"，。；：、！？）」』】（「『【]+/g;
+    const trimBalancedURL = (raw) => {
+      let u = raw, tail = "";
+      while (u.length) {
+        const m = u.match(/(?:&quot;|&#39;|[.,;:!?'`]+)$/);
+        if (m) { tail = m[0] + tail; u = u.slice(0, -m[0].length); continue; }
+        const last = u[u.length - 1];
+        if (last === ")" && (u.split("(").length - 1) < (u.split(")").length - 1)) { tail = ")" + tail; u = u.slice(0, -1); continue; }
+        if (last === "]" && (u.split("[").length - 1) < (u.split("]").length - 1)) { tail = "]" + tail; u = u.slice(0, -1); continue; }
+        break;
+      }
+      return [u, tail];
+    };
     const urlLabel = (u) => {
       const raw = u.replace(/&amp;/g, "&").replace(/^https?:\/\//, "").replace(/\/$/, "");
       return esc(raw.length > 42 ? raw.slice(0, 40) + "…" : raw);
@@ -4440,17 +4847,16 @@
           return hold(`<a class="fpath" href="#" data-path="${esc(p)}" title="${esc(p)}">${label}</a>`);
         })
         .replace(FILE_RE, (_, pre, p) => pre + hold(`<a class="fpath" href="#" data-path="${p}" title="打开这个文件">${p}</a>`))
-        .replace(URL_RE, (u) => {
-          let tail = u.match(/(?:&quot;|&#39;|[.,;:!?'\]]+)+$/)?.[0] || "";
-          u = u.slice(0, u.length - tail.length);
-          if (u.endsWith(")") && !u.includes("(")) { u = u.slice(0, -1); tail = ")" + tail; }
+        .replace(URL_RE, (rawU) => {
+          const [u, tail] = trimBalancedURL(rawU);
+          if (!u) return rawU;
           return `<a class="url" href="${u}" target="_blank" rel="noopener noreferrer" title="${u}">${urlLabel(u)}</a>${tail}`;
         })
         .replace(/\u0001(\d+)\u0001/g, (_, i) => spans[+i]);
     };
     const out = [];
     let list = null, para = [];
-    const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; } };
+    const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
     const flushList = () => { if (list) { out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
     // A GFM table: a | row, a |---| row, then more | rows.
     const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
@@ -5916,7 +6322,7 @@
       }),
     ].filter((x) => match(x.title, x.sub, x.meta));
 
-    const collieRan = (name) => name === ROUTER || sup.workers.some((w) => w.name === name);
+    const collieRan = (name) => name === ROUTER || name === "collie-dream";
     const extUpdatedMap = new Map();
     for (const e of ext) {
       const ck = canonSessKey(e.kind, e.machine, e.session);

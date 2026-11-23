@@ -72,6 +72,10 @@ type Entry struct {
 	// What a reply is about, when Collie said (collie reply --re): copied at
 	// the time, so it still reads right after the original is trimmed away.
 	Re *Quote `json:"re,omitempty"`
+	// Quick-reply choices Collie offered with its question; tapped to answer.
+	Options []string `json:"options,omitempty"`
+	// Marked by Collie (--check) when a reply without options still awaits the human's review or action.
+	Check bool `json:"check,omitempty"`
 }
 
 // A Quote is what a reply answers: a message of yours, a worker's work, a timer.
@@ -135,20 +139,22 @@ type Settings struct {
 }
 
 type State struct {
-	Seq      int                `json:"seq"`
-	Triggers []*Trigger         `json:"triggers"`
-	Threads  map[string]*Thread `json:"threads"`
-	Workers  map[string]*Worker `json:"workers"`
-	Entries  []*Entry           `json:"entries"`
-	Timers   []*Timer           `json:"timers"`
-	Policies []Policy           `json:"policies"`
-	Settings Settings           `json:"settings"`
+	Seq       int                `json:"seq"`
+	Triggers  []*Trigger         `json:"triggers"`
+	Threads   map[string]*Thread `json:"threads"`
+	Workers   map[string]*Worker `json:"workers"`
+	Entries   []*Entry           `json:"entries"`
+	Dismissed map[string]bool    `json:"dismissed,omitempty"`
+	Timers    []*Timer           `json:"timers"`
+	Policies  []Policy           `json:"policies"`
+	Settings  Settings           `json:"settings"`
 }
 
 func defaultState(home string) *State {
 	return &State{
-		Threads: map[string]*Thread{},
-		Workers: map[string]*Worker{},
+		Threads:   map[string]*Thread{},
+		Workers:   map[string]*Worker{},
+		Dismissed: map[string]bool{},
 		Policies: []Policy{
 			{Source: "webhook:github", Action: "candidate"},
 			{Source: "webhook:feishu", Action: "candidate"},
@@ -178,6 +184,25 @@ func (st *State) trim() {
 		if n := len(th.Triggers); n > 60 {
 			th.Triggers = append([]string(nil), th.Triggers[n-60:]...)
 		}
+	}
+	const keepDismissed = 1000
+	if len(st.Dismissed) > keepDismissed {
+		ids := make([]string, 0, len(st.Dismissed))
+		for id := range st.Dismissed {
+			ids = append(ids, id)
+		}
+		for i := 0; i < len(ids)-1; i++ {
+			for j := i + 1; j < len(ids); j++ {
+				if idNum(ids[i]) > idNum(ids[j]) {
+					ids[i], ids[j] = ids[j], ids[i]
+				}
+			}
+		}
+		keep := make(map[string]bool, keepDismissed)
+		for _, id := range ids[len(ids)-keepDismissed:] {
+			keep[id] = true
+		}
+		st.Dismissed = keep
 	}
 }
 

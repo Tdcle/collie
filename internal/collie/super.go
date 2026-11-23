@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -46,12 +47,14 @@ type Super struct {
 	routerUsage         ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun     *[2]string
+	lastRouter    []*Trigger           // triggers delivered in the latest Router batch (re-queued if Router exits before replying)
 	handover      *handover            // set while the router writes its memory before a fresh session
 	dream         *dreamRun            // set while Collie sleeps and a dream session tidies its memory
 	dreamFailSlot time.Time            // scheduled dream slot of the latest failed nightly attempt
 	dreamFailAt   time.Time            // when the latest dream attempt failed
 	dreamFailures int                  // consecutive failures for dreamFailSlot
 	lastTrust     map[string]time.Time // pane → when its trust dialog was last answered
+	lastAnswer    map[string]time.Time // pane → when an approval dialog was last answered
 	lastScreen    map[string]screenMark
 	transcripts   map[string]*transcript
 	noAgent       map[string]time.Time // worker → since when its pane has had no agent in it
@@ -151,17 +154,68 @@ func (sp *Super) flush() {
 }
 
 func (sp *Super) addEntryLocked(role, thread, text, ref, tone string) *Entry {
-	return sp.addEntryReLocked(role, thread, text, ref, tone, nil)
+	return sp.addEntryFullLocked(role, thread, text, ref, tone, nil, nil, false)
 }
 
 func (sp *Super) addEntryReLocked(role, thread, text, ref, tone string, re *Quote) *Entry {
-	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re}
+	return sp.addEntryFullLocked(role, thread, text, ref, tone, re, nil, false)
+}
+
+func (sp *Super) addEntryOptsLocked(role, thread, text, ref, tone string, re *Quote, opts []string) *Entry {
+	return sp.addEntryFullLocked(role, thread, text, ref, tone, re, opts, false)
+}
+
+func (sp *Super) addEntryFullLocked(role, thread, text, ref, tone string, re *Quote, opts []string, check bool) *Entry {
+	if len(opts) > 0 {
+		check = false
+	}
+	e := &Entry{ID: sp.st.nextID("e"), Role: role, Thread: thread, Text: text, At: time.Now(), Ref: ref, Tone: tone, Re: re, Options: opts, Check: check}
 	sp.st.Entries = append(sp.st.Entries, e)
 	if role == "collie" || tone == "blocked" || tone == "error" {
-		sp.queueNotifyLocked(role, text, tone, re)
+		sp.queueNotifyLocked(role, text, tone, re, check, opts...)
 	}
 	sp.changed()
 	return e
+}
+
+const maxReplyOptions = 6
+
+func cleanOptions(raw []string) []string {
+	var out []string
+	for _, s := range raw {
+		s = clip(oneLine(s), 80)
+		if s == "" || slices.Contains(out, s) {
+			continue
+		}
+		out = append(out, s)
+		if len(out) >= maxReplyOptions {
+			break
+		}
+	}
+	return out
+}
+
+// Reply posts Collie's message to a conversation thread, with optional quote,
+// quick-reply buttons, or a --check review mark, and returns any soft warning.
+func (sp *Super) Reply(thread, text, reID string, options []string, check bool) (*Entry, string) {
+	text = strings.TrimSpace(text)
+	if thread == "" {
+		thread = mainThread
+	}
+	opts := cleanOptions(options)
+	sp.mu.Lock()
+	limit := sp.st.Settings.ReplyChars
+	re := sp.quoteLocked(reID)
+	e := sp.addEntryFullLocked("collie", thread, text, "", "", re, opts, check && len(opts) == 0)
+	sp.mu.Unlock()
+	var warn string
+	if strings.TrimSpace(reID) != "" && re == nil {
+		warn = "--re " + reID + " is not an event or message I know; the reply went out without it"
+	}
+	if n := replyLen(text); limit > 0 && n > limit {
+		warn = fmt.Sprintf("reply is %d characters; chat replies are usually ≤%d. Fine if the human asked for detail or the result needs a list; otherwise keep the next one shorter", n, limit)
+	}
+	return e, warn
 }
 
 func (sp *Super) threadLocked(id string) *Thread {
@@ -276,6 +330,9 @@ func sessionID(kind, value string) string {
 }
 
 func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
+	if sp.s == nil || sp.s.herdr == nil {
+		return nil, false
+	}
 	list, err := sp.s.herdr.Agents(ctx)
 	if err != nil {
 		return nil, false
@@ -297,6 +354,12 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 			la.Session = sessionID(a.Session.Kind, a.Session.Value)
 		}
 		if *a.Name == routerName {
+			// If the Router's CLI exited back to a shell (Kind == ""), do NOT
+			// consider Collie alive! Only workers keep Kind == "" entries briefly
+			// so workerDead can inspect their screen tail.
+			if la.Kind == "" {
+				continue
+			}
 			if prev, exists := m[routerName]; exists {
 				_, prevM := split(prev.Pane)
 				_, curM := split(la.Pane)
@@ -320,8 +383,10 @@ func (sp *Super) tick(parent context.Context) {
 	now := time.Now()
 
 	type finished struct {
-		w       *Worker
-		blocked bool
+		w            *Worker
+		blocked      bool
+		fromWorking  bool
+		askedAt      time.Time
 	}
 	var fin []finished
 	var dead []*Worker
@@ -397,22 +462,22 @@ func (sp *Super) tick(parent context.Context) {
 			sp.changed()
 			switch {
 			case a.Status == "blocked":
-				fin = append(fin, finished{w, true})
+				fin = append(fin, finished{w: w, blocked: true})
 			case (prev == "working" || prev == "waiting") && (a.Status == "done" || a.Status == "idle"):
 				delete(sp.workerAskedAt, w.Name)
 				if now.Sub(w.ReportAt) > 90*time.Second {
-					fin = append(fin, finished{w, false})
+					fin = append(fin, finished{w: w, fromWorking: true, askedAt: asked})
 				}
 			case !asked.IsZero() && (a.Status == "done" || a.Status == "idle"):
 				delete(sp.workerAskedAt, w.Name)
 				if now.Sub(w.ReportAt) > 90*time.Second {
-					fin = append(fin, finished{w, false})
+					fin = append(fin, finished{w: w, askedAt: asked})
 				}
 			}
 		} else if !asked.IsZero() && (a.Status == "done" || a.Status == "idle") && now.Sub(asked) >= 5*time.Second {
 			delete(sp.workerAskedAt, w.Name)
 			if now.Sub(w.ReportAt) > 90*time.Second {
-				fin = append(fin, finished{w, false})
+				fin = append(fin, finished{w: w, askedAt: asked})
 			}
 		}
 	}
@@ -446,11 +511,47 @@ func (sp *Super) tick(parent context.Context) {
 		if sp.routerActiveMachine == "" {
 			sp.routerActiveMachine = rm
 		}
+	} else if !sp.routerAskedAt.IsZero() && len(sp.lastRouter) > 0 && sp.handover == nil && sp.dream == nil {
+		// The Router process exited back to a shell or lost its pane before
+		// answering the latest batch of triggers! Re-queue any batch triggers
+		// when Collie hasn't replied since routerAskedAt, so user messages and
+		// fired timer triggers are never lost to an unsubmitted draft.
+		replied := false
+		for i := len(sp.st.Entries) - 1; i >= 0; i-- {
+			e := sp.st.Entries[i]
+			if e.At.Before(sp.routerAskedAt) {
+				break
+			}
+			if e.Role == "collie" {
+				replied = true
+				break
+			}
+		}
+		if !replied {
+			requeued := 0
+			for _, t := range sp.lastRouter {
+				if t != nil && t.Status == "delivered" {
+					t.Status = "queued"
+					if !contains(t.Targets, routerName) {
+						t.Targets = append(t.Targets, routerName)
+					}
+					if _, exists := deliveries[routerName]; !exists || !slices.Contains(deliveries[routerName], t) {
+						deliveries[routerName] = append(deliveries[routerName], t)
+					}
+					requeued++
+				}
+			}
+			if requeued > 0 {
+				sp.changed()
+			}
+		}
+		sp.routerAskedAt = time.Time{}
+		sp.lastRouter = nil
 	}
 	sp.mu.Unlock()
 
 	for _, f := range fin {
-		sp.workerSettled(ctx, f.w, f.blocked)
+		sp.workerSettled(ctx, f.w, f.blocked, f.fromWorking, f.askedAt)
 	}
 	for _, w := range dead {
 		sp.workerDead(ctx, w)
@@ -477,7 +578,10 @@ func (sp *Super) tick(parent context.Context) {
 		if target == routerName && a.Status == "blocked" {
 			sp.trustOwnDir(ctx, a.Pane)
 		}
-		if a.Status == "blocked" || a.Status == "starting" || (!a.Ready && a.Status == "unknown") {
+		sp.mu.Lock()
+		recentlyAnswered := !sp.lastAnswer[a.Pane].IsZero() && now.Sub(sp.lastAnswer[a.Pane]) < 2*time.Second
+		sp.mu.Unlock()
+		if (a.Status == "blocked" && !recentlyAnswered) || a.Status == "starting" || (!a.Ready && a.Status == "unknown") {
 			continue
 		}
 		sp.mu.Lock()
@@ -608,9 +712,17 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	if fresh {
 		sp.routerFresh = false
 	}
-	if target == routerName && sp.routerAskedAt.IsZero() {
-		sp.routerAskedAt = time.Now()
-	} else if target != routerName {
+	if target == routerName {
+		if sp.routerAskedAt.IsZero() {
+			sp.routerAskedAt = time.Now()
+			sp.lastRouter = nil
+		}
+		for _, t := range list {
+			if !slices.Contains(sp.lastRouter, t) {
+				sp.lastRouter = append(sp.lastRouter, t)
+			}
+		}
+	} else {
 		sp.workerAskedAt[target] = time.Now()
 	}
 	for _, t := range list {
@@ -716,7 +828,17 @@ func deathReason(screen string) string {
 	return loose
 }
 
-func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
+func isUnacceptedCollieDraft(summary string) bool {
+	if !strings.Contains(summary, "[collie] ") {
+		return false
+	}
+	return strings.Contains(summary, "You are worker ") ||
+		strings.Contains(summary, "› [collie]") ||
+		strings.Contains(summary, "❯ [collie]") ||
+		strings.Contains(summary, "> [collie]")
+}
+
+func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked, fromWorking bool, askedAt time.Time) {
 	sp.mu.Lock()
 	ask := sp.st.Settings.AskPermissions
 	sp.mu.Unlock()
@@ -725,6 +847,18 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked bool) {
 		return
 	}
 	summary := sp.lastAssistant(ctx, w)
+	// When an agent TUI (such as Codex) renders its input prompt before finishing
+	// account/routing discovery, the delivered [collie] prompt sits buffered in
+	// its input box while status stays "idle". Never mistake that buffered draft
+	// for a completed assistant turn!
+	if !blocked && !fromWorking && isUnacceptedCollieDraft(summary) {
+		sp.mu.Lock()
+		if !w.Ended && time.Since(w.CreatedAt) < 40*time.Second {
+			sp.workerAskedAt[w.Name] = time.Now()
+		}
+		sp.mu.Unlock()
+		return
+	}
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	if blocked {
@@ -871,6 +1005,29 @@ func (sp *Super) Show(id string) (string, bool) {
 func (sp *Super) List() string {
 	projs := sp.s.snapshotProjects()
 	machines := sp.s.allMachines()
+	metaSnap := sp.s.sessionMetaSnapshot()
+	findMeta := func(kind, machine, session, fallback string) *SessionMeta {
+		if ck := canonicalSessionKey(kind, machine, session); ck != "" {
+			if m := metaSnap[ck]; m != nil {
+				return m
+			}
+		}
+		if fallback != "" {
+			return metaSnap[fallback]
+		}
+		return nil
+	}
+	var st PaneState
+	if sp.s != nil && sp.s.herdr != nil {
+		lctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		st = sp.s.state(lctx)
+		cancel()
+	}
+	var extList []*External
+	if sp.s != nil {
+		extList = sp.s.collectAllExternal(false)
+	}
+
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	var b strings.Builder
@@ -949,6 +1106,80 @@ func (sp *Super) List() string {
 		fmt.Fprintf(&b, "  %-14s %-8s %-8s thread=%s  %s\n", w.Name, w.Kind, w.Status, w.Thread, clip(firstLine(w.Task), 70))
 	}
 	if !any {
+		b.WriteString("  (none)\n")
+	}
+	b.WriteString("sessions (sidebar standalone/project sessions; pass the id to `collie send <id> \"text\"` or `collie show <id>`):\n")
+	seenSess := map[string]bool{}
+	sessCount := 0
+	for _, a := range st.Agents {
+		if a.Name == routerName {
+			continue
+		}
+		if w := sp.st.Workers[a.Name]; w != nil && !w.Ended {
+			continue
+		}
+		meta := findMeta(a.Kind, a.Machine, a.Session, "p:"+a.PaneID)
+		if meta != nil && (meta.Deleted || meta.Archived) {
+			continue
+		}
+		if ck := canonicalSessionKey(a.Kind, a.Machine, a.Session); ck != "" {
+			seenSess[ck] = true
+		}
+		title := strings.TrimSpace(a.Topic)
+		if meta != nil && strings.TrimSpace(meta.Title) != "" {
+			title = strings.TrimSpace(meta.Title)
+		}
+		if title == "" {
+			title = firstNonEmpty(a.WorkspaceLabel, a.Name)
+		}
+		mLabel := "hub"
+		if a.Machine != "" {
+			if m := mByID[a.Machine]; m != nil && m.Name != "" {
+				mLabel = m.Name
+			} else {
+				mLabel = a.Machine
+			}
+		}
+		fmt.Fprintf(&b, "  %-32s %-8s %-8s @%-8s title=%q  cwd=%s\n", a.PaneID, a.Kind, a.Status, mLabel, clip(title, 40), a.Cwd)
+		sessCount++
+		if sessCount >= 18 {
+			break
+		}
+	}
+	for _, e := range extList {
+		if sessCount >= 18 || !e.CanSend {
+			continue
+		}
+		meta := findMeta(e.Kind, e.Machine, e.Session, "x:"+e.ID)
+		if meta != nil && (meta.Deleted || meta.Archived) {
+			continue
+		}
+		if ck := canonicalSessionKey(e.Kind, e.Machine, e.Session); ck != "" {
+			if seenSess[ck] {
+				continue
+			}
+			seenSess[ck] = true
+		}
+		title := strings.TrimSpace(e.Title)
+		if meta != nil && strings.TrimSpace(meta.Title) != "" {
+			title = strings.TrimSpace(meta.Title)
+		}
+		stStr := "idle"
+		if e.Live {
+			stStr = firstNonEmpty(e.Status, "working")
+		}
+		mLabel := "hub"
+		if e.Machine != "" {
+			if m := mByID[e.Machine]; m != nil && m.Name != "" {
+				mLabel = m.Name
+			} else {
+				mLabel = e.Machine
+			}
+		}
+		fmt.Fprintf(&b, "  %-32s %-8s %-8s @%-8s title=%q  cwd=%s\n", e.ID, e.Kind, stStr, mLabel, clip(title, 40), e.Cwd)
+		sessCount++
+	}
+	if sessCount == 0 {
 		b.WriteString("  (none)\n")
 	}
 	b.WriteString("threads:\n")

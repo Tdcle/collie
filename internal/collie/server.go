@@ -720,13 +720,34 @@ func ensureNonBlockingAgentArgs(herdrKind string, args []string) []string {
 	if herdrKind != "codex" {
 		return args
 	}
+	hasNoDaemon, hasUpdateCfg, hasProxyCfg, hasRemote := false, false, false, false
 	for _, a := range args {
-		if strings.Contains(a, "check_for_update_on_startup") {
-			return args
+		switch {
+		case a == "--no-daemon":
+			hasNoDaemon = true
+		case a == "--remote" || strings.HasPrefix(a, "--remote="):
+			hasRemote = true
+		case strings.Contains(a, "check_for_update_on_startup"):
+			hasUpdateCfg = true
+		case strings.Contains(a, "respect_system_proxy"):
+			hasProxyCfg = true
 		}
 	}
-	out := make([]string, 0, len(args)+2)
-	out = append(out, "-c", "check_for_update_on_startup=false")
+	var prefix []string
+	if !hasNoDaemon && !hasRemote {
+		prefix = append(prefix, "--no-daemon")
+	}
+	if !hasUpdateCfg {
+		prefix = append(prefix, "-c", "check_for_update_on_startup=false")
+	}
+	if !hasProxyCfg {
+		prefix = append(prefix, "-c", "features.respect_system_proxy=true")
+	}
+	if len(prefix) == 0 {
+		return args
+	}
+	out := make([]string, 0, len(prefix)+len(args))
+	out = append(out, prefix...)
 	out = append(out, args...)
 	return out
 }

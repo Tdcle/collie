@@ -23,6 +23,7 @@ jobs:
       - name: Verify frontend JS syntax & demo build
         if: matrix.os != 'windows-latest'
         run: |
+          node --check web/highlight.js
           node --check web/quota.js
           node --check web/artifacts.js
           node --check web/app.js
