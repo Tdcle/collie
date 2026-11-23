@@ -94,9 +94,7 @@ func clampPct(v float64) float64 {
 
 func agentStatusRank(st string) int {
 	switch st {
-	case "exhausted":
-		return 0
-	case "ok", "balance":
+	case "ok", "balance", "exhausted":
 		return 1
 	case "api_key":
 		return 2
@@ -251,12 +249,36 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			mq := s.localMachineQuota(r.Context(), fresh)
+			hCtx := r.Context()
+			var cancel context.CancelFunc
+			if len(paired) > 0 {
+				hCtx, cancel = context.WithTimeout(r.Context(), 2200*time.Millisecond)
+				defer cancel()
+			}
+			mq := s.localMachineQuota(hCtx, fresh)
 			mq.ID = "hub"
 			if mq.Name == "" {
 				mq.Name = "Hub"
 			}
 			mq.Relay = !herdrOK
+			if len(paired) > 0 {
+				routerOnHub := false
+				if s.sup != nil {
+					s.sup.mu.Lock()
+					routerOnHub = s.sup.st.Settings.RouterMachine == "hub"
+					s.sup.mu.Unlock()
+				}
+				hasConfigured := false
+				for _, a := range mq.Agents {
+					if a.Status == "ok" || a.Status == "balance" || a.Status == "exhausted" || a.Status == "api_key" {
+						hasConfigured = true
+						break
+					}
+				}
+				if !routerOnHub && !hasConfigured {
+					return
+				}
+			}
 			slots[0] = slot{mq: mq, ok: true}
 		}()
 	}
