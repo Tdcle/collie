@@ -108,7 +108,7 @@ function runScenario(authed) {
               {
                 id: "e2",
                 role: "collie",
-                text: "**结论：共 3 项核心更新**。\n\n| 模块 | 变化 |\n|---|---|\n| 路由 | 纯原型加速 |\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
+                text: "**结论：共 3 项核心更新**。\n\n任务｜旧纯原型｜新纯原型｜原编码器\n息肉 357 张｜327｜355（99.44%）｜350\n超声视频 72 段｜70｜72（100%）｜71\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
                 options: ["继续启动", "先不跑"],
                 at: now,
               },

@@ -5012,6 +5012,7 @@
       return s
         .replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`))
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
         .replace(/\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]/gi, (_, p) => {
           const raw = p.replace(/&amp;/g, "&");
           return hold(`<span class="thumbs">${thumbBtn(raw)}</span>`);
@@ -5051,27 +5052,62 @@
     let list = null, para = [];
     const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; } };
     const flushList = () => { if (list) { out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((x) => `<li>${inline(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
-    // A GFM table: a | row, a |---| row, then more | rows.
-    const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
-    const isSep = (row) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(row) && row.includes("-");
+    // A GFM table (with |---| separator) OR a compact pipe-delimited table
+    // (ASCII `|` or fullwidth `｜`, >=2 aligned rows with matching column counts).
+    const hasPipe = (row) => row.includes("|") || row.includes("｜");
+    const normPipes = (row) => row.replace(/｜/g, "|");
+    const cells = (row) => normPipes(row).trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+    const isSep = (row) => {
+      const nr = normPipes(row);
+      return nr.includes("|") && /^\s*\|?\s*:?[-—–]{2,}:?\s*(\|\s*:?[-—–]{2,}:?\s*)*\|?\s*$/.test(nr) && /[-—–]/.test(nr);
+    };
+    const isCompactTableRun = (startIdx) => {
+      const r0 = lines[startIdx];
+      if (!hasPipe(r0) || /^\s*(?:[-*•>]|```|\d+[.)]\s)/.test(r0)) return 0;
+      const c0 = cells(r0);
+      if (c0.length < 2 || c0.some((c) => !c || c.length > 72)) return 0;
+      let count = 1;
+      for (let k = startIdx + 1; k < lines.length; k++) {
+        const rk = lines[k];
+        if (!rk.trim() || !hasPipe(rk)) break;
+        const ck = cells(rk);
+        if (ck.length !== c0.length || ck.some((c) => c.length > 96)) break;
+        count++;
+      }
+      return (c0.length >= 3 && count >= 2) || (c0.length === 2 && count >= 3) ? count : 0;
+    };
     const lines = text.split("\n");
     for (let li = 0; li < lines.length; li++) {
       const line = lines[li];
       let m;
-      if (line.includes("|") && li + 1 < lines.length && isSep(lines[li + 1]) && lines[li + 1].includes("|")) {
+      if (hasPipe(line) && li + 1 < lines.length && isSep(lines[li + 1])) {
         flushPara(); flushList();
         const head = cells(line);
         const align = cells(lines[li + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
         const td = (tag, c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ""}>${inline(c)}</${tag}>`;
         let body = "";
         li += 2;
-        while (li < lines.length && lines[li].includes("|") && lines[li].trim()) {
+        while (li < lines.length && hasPipe(lines[li]) && lines[li].trim()) {
           const r = cells(lines[li]);
           body += `<tr>${head.map((_, k) => td("td", r[k] || "", k)).join("")}</tr>`;
           li++;
         }
         li--;
         out.push(`<div class="md-table"><table><thead><tr>${head.map((c, k) => td("th", c, k)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
+        continue;
+      }
+      const compactRows = isCompactTableRun(li);
+      if (compactRows >= 2) {
+        flushPara(); flushList();
+        const head = cells(line);
+        const td = (tag, c) => `<${tag}>${inline(c)}</${tag}>`;
+        let body = "";
+        for (let k = 1; k < compactRows; k++) {
+          const r = cells(lines[li + k]);
+          body += `<tr>${head.map((_, colIdx) => td("td", r[colIdx] || "")).join("")}</tr>`;
+        }
+        li += compactRows - 1;
+        out.push(`<div class="md-table"><table><thead><tr>${head.map((c) => td("th", c)).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
         continue;
       }
       if (/^\u0000\d+\u0000$/.test(line.trim())) { flushPara(); flushList(); out.push(line.trim()); continue; }

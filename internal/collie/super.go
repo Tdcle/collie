@@ -729,7 +729,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 				_, _ = sp.pushRouterToNode(ctx, m)
 			}
 		}
-		b.WriteString("\nReply via `collie reply` (`--interim` for brief dispatch/progress acks; for substantive answers, findings or multi-item results, use `collie reply - <<'EOF'` with structured Markdown: **bold** conclusions, bullet lists, and Markdown tables when helpful).")
+		b.WriteString("\nReply via `collie reply` (`--interim` for brief dispatch/progress acks). IMPORTANT: For any substantive answer, explanation, or result report, DO NOT output flat plain-text walls — pass rich Markdown via `collie reply - <<'EOF'`: highlight core conclusions & key numbers with `**bold**`, separate sections with `###` headings or `- ` bullet points, and ALWAYS format multi-row comparisons as standard GFM tables (`| 列1 | 列2 |` + `|---|---|`, using ASCII `|`, never bare `｜`).")
 	} else {
 		// Deliver clean, untruncated instructions to workers without internal `#tXXX` trigger headers!
 		for i, t := range list {
