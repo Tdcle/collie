@@ -156,6 +156,12 @@
       <a class="head-status" href="#/devices" id="nav-devices" title="管理已连接的电脑与节点">
         <span class="conn" id="conn"></span><span class="update-note" id="update-note" hidden>有新版</span><span id="herdr-status">连接中…</span>
       </a>
+      <button type="button" class="head-quota" id="quota-btn" aria-expanded="false" title="查看各台电脑与各 Agent 模型剩余用量">
+        <svg viewBox="0 0 24 24"><path d="M4.4 16.4a8.6 8.6 0 1 1 15.2 0"/><path d="M12 13l3.6-3.8"/><circle cx="12" cy="13" r="1.4"/></svg>
+        <span class="hq-label">用量</span>
+        <span class="hq-pill" id="quota-pill" hidden></span>
+        <span class="hq-dot" id="quota-dot" hidden></span>
+      </button>
       <button type="button" class="icon-btn" id="theme-btn" title="切换外观主题">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       </button>
@@ -281,19 +287,6 @@
           <div class="d-name"><span id="x-name"></span><span class="kind" id="x-kind"></span><span class="tag" id="x-tag" hidden></span></div>
           <div class="d-meta"><span class="status" id="x-status"></span><span class="muted mono" id="x-cwd"></span></div>
         </div>
-        <div class="menu-wrap">
-          <button class="icon-btn" data-menu="ext-menu" title="会话管理">
-            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
-          </button>
-          <div class="menu" id="ext-menu" hidden>
-            <button data-act="sess-rename">重命名会话</button>
-            <button data-act="sess-project">归属到项目…</button>
-            <button data-act="sess-archive" id="ext-archive-btn">归档会话</button>
-            <button data-act="interrupt-ext" id="ext-menu-interrupt" hidden>中断当前执行</button>
-            <hr>
-            <button data-act="sess-delete" class="danger">删除会话</button>
-          </div>
-        </div>
         <div class="head-right" data-head-slot></div>
       </header>
       <div class="viewer chatbg">
@@ -328,19 +321,6 @@
         <div class="d-title">
           <div class="d-name"><span id="d-name"></span><span class="kind" id="d-kind"></span><span class="tag" id="d-worker" hidden></span></div>
           <div class="d-meta"><span class="status" id="d-status"></span><span class="muted" id="d-model" hidden></span><span class="muted mono" id="d-cwd"></span></div>
-        </div>
-        <div class="menu-wrap">
-          <button class="icon-btn" data-menu="more-menu" title="会话管理">
-            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
-          </button>
-          <div class="menu" id="more-menu" hidden>
-            <button data-act="sess-rename">重命名会话</button>
-            <button data-act="sess-project">归属到项目…</button>
-            <button data-act="sess-archive">归档会话</button>
-            <button data-act="interrupt" id="menu-interrupt">中断当前执行</button>
-            <hr>
-            <button data-act="sess-delete" class="danger">删除会话</button>
-          </div>
         </div>
         <div class="head-right" data-head-slot></div>
       </header>
@@ -584,6 +564,7 @@
   </div>
 </dialog>
 
+<div class="quota-pop" id="quota-pop" hidden></div>
 <div class="toasts" id="toasts"></div>
 
 <script src="/app.js"></script>

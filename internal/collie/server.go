@@ -124,6 +124,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/uploads", wrap(s.upload))
 	mux.Handle("GET /api/titles", wrap(s.getTitles))
 	mux.Handle("GET /api/models", wrap(s.listModels))
+	mux.Handle("GET /api/quota", wrap(s.nodeQuota))
 	mux.Handle("POST /api/trust", wrap(s.trustFolder))
 	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/router-sync", wrap(s.routerSync))

@@ -369,7 +369,27 @@
         { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.49", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
         { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.49", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.49", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.49",
+      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.50", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.50",
+    });
+    if (p === "/api/quotas") return json({
+      updated_at: new Date().toISOString(),
+      machines: [
+        {
+          id: "macbook", name: "Mac", os: "darwin/arm64", online: true, updated_at: new Date().toISOString(),
+          agents: [
+            { kind: "codex", status: "ok", provider: "OpenAI", plan: "Pro Lite", reset_credits: 2, buckets: [{ id: "codex-primary", label: "每周额度", remaining_pct: 49, used_pct: 51, window_mins: 10080, resets_at: new Date(Date.now() + 3600e3 * 5).toISOString() }] },
+            { kind: "claude", status: "ok", provider: "Anthropic", plan: "Max", buckets: [{ id: "five_hour", label: "5 小时窗口", remaining_pct: 78, used_pct: 22, window_mins: 300, resets_at: new Date(Date.now() + 3600e3 * 2.5).toISOString() }, { id: "seven_day", label: "每周总额度", remaining_pct: 64, used_pct: 36, window_mins: 10080, resets_at: new Date(Date.now() + 86400e3 * 3).toISOString() }] },
+            { kind: "agy", status: "ok", provider: "Google", plan: "Google AI Pro", buckets: [{ id: "agy-0", label: "Claude 系列", remaining_pct: 82, used_pct: 18, resets_at: new Date(Date.now() + 3600e3 * 4).toISOString() }, { id: "agy-1", label: "Gemini Pro", remaining_pct: 95, used_pct: 5, resets_at: new Date(Date.now() + 3600e3 * 4).toISOString() }] },
+          ],
+        },
+        {
+          id: "winbox", name: "Win", os: "windows/amd64", online: true, updated_at: new Date().toISOString(),
+          agents: [
+            { kind: "codex", status: "ok", provider: "OpenAI", plan: "Pro Lite", buckets: [{ id: "codex-primary", label: "每周额度", remaining_pct: 49, used_pct: 51, window_mins: 10080, resets_at: new Date(Date.now() + 3600e3 * 5).toISOString() }] },
+            { kind: "claude", status: "balance", provider: "DeepSeek", plan: "API 余额", model: "deepseek-v4-pro[1m]", balance: "¥ 48.50", balance_ok: true, note: "默认模型 deepseek-v4-pro[1m]" },
+          ],
+        },
+      ],
     });
     if (p === "/api/sessions/model" && method === "POST") {
       const a = agents.find((x) => x.pane_id === body.pane_id);

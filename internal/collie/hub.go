@@ -60,7 +60,7 @@ func (s *Server) routed(h http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		switch {
-		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec", r.URL.Path == "/api/codex/lock":
+		case r.URL.Path == "/api/dirs", r.URL.Path == "/api/file", r.URL.Path == "/api/uploads", r.URL.Path == "/api/transcript", r.URL.Path == "/api/models", r.URL.Path == "/api/quota", r.URL.Path == "/api/trust", r.URL.Path == "/api/update", r.URL.Path == "/api/router-sync", r.URL.Path == "/api/exec", r.URL.Path == "/api/codex/lock":
 			machine = r.URL.Query().Get("machine")
 		case (r.URL.Path == "/api/agents" || r.URL.Path == "/api/codex/send" || r.URL.Path == "/api/codex/interrupt" || r.URL.Path == "/api/codex/read") && r.Method == "POST":
 			body, _ = io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -538,6 +538,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	api("GET /api/local-app", s.localApp)
 	api("GET /api/qr", s.qr)
 	api("GET /api/devices", s.listDevices)
+	api("GET /api/quotas", s.listQuotas)
 	api("GET /api/version", s.getVersion)
 	api("GET /api/history", s.listHistory)
 	api("POST /api/history/{id}/delete", s.deleteHistory)
