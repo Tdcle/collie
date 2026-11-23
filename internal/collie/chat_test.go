@@ -259,7 +259,7 @@ func TestActivityLine(t *testing.T) {
 		"✻ Reading (src/main.go)\n❯ ": "Reading (src/main.go)",
 	}
 	for in, want := range cases {
-		text, meta, _ := activityLine(in)
+		text, meta, _, _ := activityLine(in)
 		got := text
 		if meta != "" {
 			got += "|" + meta
@@ -271,13 +271,53 @@ func TestActivityLine(t *testing.T) {
 }
 
 func TestExtractStreamingBubble(t *testing.T) {
-	screen := "› Write a poem\n\n• All night the maple loosens its red leaves.\n  By dawn they blur the edges of the street.\n  A sparrow\n\n› Ask Codex to do anything\n  GPT-6.2-Astra high · /private/tmp\n"
-	text, _, streaming := activityLine(screen)
+	screen := "› Write a poem\n\n── Worked for 12s ──\n• All night the maple loosens its red leaves.\n  By dawn they blur the edges of the street.\n  A sparrow\n\n› Ask Codex to do anything\n  GPT-6.2-Astra high · /private/tmp\n"
+	text, _, streaming, phase := activityLine(screen)
 	if text != "" {
 		t.Fatalf("expected streaming text to go into streaming bubble rather than status tail, got tail=%q", text)
 	}
 	want := "All night the maple loosens its red leaves.\nBy dawn they blur the edges of the street.\nA sparrow"
-	if streaming != want {
-		t.Fatalf("unexpected streaming bubble:\ngot:  %q\nwant: %q", streaming, want)
+	if streaming != want || phase != "final_answer" {
+		t.Fatalf("unexpected streaming bubble:\ngot:  %q (phase=%q)\nwant: %q (phase=final_answer)", streaming, phase, want)
+	}
+
+	// Regression: Completed Codex TUI tool cells (`• Ran ... \n └ 4309`, `• Edited ...`)
+	// above a bottom spinner must NEVER leak into `streaming`!
+	toolScreen := strings.Join([]string{
+		"› 续接 SFD-Net 息肉数据准备",
+		"• Ran python revision/polyp_splits_20261123/make_splits.py --verify …",
+		"  └   4309",
+		"    + 5 lines (ctrl+t to expand)",
+		"• Comparing local progress · 2 background terminals running · /ps to view · /stop to close (1m 10s • esc to interrupt)",
+		"  └ Tip: Use /theme to choose a syntax highlighting theme.",
+		"› Ask Codex to do anything",
+		"  GPT-6.2-Astra high · ~\\Documents\\ChatGPT\\SFD-Net 2 · 论文返修",
+	}, "\n")
+	tail2, meta2, streaming2, _ := activityLine(toolScreen)
+	if streaming2 != "" {
+		t.Fatalf("expected tool cell `Ran ...` NOT to leak into streaming bubble, got %q", streaming2)
+	}
+	if strings.Contains(tail2, "/ps to view") || strings.Contains(tail2, "/stop to close") {
+		t.Fatalf("expected slash hints to be stripped from status tail, got %q", tail2)
+	}
+	if meta2 != "1m 10s" {
+		t.Fatalf("expected meta 1m 10s, got %q", meta2)
+	}
+}
+
+func TestUnwrapCodexJsReplToolAndLinkMeta(t *testing.T) {
+	rawExec := []byte("\"text(await tools.exec_command({cmd: `python revision/make_splits.py --verify`}))\"")
+	name1, in1 := unwrapCodexTool("js_repl", rawExec)
+	if name1 != "bash" || !strings.Contains(in1, "python revision/make_splits.py --verify") {
+		t.Fatalf("unexpected js_repl exec unwrap: name=%q in=%q", name1, in1)
+	}
+	name2, in2 := unwrapCodexTool("js_repl", []byte(`"text(await tools.apply_patch('*** Begin Patch ***\n*** Add File: revision/verify_cpu.py\n+import os\n*** End Patch ***'))"`))
+	if name2 != "patch" || in2 != "revision/verify_cpu.py" {
+		t.Fatalf("unexpected js_repl patch unwrap: name=%q in=%q", name2, in2)
+	}
+
+	title, site := parseHTMLTitleAndSite(`<html><head><meta property="og:site_name" content="GitHub"><meta property="og:title" content="Comparing main...lihuanyu0w0:collie:main · Tdcle/collie"><title>Fallback</title></head></html>`)
+	if title != "Comparing main...lihuanyu0w0:collie:main · Tdcle/collie" || site != "GitHub" {
+		t.Fatalf("unexpected parsed HTML meta: title=%q site=%q", title, site)
 	}
 }

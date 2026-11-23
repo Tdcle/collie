@@ -315,6 +315,51 @@ func noise(s string) bool {
 		strings.HasPrefix(s, "Caveat: ")
 }
 
+var (
+	jsReplExecRe  = regexp.MustCompile(`(?s)tools\.exec_command\(\s*\{.*?\bcmd\s*:\s*(?:` + "`" + `([^` + "`" + `]+)` + "`" + `|"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')`)
+	jsReplPatchRe = regexp.MustCompile(`(?m)\*\*\*\s*(?:Add|Update|Delete|Move to:)\s+File:\s*([^\r\n` + "`" + `'"]+)`)
+)
+
+func unwrapCodexTool(name string, raw json.RawMessage) (string, string) {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		var obj map[string]any
+		if json.Unmarshal(raw, &obj) == nil {
+			for _, k := range []string{"code", "input", "script", "text"} {
+				if v, ok := obj[k].(string); ok && v != "" {
+					s = v
+					break
+				}
+			}
+		}
+		if s == "" {
+			s = strings.TrimSpace(string(raw))
+		}
+	}
+	if (name == "js_repl" || name == "exec" || name == "") && strings.Contains(s, "tools.") {
+		if m := jsReplPatchRe.FindStringSubmatch(s); len(m) > 1 {
+			return "patch", clip(strings.TrimSpace(m[1]), maxInput)
+		}
+		if m := jsReplExecRe.FindStringSubmatch(s); len(m) > 0 {
+			cmd := firstNonEmpty(firstNonEmpty(m[1], m[2]), m[3])
+			cmd = strings.Join(strings.Fields(cmd), " ")
+			if cmd != "" {
+				return "bash", clip(cmd, maxInput)
+			}
+		}
+	}
+	if name == "apply_patch" {
+		if m := jsReplPatchRe.FindStringSubmatch(s); len(m) > 1 {
+			return "patch", clip(strings.TrimSpace(m[1]), maxInput)
+		}
+	}
+	outName := name
+	if outName == "" || outName == "exec_command" || outName == "shell_command" {
+		outName = "bash"
+	}
+	return outName, toolSummary(name, raw)
+}
+
 func toolSummary(name string, raw json.RawMessage) string {
 	var m map[string]any
 	if json.Unmarshal(raw, &m) != nil {
@@ -696,7 +741,8 @@ func (t *transcript) codexLine(line []byte) bool {
 			t.add(m)
 			return true
 		}
-		m := &Message{Kind: "tool", Name: p.Name, Input: toolSummary(p.Name, args)}
+		tName, tIn := unwrapCodexTool(p.Name, args)
+		m := &Message{Kind: "tool", Name: tName, Input: tIn}
 		if m.Name == "" {
 			m.Name = "shell"
 		}
@@ -1314,20 +1360,35 @@ func tailLines(s string, n int) string {
 var (
 	liveHint      = regexp.MustCompile(`\s*[(（][^()（）]*(esc to (interrupt|cancel)|ctrl\+c)[^()（）]*[)）]`)
 	liveParen     = regexp.MustCompile(`\s*[(（]([^()（）]*)[)）]\s*$`)
-	liveKey       = regexp.MustCompile(`(?i)\besc\b|ctrl\+|to (interrupt|cancel|expand)`)
+	liveKey       = regexp.MustCompile(`(?i)\besc\b|ctrl\+|to (interrupt|cancel|expand)|/[a-z]+ to (view|close|stop)`)
+	liveSlashHint = regexp.MustCompile(`(?i)\s*[·•]\s*/[a-z]+ to (?:view|close|stop)\b`)
 	liveDigit     = regexp.MustCompile(`\d`)
 	liveChrome    = regexp.MustCompile(`(?i)esc to (interrupt|cancel)|shift\+tab|for shortcuts|← for agents|⚠\s*\d+\s*warnings?|auto mode|bypass permissions|accept edits|plan mode|ctrl\+[a-z] to |^[❯>›]( |$)|^[⏵▸►»⏎]|⏎ send`)
 	liveBullet    = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*•◐◓◑◒◔◕○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]+\s*`)
 	liveReplyLead = regexp.MustCompile(`^\s*[•●⏺]\s+`)
 	livePromptTop = regexp.MustCompile(`^\s*[❯>›]\s`)
 	liveSpinner   = regexp.MustCompile(`^[✻✽✢✶✳✺✹✸✷·*◐◓◑◒◔◕⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]`) // animated: a status line
-	liveWorkedEnd = regexp.MustCompile(`(?i)^worked for \d`)
+	liveWorkedEnd = regexp.MustCompile(`(?i)^[─━═\s]*worked for \d`)
+	liveToolLead  = regexp.MustCompile(`(?i)^(?:ran|running|explored|exploring|edited|editing|added|adding|deleted|deleting|moved|moving|patched|patch|updated|updating|searched|searching|read|reading|wrote|writing|listed|listing|called|calling|waited|waiting|stopped|stopping|approved|declined|background terminal|context compacted|mcp\b|view_image|exec\b|working\b|thinking\b|pondering\b)(?:$|\s|:|\()`)
+	liveFnCallLead = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\(.*\)`)
+	liveTreeOrDiff = regexp.MustCompile(`(?i)^\s*(?:[└├│⎿↳]|[+−-]\s*(?:show details|show less|\d+\s+lines\b)|\d+\s+[+-]\s|@@\s)`)
 )
 
-// extractStreamingBubble extracts an assistant reply currently being streamed
-// live on the terminal screen (e.g. Codex TUI's `• ...` / Claude TUI's `⏺ ...`
-// block after the last `›`/`❯` user prompt) before the final JSONL line is flushed.
-func extractStreamingBubble(screen string) string {
+func compactNoSpace(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == ' ' || r == '\n' || r == '\r' || r == '\t' || r == '…' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// extractStreamingBubble extracts ONLY an actively streaming assistant message
+// at the very bottom of the terminal transcript (never walking backwards into
+// completed tool cells like `• Ran ... \n └ ...` or `• Edited ...`).
+func extractStreamingBubble(screen string) (text, screenPhase string) {
 	rawLines := strings.Split(screen, "\n")
 	// 1. Cut off the bottom input box & status footer (last `› ...` / `❯ ...` line near bottom).
 	bottomCut := len(rawLines)
@@ -1339,7 +1400,23 @@ func extractStreamingBubble(screen string) string {
 		}
 	}
 	rawLines = rawLines[:bottomCut]
-	// 2. Locate the latest user prompt (`› ...` / `❯ ...`) above that, and the last `• ` / `⏺ ` reply block below it.
+	// 2. Cut off any trailing active status spinner (`• Working (... esc to interrupt)`)
+	//    and its indented sub-lines (`  └ Tip: ...`).
+	for i := len(rawLines) - 1; i >= max(0, len(rawLines)-6); i-- {
+		t := strings.TrimSpace(rawLines[i])
+		if t == "" {
+			continue
+		}
+		if liveHint.MatchString(t) || liveSpinner.MatchString(t) {
+			rawLines = rawLines[:i]
+			break
+		}
+		if strings.HasPrefix(t, "└") || strings.HasPrefix(t, "⎿") || strings.HasPrefix(t, "↳") {
+			continue
+		}
+		break
+	}
+	// 3. Locate the latest user prompt (`› ...` / `❯ ...`) above that.
 	userIdx := -1
 	for i := len(rawLines) - 1; i >= 0; i-- {
 		if livePromptTop.MatchString(rawLines[i]) {
@@ -1347,22 +1424,30 @@ func extractStreamingBubble(screen string) string {
 			break
 		}
 	}
+	// 4. Inspect ONLY the very last `• ` / `⏺ ` bullet block after userIdx!
+	//    Never scan backwards past a tool block into older history cells.
 	replyIdx := -1
 	for i := len(rawLines) - 1; i > userIdx; i-- {
-		t := strings.TrimSpace(rawLines[i])
-		if !liveReplyLead.MatchString(rawLines[i]) {
-			continue
+		if liveReplyLead.MatchString(rawLines[i]) {
+			replyIdx = i
+			break
 		}
-		// Skip status/tool bullets like `• Working (3s • esc to interrupt)` or `(ctrl+o to expand)`
-		rest := strings.TrimSpace(liveReplyLead.ReplaceAllString(t, ""))
-		if liveHint.MatchString(t) || liveKey.MatchString(t) || strings.HasPrefix(strings.ToLower(rest), "working") || strings.HasPrefix(strings.ToLower(rest), "thinking") || strings.HasPrefix(strings.ToLower(rest), "running ") {
-			continue
-		}
-		replyIdx = i
-		break
 	}
 	if replyIdx < 0 {
-		return ""
+		return "", ""
+	}
+	headTrim := strings.TrimSpace(rawLines[replyIdx])
+	rest := strings.TrimSpace(liveReplyLead.ReplaceAllString(headTrim, ""))
+	if liveHint.MatchString(headTrim) || liveKey.MatchString(headTrim) || liveToolLead.MatchString(rest) || liveFnCallLead.MatchString(rest) {
+		return "", ""
+	}
+	// Check if Codex TUI printed `FinalMessageSeparator` (`Worked for ...`) above replyIdx.
+	for i := replyIdx - 1; i > userIdx; i-- {
+		t := strings.TrimSpace(strings.Trim(rawLines[i], "─━═ "))
+		if liveWorkedEnd.MatchString(t) {
+			screenPhase = "final_answer"
+			break
+		}
 	}
 	var out []string
 	for i := replyIdx; i < len(rawLines); i++ {
@@ -1373,6 +1458,11 @@ func extractStreamingBubble(screen string) string {
 				out = append(out, "")
 			}
 			continue
+		}
+		// Any tool tree connector (`└ 4309`), fold hint (`+ 5 lines`, `+ Show details`),
+		// or numbered diff line (`  5 +...`) means this cell is a tool execution block, NOT prose!
+		if liveTreeOrDiff.MatchString(raw) || liveKey.MatchString(trimmed) {
+			return "", ""
 		}
 		if liveHint.MatchString(trimmed) || liveSpinner.MatchString(trimmed) || liveChrome.MatchString(trimmed) || liveWorkedEnd.MatchString(trimmed) || strings.Trim(trimmed, "─━═╭╮╰╯ ") == "" {
 			break
@@ -1388,11 +1478,11 @@ func extractStreamingBubble(screen string) string {
 	for len(out) > 0 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
 	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+	return strings.TrimSpace(strings.Join(out, "\n")), screenPhase
 }
 
-func activityLine(screen string) (text, meta, streaming string) {
-	streaming = extractStreamingBubble(screen)
+func activityLine(screen string) (text, meta, streaming, streamPhase string) {
+	streaming, streamPhase = extractStreamingBubble(screen)
 	var keep []string
 	status, statusMeta := "", ""
 	for _, l := range strings.Split(screen, "\n") {
@@ -1403,6 +1493,7 @@ func activityLine(screen string) (text, meta, streaming string) {
 			l, m = splitCounters(l)
 		}
 		l = strings.TrimSpace(liveHint.ReplaceAllString(l, ""))
+		l = strings.TrimSpace(liveSlashHint.ReplaceAllString(l, ""))
 		if l == "" || strings.Trim(l, "─━═╭╮╰╯ ") == "" || liveChrome.MatchString(l) || liveWorkedEnd.MatchString(l) {
 			continue
 		}
@@ -1414,12 +1505,12 @@ func activityLine(screen string) (text, meta, streaming string) {
 		keep = append(keep, l)
 	}
 	if status != "" {
-		return status, statusMeta, streaming
+		return status, statusMeta, streaming, streamPhase
 	}
 	if streaming != "" {
-		return "", "", streaming
+		return "", "", streaming, streamPhase
 	}
-	return strings.Join(tailSlice(keep, 2), "\n"), "", ""
+	return strings.Join(tailSlice(keep, 2), "\n"), "", "", ""
 }
 
 // splitCounters takes a status line's closing parenthetical apart:
@@ -1536,7 +1627,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 				if status == "blocked" {
 					live["approval"] = parseApproval(res.Text)
 				} else {
-					tail, metaStr, streaming := activityLine(res.Text)
+					tail, metaStr, streaming, streamPhase := activityLine(res.Text)
 					if tail != "" {
 						live["tail"] = tail
 					}
@@ -1544,22 +1635,42 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 						live["meta"] = metaStr
 					}
 					if streaming != "" {
-						// Only emit streaming text if it isn't already identical to the last flushed assistant message in tr.
+						// Deduplicate ignoring terminal column-wrapping newlines/spaces, and classify
+						// mid-turn progress notes before `Worked for` as commentary so they never pop
+						// out as temporary chat bubbles and vanish.
 						alreadyFlushed := false
-						if tr != nil {
+						turnHasTools := false
+						wantCompact := compactNoSpace(streaming)
+						if tr != nil && wantCompact != "" {
 							msgs := tr.view()
 							for k := len(msgs) - 1; k >= 0; k-- {
 								if msgs[k].Kind == "user" {
 									break
 								}
-								if msgs[k].Kind == "assistant" && strings.TrimSpace(msgs[k].Text) == streaming {
-									alreadyFlushed = true
-									break
+								if msgs[k].Kind == "tool" {
+									turnHasTools = true
+								}
+								if msgs[k].Kind == "assistant" {
+									gotCompact := compactNoSpace(msgs[k].Text)
+									if gotCompact != "" && (gotCompact == wantCompact || strings.HasPrefix(gotCompact, wantCompact) || strings.HasSuffix(gotCompact, wantCompact)) {
+										alreadyFlushed = true
+									}
 								}
 							}
 						}
-						if !alreadyFlushed {
+						if !alreadyFlushed && wantCompact != "" {
+							phase := streamPhase
+							if phase == "" {
+								if !turnHasTools {
+									phase = "final_answer"
+								} else if strings.Contains(streaming, "\n\n") || strings.Contains(streaming, "```") || strings.HasPrefix(streaming, "#") || strings.HasPrefix(streaming, "- ") || strings.HasPrefix(streaming, "1. ") {
+									phase = "final_answer"
+								} else {
+									phase = "commentary"
+								}
+							}
 							live["streaming"] = streaming
+							live["stream_phase"] = phase
 						}
 					}
 				}

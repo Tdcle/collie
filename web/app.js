@@ -3310,7 +3310,7 @@
       es.addEventListener("streaming", (ev) => {
         if (!mine()) return;
         const d = JSON.parse(ev.data);
-        el._streaming = d && d.text ? { text: d.text, phase: d.phase || "streaming" } : null;
+        el._streaming = d && d.text ? { text: d.text, phase: d.phase || "final_answer" } : null;
         if (el._redraw) el._redraw();
       });
       es.addEventListener("status", (ev) => {
@@ -3947,22 +3947,26 @@
     el._redraw ? el._redraw() : drawThread(threadMsgs(el), el);
   }
   // A thread's messages: the older ones loaded on request, then the live view, plus optimistic pending sends and live streaming bubble.
+  const compactMsgText = (s) => String(s || "").replace(/[\s…]+/g, "");
   const threadMsgs = (el) => {
     reconcilePendingThreadMsgs(el);
     const base = (el._older || []).concat(el._msgs || []).concat(el._pending || []);
     const s = el._streaming;
     if (s && s.text && String(s.text).trim()) {
-      const want = normMsgText(s.text);
+      const want = compactMsgText(s.text);
       let dup = false;
       for (let k = base.length - 1; k >= 0; k--) {
         if (base[k].kind === "user") break;
-        if (base[k].kind === "assistant" && normMsgText(base[k].text) === want) {
-          dup = true;
-          break;
+        if (base[k].kind === "assistant") {
+          const got = compactMsgText(base[k].text);
+          if (got && want && (got === want || got.startsWith(want) || got.endsWith(want))) {
+            dup = true;
+            break;
+          }
         }
       }
       if (!dup) {
-        return base.concat([{ kind: "assistant", text: s.text, phase: s.phase || "streaming", streaming: true }]);
+        return base.concat([{ kind: "assistant", text: s.text, phase: s.phase || "final_answer", streaming: true }]);
       }
     }
     return base;
@@ -4087,7 +4091,7 @@
         out += renderToolRunHTML(run, procItems[s].idx, open);
       } else {
         const pm = procItems[p].m;
-        const rCls = pm.phase === "reasoning" ? " reasoning" : "";
+        const rCls = (pm.phase === "reasoning" ? " reasoning" : "") + (pm.streaming ? " streaming" : "");
         out += `<div class="msg-note${rCls}">${md(pm.text)}${imagesIn(pm.text)}${artifactsIn(pm.text)}</div>`;
         p++;
       }
@@ -4172,7 +4176,7 @@
       let segEnd = i;
       while (segEnd < msgs.length && msgs[segEnd].kind !== "user") segEnd++;
       const isLastSeg = segEnd === msgs.length;
-      const segHasFinal = msgs.slice(segStart, segEnd).some((x) => x.kind === "assistant" && x.phase === "final_answer");
+      const segHasFinal = msgs.slice(segStart, segEnd).some((x) => x.kind === "assistant" && x.phase === "final_answer" && !x.streaming);
       const segWorking = isLastSeg && threadWorking && !segHasFinal;
 
       // Determine the final conclusion message of this turn (if any):
@@ -4182,7 +4186,7 @@
       //    assistant narration before tool calls folds into the reasoning/execution drawer.
       let finalIdx = -1;
       for (let k = segEnd - 1; k >= segStart; k--) {
-        if (msgs[k].kind === "assistant" && msgs[k].phase === "final_answer") {
+        if (msgs[k].kind === "assistant" && msgs[k].phase === "final_answer" && !msgs[k].streaming) {
           finalIdx = k;
           break;
         }
@@ -4207,7 +4211,7 @@
           emitAsk(mk, k);
           continue;
         }
-        const isFinal = k === finalIdx || (mk.kind === "assistant" && (mk.phase === "final_answer" || mk.phase === "streaming" || mk.streaming));
+        const isFinal = k === finalIdx || (mk.kind === "assistant" && ((mk.phase === "final_answer" && !mk.streaming) || (mk.streaming && mk.phase !== "commentary" && mk.phase !== "reasoning")));
         const isProc = !isFinal && (
           mk.kind === "tool"
           || mk.phase === "commentary"
@@ -4280,12 +4284,14 @@
   let lastLive = null;
   function drawLive(l) {
     const prevLiveSt = lastLive?.status;
-    const prevStream = lastLive?.streaming || "";
+    const prevStream = (lastLive?.stream_phase || "") + "|" + (lastLive?.streaming || "");
     lastLive = l;
     const th = $("#thread");
-    const nextStream = l.status === "working" && l.streaming ? l.streaming : "";
+    const nextText = l.status === "working" && l.streaming ? l.streaming : "";
+    const nextPhase = l.stream_phase || "final_answer";
+    const nextStream = nextText ? (nextPhase + "|" + nextText) : "";
     if (th) {
-      th._streaming = nextStream ? { text: nextStream, phase: "streaming" } : null;
+      th._streaming = nextText ? { text: nextText, phase: nextPhase } : null;
     }
     if (prevLiveSt !== l.status || prevStream !== nextStream) {
       if (prevLiveSt !== l.status) syncComposerBtn($("#composer"));
@@ -4295,8 +4301,8 @@
     const box = $("#live");
     const was = nearBottom(th);
     let html = "";
-    if (l.status === "working" && (l.tail || (!nextStream && l.meta))) {
-      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail || "正在生成回复…")}</pre><span class="meta"></span></div>`;
+    if (l.status === "working" && (l.tail || (!nextText && l.meta))) {
+      html = `<div class="live-working"><span class="dot working"></span><pre>${esc(l.tail || "正在生成回复…")}</pre>${l.meta ? `<span class="meta">${esc(l.meta)}</span>` : ""}</div>`;
     } else if (l.status === "blocked" && l.approval) {
       const v = find(current);
       html = askHTML(l.approval, v ? title(v) : "agent");
@@ -4532,6 +4538,7 @@
   });
 
   const HL = window.CollieHighlight || { HL_MAX_BYTES: 200 * 1024, HL_MAX_LINES: 5000, detectCodeLang: () => null, highlightCode: (c) => esc(c) };
+  const MATH = window.CollieMath || { renderMath: (s) => esc(s), extractMathSegments: (s) => s };
   let fileRawText = "";
   function setFileHead(langLabel = "", rawText = "", copyable = false) {
     fileRawText = rawText || "";
@@ -4687,6 +4694,17 @@
   });
 
   document.addEventListener("click", async (ev) => {
+    const cm = ev.target.closest("[data-copy-tex]");
+    if (cm) {
+      const tex = cm.dataset.copyTex || "";
+      if (await copyText(tex)) {
+        cm.classList.add("copied");
+        toast("已复制 LaTeX 公式");
+        clearTimeout(cm._t);
+        cm._t = setTimeout(() => cm.classList.remove("copied"), 1500);
+      }
+      return;
+    }
     const cc = ev.target.closest("[data-copy-code]");
     if (cc) {
       const raw = cc.closest(".codeblock")?.querySelector("code")?.textContent || "";
@@ -4786,7 +4804,8 @@
   }
   function mdRender(src) {
     const blocks = [];
-    let text = String(src || "").replace(/[\u0000\u0001]/g, "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
+    const inlineMath = [];
+    let text = String(src || "").replace(/[\u0000\u0001\u0003\u0004]/g, "").replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
       const raw = code.replace(/\n$/, "");
       const tag = (lang || "").trim().split(/\s+/)[0];
       const detected = HL.detectCodeLang(lang, false);
@@ -4795,6 +4814,12 @@
       blocks.push(`<div class="codeblock"><div class="code-bar"><span class="code-lang">${esc(label)}</span><button type="button" class="code-copy" data-copy-code>${ICON_COPY}<span>复制</span></button></div><pre><code${detected ? ` data-lang="${esc(detected.id)}"` : ""}>${rendered}</code></pre></div>`);
       return `\u0000${blocks.length - 1}\u0000`;
     });
+    text = MATH.extractMathSegments(
+      text,
+      (html) => blocks.push(html) - 1,
+      (html) => inlineMath.push(html) - 1,
+      ICON_COPY
+    );
     text = esc(text);
     const URL_RE = /(?<![="'>\w\/])https?:\/\/[^\s<>"，。；：、！？）」』】（「『【]+/g;
     const trimBalancedURL = (raw) => {
@@ -4898,7 +4923,9 @@
       para.push(line);
     }
     flushPara(); flushList();
-    return out.join("").replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n]);
+    return out.join("")
+      .replace(/\u0000(\d+)\u0000/g, (_, n) => blocks[+n])
+      .replace(/\u0003(\d+)\u0003/g, (_, n) => inlineMath[+n]);
   }
 
   // ───────────────────────────── input
@@ -4950,20 +4977,167 @@
       return d.path;
     });
   }
+  // ───────────────────────────── smart link paste & link cards
+  const LINK_ICONS = {
+    github: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.54 2.87 8.39 6.84 9.75.5.09.68-.22.68-.49 0-.24-.01-.88-.01-1.72-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.05 1.53 1.05.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.38 9.38 0 0 1 12 6.84c.85 0 1.71.12 2.51.35 1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.27 10.27 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"/></svg>`,
+    paper: `<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>`,
+    doc: `<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`,
+    video: `<svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="3"/><polygon points="10 9 15.5 12 10 15" fill="currentColor" stroke="none"/></svg>`,
+    local: `<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>`,
+    web: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17M12 3a14.5 14.5 0 0 0 0 18M12 3a14.5 14.5 0 0 1 0 18"/></svg>`,
+    ext: `<svg class="lc-ext" viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8"/></svg>`,
+  };
+  const linkTitleMem = new Map();
+  function parseSmartLink(rawUrl, hintTitle = "") {
+    let u;
+    try { u = new URL(rawUrl); } catch { return null; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    const host = u.hostname.replace(/^www\./i, "").toLowerCase();
+    const portPart = u.port ? ":" + u.port : "";
+    const hostLabel = host + portPart;
+    let decPath = "";
+    try { decPath = decodeURIComponent(u.pathname || ""); } catch { decPath = u.pathname || ""; }
+    const segs = decPath.split("/").filter(Boolean);
+    let kind = "web";
+    let fallback = hostLabel;
+    if (host === "github.com" || host.endsWith(".github.com")) {
+      kind = "github";
+      if (segs.length >= 2) {
+        const repo = `${segs[0]}/${segs[1]}`;
+        if (segs[2] === "pull" && segs[3]) fallback = `${repo} · PR #${segs[3]}`;
+        else if (segs[2] === "issues" && segs[3]) fallback = `${repo} · Issue #${segs[3]}`;
+        else if (segs[2] === "commit" && segs[3]) fallback = `${repo} @ ${segs[3].slice(0, 7)}`;
+        else if (segs[2] === "compare" && segs[3]) fallback = `${repo} · ${segs[3]}`;
+        else if (segs[2] === "releases" && segs[4]) fallback = `${repo} · ${segs[4]}`;
+        else if ((segs[2] === "blob" || segs[2] === "tree") && segs.length >= 4) fallback = `${repo} · ${segs.slice(3).join("/")}`;
+        else fallback = segs.length > 2 ? `${repo} · ${segs.slice(2).join("/")}` : repo;
+      }
+    } else if (host.includes("arxiv.org") || host === "doi.org" || host.includes("openreview.net")) {
+      kind = "paper";
+      fallback = host.includes("arxiv.org") && segs.length >= 2 ? `arXiv:${segs[segs.length - 1].replace(/\.pdf$/i, "")}` : (segs.join("/") || hostLabel);
+    } else if (host.includes("feishu.cn") || host.includes("larksuite.com") || host.includes("larkoffice.com") || host.includes("notion.so") || host.includes("docs.google.com")) {
+      kind = "doc";
+      fallback = segs.length ? `${host.split(".")[0]} · ${segs.slice(0, 2).join("/")}` : hostLabel;
+    } else if (host.includes("youtube.com") || host === "youtu.be" || host.includes("bilibili.com")) {
+      kind = "video";
+      fallback = segs.length ? `${hostLabel} · ${segs[segs.length - 1]}` : hostLabel;
+    } else if (host === "localhost" || /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(host)) {
+      kind = "local";
+      fallback = hostLabel + (decPath && decPath !== "/" ? decPath : "");
+    } else if (segs.length) {
+      const tail = segs.slice(-2).join("/");
+      fallback = tail.length > 44 ? tail.slice(0, 42) + "…" : `${hostLabel}/${tail}`;
+    }
+    if (fallback.length > 68) fallback = fallback.slice(0, 66) + "…";
+    const cached = linkTitleMem.get(u.href);
+    const cleanHint = String(hintTitle || "").trim();
+    const initialTitle = cached || (cleanHint && cleanHint !== u.href && !/^https?:\/\//i.test(cleanHint) ? cleanHint : "");
+    return {
+      url: u.href,
+      host: hostLabel,
+      kind,
+      title: initialTitle || fallback,
+      isFallback: !initialTitle,
+    };
+  }
+  function unfurlLinkTitle(item, onUpdate) {
+    if (!item || !item.isFallback) return;
+    if (linkTitleMem.has(item.url)) {
+      item.title = linkTitleMem.get(item.url);
+      item.isFallback = false;
+      onUpdate?.();
+      return;
+    }
+    api(`/api/link-meta?url=${encodeURIComponent(item.url)}`).then((res) => {
+      if (res && res.title && String(res.title).trim()) {
+        const t = String(res.title).trim();
+        linkTitleMem.set(item.url, t);
+        item.title = t;
+        item.isFallback = false;
+        onUpdate?.();
+      }
+    }).catch(() => {});
+  }
+  function extractClipboardStandaloneLinks(clipboardData) {
+    if (!clipboardData) return null;
+    const text = (clipboardData.getData("text/plain") || "").trim();
+    const html = (clipboardData.getData("text/html") || "").trim();
+    // Single rich HTML anchor copied from browser/docs (`<a href="https://...">Title</a>`)
+    if (html && (!text || /^https?:\/\/\S+$/i.test(text))) {
+      const m = html.match(/^\s*(?:<meta[^>]*>\s*)*<a\b[^>]*\bhref=["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*$/i);
+      if (m) {
+        const label = m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+        const parsed = parseSmartLink(m[1], label);
+        if (parsed) return [parsed];
+      }
+    }
+    if (!text) return null;
+    // Check if clipboard text consists solely of 1..8 HTTP(S) URLs separated by whitespace/newlines
+    const tokens = text.split(/\s+/).filter(Boolean);
+    if (!tokens.length || tokens.length > 8) return null;
+    const out = [];
+    for (const tok of tokens) {
+      if (!/^https?:\/\/[^\s<>"]+$/i.test(tok)) return null;
+      const parsed = parseSmartLink(tok);
+      if (!parsed) return null;
+      out.push(parsed);
+    }
+    return out;
+  }
+  function cursorInsideBackticks(ta) {
+    if (!ta) return false;
+    const before = ta.value.slice(0, ta.selectionStart || 0);
+    const fences = (before.match(/```/g) || []).length;
+    if (fences % 2 === 1) return true;
+    const lineStart = before.lastIndexOf("\n") + 1;
+    const ticks = (before.slice(lineStart).match(/`/g) || []).length;
+    return ticks % 2 === 1;
+  }
+
   function bindFiles(form, machine) {
     const box = $(".files", form), picker = $('input[type="file"]', form);
     form._files = [];
+    form._links = [];
     form._machine = machine;
+    const ta = $("textarea", form);
+    const origPlaceholder = ta?.placeholder || "";
     const draw = () => {
-      box.hidden = !form._files.length || Boolean(form._filesHidden);
-      box.innerHTML = form._files.map((f, i) => `<span class="file ${f.err ? "err" : f.path ? "" : "busy"}" title="${esc(f.err || f.path || "上传中…")}">
+      const hasAny = (form._links.length + form._files.length) > 0;
+      box.hidden = !hasAny || Boolean(form._filesHidden);
+      const linksHTML = form._links.map((l, i) => `<span class="file link-chip" title="${esc(l.url)}">`
+        + `<a class="lc-open" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">`
+        + `<span class="lc-ico">${LINK_ICONS[l.kind] || LINK_ICONS.web}</span>`
+        + `<span class="lc-body"><span class="lc-title">${esc(l.title)}</span><span class="lc-host">${esc(l.host)}</span></span>`
+        + `${LINK_ICONS.ext}</a>`
+        + `<button type="button" class="lc-as-txt" data-link-txt="${i}" title="转为输入框纯文本">T</button>`
+        + `<button type="button" data-rm-link="${i}" title="移除链接">×</button></span>`).join("");
+      const filesHTML = form._files.map((f, i) => `<span class="file ${f.err ? "err" : f.path ? "" : "busy"}" title="${esc(f.err || f.path || "上传中…")}">
         ${f.thumb ? `<img src="${f.thumb}" alt="">` : `<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>`}
         <span class="fn">${esc(f.name)}</span><span class="fs">${f.err ? "失败" : f.path ? fmtSize(f.size) : "上传中"}</span>
         <button type="button" data-rm="${i}" title="移除">×</button></span>`).join("");
+      box.innerHTML = linksHTML + filesHTML;
+      if (ta && !ta.disabled && origPlaceholder) {
+        if (form._links.length && !ta.value) {
+          ta.placeholder = "输入对链接的指令说明，或直接回车发送…";
+        } else if (ta.placeholder === "输入对链接的指令说明，或直接回车发送…") {
+          ta.placeholder = origPlaceholder;
+        }
+      }
       syncComposerBtn(form);
     };
+    const addLinks = (items) => {
+      let added = false;
+      for (const item of items) {
+        if (form._links.some((x) => x.url === item.url)) continue;
+        form._links.push(item);
+        added = true;
+        unfurlLinkTitle(item, draw);
+      }
+      if (added) draw();
+      return added;
+    };
     const add = (list) => {
-      const taVal = $("textarea", form)?.value || "";
+      const taVal = ta?.value || "";
       for (const file of list) {
         const f = { name: file.name || "粘贴的图片.png", size: file.size, rawFile: file, thumb: file.type.startsWith("image/") ? URL.createObjectURL(file) : "" };
         const m = machine(taVal);
@@ -4977,32 +5151,91 @@
     $(".attach", form).addEventListener("click", () => picker.click());
     picker.addEventListener("change", () => { add([...picker.files]); picker.value = ""; });
     box.addEventListener("click", (e) => {
+      const txtIdx = e.target.closest("[data-link-txt]")?.dataset.linkTxt;
+      if (txtIdx != null) {
+        const [lnk] = form._links.splice(+txtIdx, 1);
+        if (lnk && ta) {
+          const s = ta.selectionStart ?? ta.value.length;
+          const ePos = ta.selectionEnd ?? ta.value.length;
+          const needLead = s > 0 && !/\s$/.test(ta.value.slice(0, s)) ? " " : "";
+          const ins = needLead + lnk.url;
+          ta.setRangeText(ins, s, ePos, "end");
+          grow(ta);
+          ta.focus();
+        }
+        draw();
+        return;
+      }
+      const li = e.target.closest("[data-rm-link]")?.dataset.rmLink;
+      if (li != null) {
+        form._links.splice(+li, 1);
+        draw();
+        return;
+      }
       const i = e.target.closest("[data-rm]")?.dataset.rm;
       if (i == null) return;
       const [f] = form._files.splice(+i, 1);
       if (f?.thumb) URL.revokeObjectURL(f.thumb);
       draw();
     });
-    const ta = $("textarea", form);
     ta.addEventListener("paste", (e) => {
       const files = [...(e.clipboardData?.files || [])];
-      if (files.length) { e.preventDefault(); add(files); }
+      if (files.length) { e.preventDefault(); add(files); return; }
+      if (cursorInsideBackticks(ta)) return;
+      const links = extractClipboardStandaloneLinks(e.clipboardData);
+      if (!links || !links.length) return;
+      // Selected text + single URL -> wrap selection into Markdown link `[selected](url)`!
+      const selStart = ta.selectionStart ?? 0, selEnd = ta.selectionEnd ?? 0;
+      if (selEnd > selStart && links.length === 1) {
+        const selected = ta.value.slice(selStart, selEnd).trim();
+        if (selected && !/^https?:\/\//i.test(selected)) {
+          e.preventDefault();
+          ta.setRangeText(`[${selected}](${links[0].url})`, selStart, selEnd, "end");
+          grow(ta);
+          syncComposerBtn(form);
+          return;
+        }
+      }
+      e.preventDefault();
+      addLinks(links);
     });
-    form.addEventListener("dragover", (e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); form.classList.add("drop"); } });
+    form.addEventListener("dragover", (e) => {
+      if (e.dataTransfer?.types?.includes("Files") || e.dataTransfer?.types?.includes("text/uri-list")) {
+        e.preventDefault(); form.classList.add("drop");
+      }
+    });
     form.addEventListener("dragleave", () => form.classList.remove("drop"));
     form.addEventListener("drop", (e) => {
       form.classList.remove("drop");
-      if (!e.dataTransfer?.files?.length) return;
-      e.preventDefault(); add([...e.dataTransfer.files]);
+      if (e.dataTransfer?.files?.length) {
+        e.preventDefault(); add([...e.dataTransfer.files]); return;
+      }
+      const uriList = (e.dataTransfer?.getData("text/uri-list") || "").split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+      const parsed = uriList.map((u) => parseSmartLink(u)).filter(Boolean);
+      if (parsed.length) {
+        e.preventDefault();
+        addLinks(parsed);
+      }
     });
-    form._clearFiles = () => { form._files.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb)); form._files = []; draw(); };
+    form._clearFiles = () => {
+      form._files.forEach((f) => f.thumb && URL.revokeObjectURL(f.thumb));
+      form._files = [];
+      form._links = [];
+      draw();
+    };
   }
   async function withFiles(form, text) {
     const files = form._files || [];
-    if (!files.length) return text;
+    const links = form._links || [];
+    let out = text.trim();
+    if (links.length) {
+      const linkLines = links.map((l) => (l.title && !l.isFallback) ? `- [${l.title}](${l.url})` : `- ${l.url}`).join("\n");
+      out = (out ? out + "\n\n" : "") + "参考链接：\n" + linkLines;
+    }
+    if (!files.length) return out;
     await Promise.all(files.map((f) => f.done));
     if (files.some((f) => f.err)) throw new Error("有文件没传上去，移除后再发");
-    const desiredM = form._machine ? form._machine(text) : undefined;
+    const desiredM = form._machine ? form._machine(out) : undefined;
     if (desiredM !== undefined) {
       await Promise.all(files.map(async (f) => {
         if (f.rawFile && f.machine !== desiredM) {
@@ -5011,7 +5244,7 @@
         }
       }));
     }
-    return (text.trim() ? text.trim() + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
+    return (out ? out + "\n\n" : "") + "附件：\n" + files.map((f) => f.path).join("\n");
   }
   // Images a Collie or agent message points at (including Markdown file links)
   // show as compact thumbnails under the message, without duplicating inline [image:...].
@@ -5035,15 +5268,92 @@
   // Markdown as one plain line, for quotes: no marks, list dashes or breaks.
   const plainLine = (t) => (t || "").split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+\.|#+|>)\s+/, "").trim()).filter(Boolean).join(" ")
     .replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
-  // A user message's attachments: images as thumbnails, other files by name
-  // (not server paths).
+  // A user message's attachments & links: links as sleek cards/pills, images as thumbnails, files by name.
+  function renderUserLinkCardHTML(lnk) {
+    return `<a class="u-link-card" href="${esc(lnk.url)}" target="_blank" rel="noopener noreferrer" title="${esc(lnk.url)}">`
+      + `<span class="lc-ico">${LINK_ICONS[lnk.kind] || LINK_ICONS.web}</span>`
+      + `<span class="lc-body"><span class="lc-title">${esc(lnk.title)}</span><span class="lc-host">${esc(lnk.host)}</span></span>`
+      + `${LINK_ICONS.ext}</a>`;
+  }
+  function formatUserProseWithLinks(rawBody, cardLinks) {
+    if (!rawBody) return "";
+    const keptLines = [];
+    for (const line of rawBody.split("\n")) {
+      const trimmed = line.trim();
+      if (/^https?:\/\/[^\s<>"]+$/i.test(trimmed)) {
+        const p = parseSmartLink(trimmed);
+        if (p) {
+          if (!cardLinks.some((x) => x.url === p.url)) cardLinks.push(p);
+          continue;
+        }
+      }
+      keptLines.push(line);
+    }
+    const joined = keptLines.join("\n").trim();
+    if (!joined) return "";
+    // Linkify `[label](https://...)`, inline `https://...`, and LaTeX math inside escaped user prose
+    const tokens = [];
+    const hold = (h) => `\u0002${tokens.push(h) - 1}\u0002`;
+    let processed = MATH.extractMathSegments(
+      joined.replace(/[\u0000\u0002\u0003\u0004]/g, ""),
+      (html) => tokens.push(html) - 1,
+      (html) => tokens.push(html) - 1,
+      ""
+    ).replace(/\u0000(\d+)\u0000/g, "\u0002$1\u0002").replace(/\u0003(\d+)\u0003/g, "\u0002$1\u0002");
+    processed = processed
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s"]+)\)/g, (_, label, u) => {
+        const p = parseSmartLink(u, label);
+        const ico = p ? (LINK_ICONS[p.kind] || LINK_ICONS.web) : LINK_ICONS.web;
+        return hold(`<a class="u-url-pill" href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">${ico}<span>${esc(label)}</span>${LINK_ICONS.ext}</a>`);
+      })
+      .replace(/https?:\/\/[^\s<>"，。；：、！？）」』】（「『【]+/g, (raw) => {
+        const m = raw.match(/^(.*?)([.,;:!?'`)\]]*)$/);
+        const cleanU = m ? m[1] : raw;
+        const tail = m ? m[2] : "";
+        const p = parseSmartLink(cleanU);
+        if (!p) return raw;
+        return hold(`<a class="u-url-pill" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.url)}">${LINK_ICONS[p.kind] || LINK_ICONS.web}<span>${esc(p.title)}</span>${LINK_ICONS.ext}</a>`) + tail;
+      });
+    processed = withImages(esc(processed));
+    return processed.replace(/\u0002(\d+)\u0002/g, (_, idx) => tokens[+idx] || "");
+  }
   function userText(t) {
-    const i = t.lastIndexOf("附件：\n");
-    if (i < 0) return withImages(esc(t));
-    const paths = t.slice(i + 4).split("\n").map((p) => p.trim()).filter(Boolean);
-    const imgs = paths.filter((p) => IMG_EXT.test(p)), rest = paths.filter((p) => !IMG_EXT.test(p));
+    let body = String(t || "");
+    let attPaths = [];
+    const attIdx = body.lastIndexOf("附件：\n");
+    if (attIdx >= 0) {
+      attPaths = body.slice(attIdx + 4).split("\n").map((p) => p.trim()).filter(Boolean);
+      body = body.slice(0, attIdx).trimEnd();
+    }
+    const cardLinks = [];
+    const refIdx = body.lastIndexOf("参考链接：\n");
+    if (refIdx >= 0) {
+      const refLines = body.slice(refIdx + 6).split("\n").map((l) => l.trim()).filter(Boolean);
+      let allValid = refLines.length > 0;
+      const parsedRefs = [];
+      for (const rl of refLines) {
+        const mMd = rl.match(/^-\s*\[([^\]]+)\]\((https?:\/\/[^)\s"]+)\)\s*$/);
+        const mRaw = !mMd && rl.match(/^-\s*(https?:\/\/\S+)\s*$/);
+        if (mMd) {
+          const p = parseSmartLink(mMd[2], mMd[1]);
+          if (p) { parsedRefs.push(p); continue; }
+        } else if (mRaw) {
+          const p = parseSmartLink(mRaw[1]);
+          if (p) { parsedRefs.push(p); continue; }
+        }
+        allValid = false;
+        break;
+      }
+      if (allValid) {
+        cardLinks.push(...parsedRefs);
+        body = body.slice(0, refIdx).trimEnd();
+      }
+    }
+    const proseHTML = formatUserProseWithLinks(body, cardLinks);
+    const imgs = attPaths.filter((p) => IMG_EXT.test(p)), rest = attPaths.filter((p) => !IMG_EXT.test(p));
     const name = (p) => p.split(/[\\/]/).pop().replace(/^[0-9a-f]{6}-/, "");
-    return withImages(esc(t.slice(0, i).trimEnd()))
+    return proseHTML
+      + (cardLinks.length ? `<div class="user-links${proseHTML ? " has-text" : ""}">${cardLinks.map(renderUserLinkCardHTML).join("")}</div>` : "")
       + (imgs.length ? `<span class="thumbs">${imgs.map((p) => thumbBtn(p)).join("")}</span>` : "")
       + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
   }
@@ -5086,7 +5396,7 @@
     if (!form) return;
     const btn = $(".send", form), input = $("textarea", form);
     if (!btn || !input) return;
-    const hasFiles = Boolean(form._files?.length && !form._filesHidden);
+    const hasFiles = Boolean(((form._files?.length || 0) + (form._links?.length || 0)) > 0 && !form._filesHidden);
     const hasDraft = Boolean(input.value.trim()) || hasFiles;
     const canInput = !input.disabled;
 
@@ -5142,7 +5452,7 @@
 
     const submitNow = async () => {
       if (form._sending || input.disabled) return;
-      const hasFiles = Boolean(form._files?.length && !form._filesHidden);
+      const hasFiles = Boolean(((form._files?.length || 0) + (form._links?.length || 0)) > 0 && !form._filesHidden);
       const rawShell = form.id === "composer" && Boolean(find(current) && !find(current).is_agent);
       const rawDraft = input.value;
       if (!rawDraft.trim() && !hasFiles && !rawShell) return;
@@ -5175,7 +5485,7 @@
         }
       } catch (err) {
         form._filesHidden = false;
-        if (fileBox && form._files?.length) fileBox.hidden = false;
+        if (fileBox && ((form._files?.length || 0) + (form._links?.length || 0)) > 0) fileBox.hidden = false;
         if (!input.value) { input.value = rawDraft; grow(input); }
         toast(err.message, "attn");
       } finally {

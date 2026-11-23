@@ -626,6 +626,36 @@ kbd {
   font: 12.5px/1.58 var(--mono);
 }
 .msg pre code { background: none; border: 0; padding: 0; font-size: inherit; tab-size: inherit; }
+
+/* ─── LaTeX / MathML Core Equations ─── */
+math {
+  font-family: "STIX Two Math", "Cambria Math", "Latin Modern Math", "Apple Symbols", math, serif;
+  font-size: 1.04em;
+}
+.math-inline { display: inline-block; vertical-align: middle; margin: 0 .08em; }
+.math-block {
+  position: relative; margin: .85em 0 1.05em; padding: 13px 38px 13px 18px;
+  border-radius: 12px; background: color-mix(in srgb, var(--bg-2) 55%, var(--surface));
+  border: 1px solid var(--line);
+  overflow-x: auto; overflow-y: hidden; text-align: center;
+  white-space: normal;
+}
+.msg.user .math-block {
+  background: rgba(255, 255, 255, .11); border-color: rgba(255, 255, 255, .18);
+  padding: 10px 14px;
+}
+.math-block math { font-size: 1.1em; }
+.math-copy {
+  position: absolute; top: 7px; right: 7px; width: 26px; height: 26px; padding: 0;
+  border-radius: 7px; border: 1px solid transparent; background: transparent;
+  color: var(--fg-3); display: grid; place-items: center; cursor: pointer;
+  opacity: 0; transition: opacity .14s, background .14s, color .14s, border-color .14s;
+}
+.math-copy svg { width: 13.5px; height: 13.5px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.math-block:hover .math-copy, .math-copy.copied { opacity: 1; }
+.math-copy:hover { background: var(--surface); border-color: var(--line); color: var(--fg); }
+.math-copy.copied { color: var(--ok); }
+@media (hover: none) { .math-copy { opacity: .7; } }
 .hl-c { color: var(--hl-c); }
 .hl-k { color: var(--hl-k); }
 .hl-fn { color: var(--hl-fn); }
@@ -886,7 +916,8 @@ a.event:hover, .event.expandable:hover { background: var(--bg-2); border-color: 
 .fallback-note { font-size: 12px; color: var(--fg-3); text-align: center; }
 
 .live { padding: 0 max(22px, calc((100% - var(--col)) / 2)) 14px; }
-.msg.assistant.streaming > :last-child::after {
+.msg.assistant.streaming > :last-child::after,
+.msg-note.streaming > :last-child::after {
   content: "▍"; display: inline-block; margin-left: 2px; color: var(--signal);
   animation: stream-caret .9s steps(1) infinite;
 }
@@ -1121,6 +1152,74 @@ a.event:hover, .event.expandable:hover { background: var(--bg-2); border-color: 
 .file.err .fs { color: var(--err); }
 .file button { border: 0; background: none; color: var(--fg-3); width: 20px; height: 20px; border-radius: 6px; font-size: 15px; line-height: 1; cursor: pointer; }
 .file button:hover { background: var(--bg-3); color: var(--fg); }
+.file.link-chip {
+  max-width: min(360px, 100%); padding: 4px 5px 4px 8px; gap: 4px;
+  border-color: color-mix(in srgb, var(--signal) 26%, var(--line-2));
+  background: color-mix(in srgb, var(--signal) 6%, var(--bg-2));
+  transition: border-color .15s, background .15s;
+}
+.file.link-chip:hover {
+  border-color: color-mix(in srgb, var(--signal) 48%, var(--line-2));
+  background: color-mix(in srgb, var(--signal) 10%, var(--bg-2));
+}
+.file.link-chip .lc-open {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex: 1;
+  text-decoration: none; color: inherit; padding: 1px 2px 1px 0;
+}
+.file.link-chip .lc-ico, .u-link-card .lc-ico {
+  width: 24px; height: 24px; border-radius: 7px; flex: none;
+  display: grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--line); color: var(--signal);
+}
+.file.link-chip .lc-ico svg, .u-link-card .lc-ico svg { width: 14px; height: 14px; padding: 0; stroke-width: 1.75; }
+.file.link-chip .lc-body, .u-link-card .lc-body { display: grid; min-width: 0; line-height: 1.25; }
+.file.link-chip .lc-title, .u-link-card .lc-title {
+  font-size: 12px; font-weight: 560; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file.link-chip .lc-host, .u-link-card .lc-host {
+  font: 450 10.5px/1.2 var(--mono); color: var(--fg-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file.link-chip .lc-ext, .u-link-card .lc-ext {
+  width: 13px; height: 13px; padding: 0; flex: none; color: var(--fg-3); opacity: .75;
+  fill: none; stroke: currentColor; stroke-width: 1.85;
+}
+.file.link-chip .lc-open:hover .lc-ext { color: var(--signal); opacity: 1; }
+.file.link-chip button.lc-as-txt {
+  font: 650 10.5px/1 var(--mono); width: 20px; height: 20px; opacity: .7;
+}
+.file.link-chip button.lc-as-txt:hover { opacity: 1; }
+
+.user-links { display: grid; gap: 6px; white-space: normal; }
+.user-links.has-text { margin-top: 8px; }
+.u-link-card {
+  display: flex; align-items: center; gap: 9px; min-width: 0; max-width: 420px;
+  padding: 6.5px 10px 6.5px 8px; border-radius: 11px; text-decoration: none;
+  background: rgba(255, 255, 255, .13); border: 1px solid rgba(255, 255, 255, .2);
+  color: inherit; transition: background .14s, border-color .14s, transform .12s;
+}
+.u-link-card:hover { background: rgba(255, 255, 255, .2); border-color: rgba(255, 255, 255, .34); }
+.u-link-card .lc-ico {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .2); color: inherit;
+}
+.u-link-card .lc-body { flex: 1; gap: 1px; }
+.u-link-card .lc-title { color: inherit; font-size: 12.5px; font-weight: 580; }
+.u-link-card .lc-host { color: inherit; opacity: .74; font-size: 10.5px; }
+.u-link-card .lc-ext { color: inherit; opacity: .8; }
+.u-url-pill {
+  display: inline-flex; align-items: center; gap: 4px; max-width: min(320px, 100%);
+  vertical-align: -3px; padding: 1px 7px 1px 5px; border-radius: 7px;
+  background: rgba(255, 255, 255, .15); border: 1px solid rgba(255, 255, 255, .22);
+  color: inherit; text-decoration: none; font-size: .88em; line-height: 1.45; white-space: nowrap;
+  transition: background .12s, border-color .12s;
+}
+.u-url-pill:hover { background: rgba(255, 255, 255, .24); border-color: rgba(255, 255, 255, .38); }
+.u-url-pill svg { width: 12.5px; height: 12.5px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.u-url-pill svg[fill="currentColor"] { fill: currentColor; stroke: none; }
+.u-url-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-url-pill .lc-ext { width: 11px; height: 11px; opacity: .78; }
 .detail.shell .attach { display: none; }
 .msg.user .att { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .msg.user .att span { font-size: 12.5px; padding: 2px 8px; border-radius: 8px; background: rgba(255, 255, 255, .14); }
@@ -2390,10 +2489,14 @@ select.picked { display: none; }
 /* ─── Sidebar Session Row Actions & Rename Modal ─── */
 .list > li.s-li { position: relative; }
 .list > li.s-li:hover > .item,
-.list > li.s-li:has(> .item.active) > .item,
-.list > li.s-li:has(> .item-more.open) > .item { padding-right: 32px; }
+.list > li.s-li:focus-within > .item,
+.list > li.s-li:has(> .item-more.open) > .item,
+.proj-sessions > li.s-li:hover > .item,
+.proj-sessions > li.s-li:focus-within > .item,
+.proj-sessions > li.s-li:has(> .item-more.open) > .item { padding-right: 35px; }
 @media (hover: none) {
-  .list > li.s-li > .item { padding-right: 30px; }
+  .list > li.s-li > .item,
+  .proj-sessions > li.s-li > .item { padding-right: 34px; }
 }
 .item-more {
   position: absolute; right: 5px; top: 50%; transform: translateY(-50%); z-index: 2;
@@ -2404,11 +2507,7 @@ select.picked { display: none; }
 .item-more svg { width: 15px; height: 15px; }
 .list > li.s-li:hover > .item-more,
 .list > li.s-li:focus-within > .item-more,
-.list > li.s-li > .item.active ~ .item-more,
 .item-more.open { opacity: 1; }
-.list > li.s-li:hover > .item > .dot,
-.list > li.s-li > .item.active > .dot,
-.list > li.s-li:has(> .item-more.open) > .item > .dot { opacity: 0; }
 .item-more:hover, .item-more.open { background: var(--bg-3); color: var(--fg); }
 @media (hover: none) {
   .item-more { opacity: .75; }

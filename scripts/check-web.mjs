@@ -101,11 +101,11 @@ function runScenario(authed) {
           json: async () => ({
             router: { alive: true, status: "idle", kind: "codex", machine: "mac" },
             entries: [
-              { id: "e1", role: "user", text: "生成实验报告", at: now },
+              { id: "e1", role: "user", text: "看看上游新更新了什么，还有 https://arxiv.org/abs/2405.06803 这篇\n\n参考链接：\n- [Comparing main...lihuanyu0w0:collie:main · Tdcle/collie](https://github.com/Tdcle/collie/compare/main...lihuanyu0w0%3Acollie%3Amain)", at: now },
               {
                 id: "e2",
                 role: "collie",
-                text: "已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
+                text: "推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
                 options: ["继续启动", "先不跑"],
                 at: now,
               },
@@ -131,6 +131,7 @@ function runScenario(authed) {
   ctx.self = ctx;
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync("web/highlight.js", "utf8"), ctx, { filename: "web/highlight.js" });
+  vm.runInContext(fs.readFileSync("web/math.js", "utf8"), ctx, { filename: "web/math.js" });
   vm.runInContext(fs.readFileSync("web/quota.js", "utf8"), ctx, { filename: "web/quota.js" });
   vm.runInContext(fs.readFileSync("web/artifacts.js", "utf8"), ctx, { filename: "web/artifacts.js" });
   vm.runInContext(fs.readFileSync("web/app.js", "utf8"), ctx, { filename: "web/app.js" });
@@ -170,4 +171,14 @@ if (auth.getEl("#pending-wrap").hidden !== false || !auth.getEl("#pending-bar").
 if (!auth.getEl("#quota-pop").innerHTML.includes("模型剩余用量")) {
   throw new Error("Expected #quota-pop to render quota summary");
 }
-console.log("Frontend runtime smoke test passed (login + #/collie + CSV is-table + syntax highlight + pending --opt + quotas).");
+if (!threadHTML.includes("u-link-card") || !threadHTML.includes("u-url-pill")) {
+  throw new Error("Expected smart user link card (u-link-card) and inline URL pill (u-url-pill)");
+}
+if (!threadHTML.includes('class="math-block"') || !threadHTML.includes('class="math-inline"') || !threadHTML.includes("<mfrac>") || !threadHTML.includes("<munderover>") || !threadHTML.includes('<mover accent="true">')) {
+  throw new Error("Expected LaTeX display/inline MathML rendering (<mfrac>, <munderover>, <mover>)");
+}
+const cssText = fs.readFileSync("web/app.css", "utf8");
+if (/\.item\.active\s*>\s*\.dot[^{]*\{[^}]*opacity:\s*0/.test(cssText)) {
+  throw new Error("Regression: active sidebar session item must NOT hide working spinner (.dot)!");
+}
+console.log("Frontend runtime smoke test passed (login + #/collie + CSV is-table + syntax highlight + smart link cards + active dot + pending --opt + quotas).");

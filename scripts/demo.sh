@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 out=docs/demo
 rm -rf "$out" && mkdir -p "$out"
-cp web/app.css web/highlight.js web/quota.js web/artifacts.js web/icon.svg web/icon-512.png "$out/"
+cp web/app.css web/highlight.js web/math.js web/quota.js web/artifacts.js web/icon.svg web/icon-512.png "$out/"
 cp scripts/demo/demo.js scripts/demo/demo-qr.png "$out/"
 # Absolute paths assume the hub serves the app at /; Pages serves it at /collie/demo/.
 sed -e 's#src="/icon.svg"#src="icon.svg"#g' -e 's#"/api/qr?text=#"demo-qr.png?text=#g' web/app.js > "$out/app.js"
