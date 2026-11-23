@@ -725,7 +725,7 @@ func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
 		return nil
 	}
 	var he *HerdrError
-	if !errors.As(err, &he) || (he.Code != "agent_not_found" && he.Code != "agent_not_ready") {
+	if !errors.As(err, &he) || (he.Code != "agent_not_found" && he.Code != "agent_not_ready" && he.Code != "agent_blocked") {
 		return err
 	}
 	if pane == "" {

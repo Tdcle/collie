@@ -50,9 +50,12 @@ type Super struct {
 	routerUsage     ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun   *[2]string
-	handover    *handover            // set while the router writes its memory before a fresh session
-	dream       *dreamRun            // set while Collie sleeps and a dream session tidies its memory
-	lastTrust   map[string]time.Time // pane → when its trust dialog was last answered
+	handover      *handover            // set while the router writes its memory before a fresh session
+	dream         *dreamRun            // set while Collie sleeps and a dream session tidies its memory
+	dreamFailSlot time.Time            // scheduled dream slot of the latest failed nightly attempt
+	dreamFailAt   time.Time            // when the latest dream attempt failed
+	dreamFailures int                  // consecutive failures for dreamFailSlot
+	lastTrust     map[string]time.Time // pane → when its trust dialog was last answered
 	lastScreen    map[string]screenMark
 	transcripts   map[string]*transcript
 	noAgent       map[string]time.Time // worker → since when its pane has had no agent in it
@@ -472,7 +475,16 @@ func (sp *Super) tick(parent context.Context) {
 		// questions arrive now rather than after the current step. Collie's
 		// other events (reports, timers) batch up while it works; the human's
 		// own messages don't wait.
-		if a.Status == "blocked" || (!a.Ready && a.Status == "unknown") {
+		if a.Status == "blocked" || a.Status == "starting" || (!a.Ready && a.Status == "unknown") {
+			continue
+		}
+		// A freshly spawned session must reach "idle" at least once before receiving
+		// its very first prompt: during startup initialization Codex/Claude TUI
+		// briefly reports "working" while rendering its banner / connecting to MCP.
+		sp.mu.Lock()
+		awaitFirstIdle := (target == routerName && sp.routerFresh) || (target != routerName && sp.workerAskedAt[target].IsZero())
+		sp.mu.Unlock()
+		if awaitFirstIdle && a.Status != "idle" && a.Status != "done" {
 			continue
 		}
 		if a.Status == "working" && target == routerName {

@@ -37,8 +37,11 @@ func unixDialer(socket string) func(ctx context.Context) (net.Conn, error) {
 // logout: herdr stopped with the session, Collie's service came back on its
 // own): start herdr's server in the background and try again.
 func dialHerdr(ctx context.Context, socket string) (net.Conn, error) {
+	if socket == "" {
+		return nil, fmt.Errorf("herdr socket not configured")
+	}
 	c, err := dialHerdrRaw(ctx, socket)
-	if err == nil || !startHerdrServer() {
+	if err == nil || ctx.Err() != nil || !startHerdrServer() {
 		return c, err
 	}
 	for i := 0; i < 40; i++ {

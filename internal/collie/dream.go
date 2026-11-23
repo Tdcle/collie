@@ -71,7 +71,7 @@ func (sp *Super) dreamAtLocked() (h, m int, ok bool) {
 	return h, m, true
 }
 
-// nextDream is when the nightly dream is due next (zero when off).
+// nextDream is when the next scheduled nightly dream will occur for UI display (zero when off).
 func (sp *Super) nextDream(now time.Time) time.Time {
 	sp.mu.Lock()
 	h, m, ok := sp.dreamAtLocked()
@@ -80,20 +80,97 @@ func (sp *Super) nextDream(now time.Time) time.Time {
 		return time.Time{}
 	}
 	t := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, now.Location())
-	if !sp.lastDream().Before(t) || now.After(t.Add(3*time.Hour)) {
-		t = t.AddDate(0, 0, 1)
+	if !now.Before(t) && !sp.lastDream().Before(t) {
+		return t.AddDate(0, 0, 1)
+	}
+	if now.After(t.Add(18 * time.Hour)) {
+		return t.AddDate(0, 0, 1)
+	}
+	if !now.Before(t) {
+		// Today's slot passed; if still pending catch-up (e.g. laptop was asleep at 04:00),
+		// show tomorrow's slot in UI after failed quota, otherwise keep next upcoming slot clear.
+		sp.mu.Lock()
+		exhausted := sp.dreamFailSlot.Equal(t) && sp.dreamFailures >= 3
+		sp.mu.Unlock()
+		if exhausted {
+			return t.AddDate(0, 0, 1)
+		}
+		return t.AddDate(0, 0, 1)
 	}
 	return t
 }
 
-// somethingHappenedLocked: was there any conversation since t?
+// dueDreamSlot returns the scheduled dream slot that is currently due to run
+// (allowing up to 18h of catch-up so a laptop asleep at 04:00 smoothly runs its
+// memory tidy once opened and idle in the morning), or zero when nothing is due.
+func (sp *Super) dueDreamSlot(now time.Time) time.Time {
+	sp.mu.Lock()
+	h, m, ok := sp.dreamAtLocked()
+	sp.mu.Unlock()
+	if !ok {
+		return time.Time{}
+	}
+	slot := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, now.Location())
+	if now.Before(slot) {
+		slot = slot.AddDate(0, 0, -1)
+	}
+	if now.After(slot.Add(18 * time.Hour)) {
+		return time.Time{}
+	}
+	if !sp.lastDream().Before(slot) {
+		return time.Time{}
+	}
+	return slot
+}
+
+func dreamRetryBackoff(failures int) time.Duration {
+	switch {
+	case failures <= 0:
+		return 0
+	case failures == 1:
+		return 5 * time.Minute
+	default:
+		return 20 * time.Minute
+	}
+}
+
+func (sp *Super) recordDreamFailureLocked(at time.Time) {
+	slot := sp.dueDreamSlotForLocked(at)
+	if !slot.IsZero() {
+		if !sp.dreamFailSlot.Equal(slot) {
+			sp.dreamFailSlot = slot
+			sp.dreamFailures = 0
+		}
+	}
+	sp.dreamFailures++
+	sp.dreamFailAt = time.Now()
+}
+
+func (sp *Super) dueDreamSlotForLocked(now time.Time) time.Time {
+	h, m, ok := sp.dreamAtLocked()
+	if !ok {
+		return time.Time{}
+	}
+	slot := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, now.Location())
+	if now.Before(slot) {
+		slot = slot.AddDate(0, 0, -1)
+	}
+	return slot
+}
+
+// somethingHappenedLocked: was there any conversation or worker job since t?
 func (sp *Super) somethingHappenedLocked(t time.Time) bool {
 	for i := len(sp.st.Entries) - 1; i >= 0; i-- {
 		e := sp.st.Entries[i]
 		if e.At.Before(t) {
-			return false
+			break
 		}
 		if e.Role == "user" || e.Role == "collie" {
+			return true
+		}
+	}
+	for _, w := range sp.st.Workers {
+		if w != nil && w.CreatedAt.After(t) {
 			return true
 		}
 	}
@@ -110,15 +187,24 @@ func (sp *Super) checkDream(ctx context.Context, live map[string]liveAgent, queu
 		return
 	}
 	now := time.Now()
-	next := sp.nextDream(now)
-	if next.IsZero() || now.Before(next) || now.After(next.Add(3*time.Hour)) {
+	slot := sp.dueDreamSlot(now)
+	if slot.IsZero() {
 		return
 	}
 	a, alive := live[routerName]
+	last := sp.lastDream()
 	sp.mu.Lock()
+	// Enforce retry backoff & per-slot cap so startup errors never tight-loop every tick!
+	if sp.dreamFailSlot.Equal(slot) {
+		if sp.dreamFailures >= 3 || time.Since(sp.dreamFailAt) < dreamRetryBackoff(sp.dreamFailures) {
+			sp.mu.Unlock()
+			return
+		}
+	}
+	routerMach := sp.st.Settings.RouterMachine
 	busy := sp.handover != nil || sp.st.Settings.Paused || queued || !sp.routerAskedAt.IsZero() ||
 		(alive && a.Status != "idle" && a.Status != "done")
-	happened := sp.somethingHappenedLocked(sp.lastDream())
+	happened := sp.somethingHappenedLocked(last)
 	sp.mu.Unlock()
 	if busy {
 		return
@@ -127,7 +213,15 @@ func (sp *Super) checkDream(ctx context.Context, live map[string]liveAgent, queu
 		sp.setLastDream(now) // a quiet day: nothing to dream about
 		return
 	}
-	sp.StartDream(ctx, "nightly")
+	// If Collie's configured Brain lives on a specific computer (e.g. Mac) that is
+	// currently asleep/offline, quietly wait for it to reconnect rather than
+	// failing or falling back to an unproxied relay Hub at 04:00 AM.
+	if routerMach != "" {
+		if _, err := sp.s.herdr.machine(routerMach); err != nil {
+			return
+		}
+	}
+	_ = sp.StartDream(ctx, "nightly")
 }
 
 // StartDream puts Collie to sleep and starts the dream session.
@@ -136,6 +230,10 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 	if sp.dream != nil || sp.handover != nil {
 		sp.mu.Unlock()
 		return errors.New("Collie 正在整理记忆")
+	}
+	if reason == "manual" {
+		sp.dreamFailures = 0
+		sp.dreamFailAt = time.Time{}
 	}
 	sp.dream = &dreamRun{at: time.Now(), reason: reason}
 	at := sp.dream.at
@@ -150,6 +248,7 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 			log.Printf("dream: %v", err)
 			sp.mu.Lock()
 			sp.dream = nil
+			sp.recordDreamFailureLocked(at)
 			sp.addEntryLocked("event", mainThread, "整理记忆没能开始："+err.Error(), "", "error")
 			sp.mu.Unlock()
 		}
@@ -212,9 +311,10 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 				return
 			}
 		}
-		if _, _, err := sp.s.startAgent(bg, machineID, kinds[kind], dreamName, rdir, dreamLabel, args); err != nil {
+		paneID, _, err := sp.s.startAgent(bg, machineID, kinds[kind], dreamName, rdir, dreamLabel, args)
+		if err != nil {
 			var he *HerdrError
-			if !(errors.As(err, &he) && he.Code == "agent_not_ready") {
+			if !(errors.As(err, &he) && (he.Code == "agent_not_ready" || he.Code == "agent_blocked")) {
 				fail(err)
 				return
 			}
@@ -228,18 +328,58 @@ func (sp *Super) StartDream(ctx context.Context, reason string) error {
 		}
 		prompt = strings.ReplaceAll(prompt, "{{MIGRATE}}", migrate)
 		deadline := time.Now().Add(90 * time.Second)
-		for {
+		promptSent := false
+		var lastErr error
+		for time.Now().Before(deadline) {
+			// Wait until the newly launched dream agent finishes TUI boot
+			// (transient startup "working"/"starting") and settles into "idle"
+			// before sending its prompt; also auto-answer folder trust if needed.
+			live, ok := sp.liveAgents(bg)
+			if !ok {
+				lastErr = errors.New("waiting for herdr agent list")
+				time.Sleep(1500 * time.Millisecond)
+				continue
+			}
+			a, alive := live[dreamName]
+			if !alive {
+				lastErr = errors.New("dream agent starting up")
+				time.Sleep(1500 * time.Millisecond)
+				continue
+			}
+			if a.Status == "blocked" {
+				sp.trustOwnDir(bg, a.Pane)
+				lastErr = errors.New("waiting for folder trust dialog")
+				time.Sleep(1500 * time.Millisecond)
+				continue
+			}
+			if a.Status != "idle" && a.Status != "done" {
+				lastErr = fmt.Errorf("dream agent still %s during startup", a.Status)
+				time.Sleep(1500 * time.Millisecond)
+				continue
+			}
 			err := sp.s.herdr.Prompt(bg, dreamName, prompt)
-			var he *HerdrError
 			if err == nil {
+				promptSent = true
 				break
 			}
-			if !errors.As(err, &he) || (he.Code != "agent_not_ready" && he.Code != "agent_not_found") || time.Now().After(deadline) {
-				sp.closeWorkspaces(context.Background(), dreamLabel)
-				fail(err)
-				return
+			lastErr = err
+			var he *HerdrError
+			if errors.As(err, &he) && (he.Code == "agent_not_ready" || he.Code == "agent_not_found" || he.Code == "agent_blocked") {
+				if paneID != "" {
+					sp.trustOwnDir(bg, paneID)
+				}
+				time.Sleep(2 * time.Second)
+				continue
 			}
-			time.Sleep(2 * time.Second)
+			break
+		}
+		if !promptSent {
+			sp.closeWorkspaces(context.Background(), dreamLabel)
+			if lastErr == nil {
+				lastErr = errors.New("timed out waiting for dream agent to become idle")
+			}
+			fail(lastErr)
+			return
 		}
 		sp.mu.Lock()
 		if sp.dream != nil {
@@ -256,7 +396,7 @@ func (sp *Super) driveDream(ctx context.Context, d *dreamRun, live map[string]li
 	sp.mu.Unlock()
 	if !started {
 		if time.Since(d.at) > 5*time.Minute { // the launcher goroutine is stuck
-			sp.finishDream(ctx, d, false)
+			sp.finishDream(ctx, d, false, false)
 		}
 		return
 	}
@@ -288,26 +428,36 @@ func (sp *Super) driveDream(ctx context.Context, d *dreamRun, live map[string]li
 	wait := time.Since(d.at)
 	switch {
 	case worked && !idleAt.IsZero() && time.Since(idleAt) > 6*time.Second:
-		sp.finishDream(ctx, d, true)
-	case !alive && worked, wait > 25*time.Minute, !worked && !idleAt.IsZero() && time.Since(idleAt) > 2*time.Minute:
-		sp.finishDream(ctx, d, worked)
+		sp.finishDream(ctx, d, true, true)
+	case !alive && worked:
+		// Exited on its own after working: only treat as ok if the dream journal was written.
+		sp.finishDream(ctx, d, false, true)
+	case wait > 25*time.Minute, !worked && !idleAt.IsZero() && time.Since(idleAt) > 2*time.Minute:
+		sp.finishDream(ctx, d, false, false)
 	}
 }
 
-func (sp *Super) finishDream(ctx context.Context, d *dreamRun, ok bool) {
+func (sp *Super) finishDream(ctx context.Context, d *dreamRun, cleanIdle, checkJournal bool) {
 	if d.machine != "" {
 		_, _ = sp.pullRouterFromNode(ctx, d.machine, "", "", "", 0)
 	}
 	sp.closeWorkspaces(ctx, dreamLabel)
+	journal := filepath.Join(sp.routerDir(), "dreams", journalName(d.at)+".md")
+	ok := cleanIdle || (checkJournal && isFile(journal))
 	summary, skills, fixes := "", "", ""
 	if ok {
 		sp.setLastDream(time.Now())
-		journal := filepath.Join(sp.routerDir(), "dreams", journalName(d.at)+".md")
 		summary, skills, fixes = dreamSummary(journal), dreamLine(journal, dreamSkillsPrefix), dreamLine(journal, dreamFixPrefix)
 	}
 	sp.mu.Lock()
 	sp.dream = nil
 	sp.routerLaunchAt = time.Time{}
+	if ok {
+		sp.dreamFailures = 0
+		sp.dreamFailAt = time.Time{}
+	} else {
+		sp.recordDreamFailureLocked(d.at)
+	}
 	switch {
 	case !ok:
 		sp.addEntryLocked("event", mainThread, "这次整理记忆没有完成，Collie 先醒过来了", "", "error")
