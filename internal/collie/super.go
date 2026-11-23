@@ -47,6 +47,8 @@ type Super struct {
 	routerUsage         ctxUsage
 	// The model and effort the running router was launched with (unknown after a hub restart).
 	routerRun     *[2]string
+	routerStep    string               // live semantic step while Router is working ("正在查看设备列表…")
+	routerStepAt  time.Time
 	lastRouter    []*Trigger           // triggers delivered in the latest Router batch (re-queued if Router exits before replying)
 	handover      *handover            // set while the router writes its memory before a fresh session
 	dream         *dreamRun            // set while Collie sleeps and a dream session tidies its memory
@@ -123,12 +125,29 @@ func newSuper(s *Server, dir string) (*Super, error) {
 
 func (sp *Super) changed() {
 	sp.dirty = true
+	sp.wakeSubscribersLocked()
+}
+
+func (sp *Super) wakeSubscribersLocked() {
 	for ch := range sp.subs {
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
 	}
+}
+
+func (sp *Super) noteRouterStep(step string) {
+	if sp == nil || step == "" {
+		return
+	}
+	sp.mu.Lock()
+	if sp.routerStep != step {
+		sp.routerStep = step
+		sp.routerStepAt = time.Now()
+		sp.wakeSubscribersLocked()
+	}
+	sp.mu.Unlock()
 }
 
 func (sp *Super) subscribe() (chan struct{}, func()) {
@@ -198,6 +217,10 @@ func cleanOptions(raw []string) []string {
 // Reply posts Collie's message to a conversation thread, with optional quote,
 // quick-reply buttons, or a --check review mark, and returns any soft warning.
 func (sp *Super) Reply(thread, text, reID string, options []string, check bool) (*Entry, string) {
+	return sp.ReplyWithInterim(thread, text, reID, options, check, false)
+}
+
+func (sp *Super) ReplyWithInterim(thread, text, reID string, options []string, check, interim bool) (*Entry, string) {
 	text = strings.TrimSpace(text)
 	if thread == "" {
 		thread = mainThread
@@ -207,13 +230,19 @@ func (sp *Super) Reply(thread, text, reID string, options []string, check bool) 
 	limit := sp.st.Settings.ReplyChars
 	re := sp.quoteLocked(reID)
 	e := sp.addEntryFullLocked("collie", thread, text, "", "", re, opts, check && len(opts) == 0)
+	if interim && len(opts) == 0 && !e.Check {
+		e.Interim = true
+	}
+	sp.routerStep = ""
 	sp.mu.Unlock()
 	var warn string
 	if strings.TrimSpace(reID) != "" && re == nil {
 		warn = "--re " + reID + " is not an event or message I know; the reply went out without it"
 	}
-	if n := replyLen(text); limit > 0 && n > limit {
-		warn = fmt.Sprintf("reply is %d characters; chat replies are usually ≤%d. Fine if the human asked for detail or the result needs a list; otherwise keep the next one shorter", n, limit)
+	if interim {
+		if n := replyLen(text); limit > 0 && n > limit {
+			warn = fmt.Sprintf("interim reply is %d characters; keep --interim updates brief (≤%d)", n, limit)
+		}
 	}
 	return e, warn
 }
@@ -314,6 +343,7 @@ type liveAgent struct {
 	Ready   bool
 	Kind    string
 	Session string
+	Title   string
 }
 
 var uuidRe = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
@@ -349,7 +379,12 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 		if a.Name == nil {
 			continue
 		}
-		la := liveAgent{Pane: a.PaneID, Status: a.AgentStatus, Ready: a.Ready, Kind: deref(a.Agent)}
+		tTitle := strings.TrimSpace(a.TerminalTitle)
+		if idx := strings.Index(tTitle, " | "); idx > 0 {
+			tTitle = strings.TrimSpace(tTitle[:idx])
+		}
+		tTitle = strings.TrimSpace(liveBullet.ReplaceAllString(tTitle, ""))
+		la := liveAgent{Pane: a.PaneID, Status: a.AgentStatus, Ready: a.Ready, Kind: deref(a.Agent), Title: tTitle}
 		if a.Session != nil {
 			la.Session = sessionID(a.Session.Kind, a.Session.Value)
 		}
@@ -659,43 +694,54 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	}
 	sp.mu.Lock()
 	fresh := target == routerName && sp.routerFresh
-	words := sp.st.Settings.ReplyChars
 	sp.mu.Unlock()
 
 	var b strings.Builder
-	if fresh {
-		b.WriteString(sp.sessionStart())
-		b.WriteString("\n")
-	}
-	if len(list) == 1 {
-		b.WriteString("[collie] 1 new event\n")
-	} else {
-		fmt.Fprintf(&b, "[collie] %d new events (batched)\n", len(list))
-	}
-	for _, t := range list {
-		fmt.Fprintf(&b, "\n#%s · %s · %s", t.ID, t.Thread, t.Source)
-		if t.From != "" {
-			fmt.Fprintf(&b, " · from %s", t.From)
-		}
-		if t.Action == "candidate" {
-			b.WriteString(" · candidate (act only if a rule or memory says so; otherwise stay silent)")
-		}
-		fmt.Fprintf(&b, " · %s\n", t.At.Format("15:04"))
-		text := strings.TrimSpace(t.Text)
-		if len([]rune(text)) > 700 {
-			text = string([]rune(text)[:700]) + fmt.Sprintf(" … [spilled; run `collie show %s`]", t.ID)
-		}
-		b.WriteString(indent(text, "  "))
-		b.WriteString("\n")
-	}
 	if target == routerName {
+		if fresh {
+			b.WriteString(sp.sessionStart())
+			b.WriteString("\n")
+		}
+		if len(list) == 1 {
+			b.WriteString("[collie] 1 new event\n")
+		} else {
+			fmt.Fprintf(&b, "[collie] %d new events (batched)\n", len(list))
+		}
+		for _, t := range list {
+			fmt.Fprintf(&b, "\n#%s · %s · %s", t.ID, t.Thread, t.Source)
+			if t.From != "" {
+				fmt.Fprintf(&b, " · from %s", t.From)
+			}
+			if t.Action == "candidate" {
+				b.WriteString(" · candidate (act only if a rule or memory says so; otherwise stay silent)")
+			}
+			fmt.Fprintf(&b, " · %s\n", t.At.Format("15:04"))
+			text := strings.TrimSpace(t.Text)
+			if len([]rune(text)) > 1600 {
+				text = string([]rune(text)[:1600]) + fmt.Sprintf(" … [spilled; run `collie show %s`]", t.ID)
+			}
+			b.WriteString(indent(text, "  "))
+			b.WriteString("\n")
+		}
 		if pane := sp.s.herdr.paneOfName(ctx, routerName); pane != "" {
 			if _, m := split(pane); m != "" {
 				sp.writeMessages()
 				_, _ = sp.pushRouterToNode(ctx, m)
 			}
 		}
-		fmt.Fprintf(&b, "\nReply with `collie reply`, usually ≤%d characters.", words)
+		b.WriteString("\nReply via `collie reply` (`--interim` for brief dispatch/progress acks; for substantive answers, findings or multi-item results, use `collie reply - <<'EOF'` with structured Markdown: **bold** conclusions, bullet lists, and Markdown tables when helpful).")
+	} else {
+		// Deliver clean, untruncated instructions to workers without internal `#tXXX` trigger headers!
+		for i, t := range list {
+			if i > 0 {
+				b.WriteString("\n\n---\n\n")
+			}
+			text := strings.TrimSpace(t.Text)
+			if t.Source != "system" && !strings.HasPrefix(text, "You are worker ") {
+				b.WriteString("[Collie 补充指令]\n")
+			}
+			b.WriteString(text)
+		}
 	}
 
 	err := sp.s.herdr.Prompt(ctx, target, b.String())
@@ -713,6 +759,7 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 		sp.routerFresh = false
 	}
 	if target == routerName {
+		sp.routerStep = ""
 		if sp.routerAskedAt.IsZero() {
 			sp.routerAskedAt = time.Now()
 			sp.lastRouter = nil

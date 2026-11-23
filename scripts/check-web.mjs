@@ -102,10 +102,13 @@ function runScenario(authed) {
             router: { alive: true, status: "idle", kind: "codex", machine: "mac" },
             entries: [
               { id: "e1", role: "user", text: "看看上游新更新了什么，还有 https://arxiv.org/abs/2405.06803 这篇\n\n参考链接：\n- [Comparing main...lihuanyu0w0:collie:main · Tdcle/collie](https://github.com/Tdcle/collie/compare/main...lihuanyu0w0%3Acollie%3Amain)", at: now },
+              { id: "e1a", role: "collie", interim: true, text: "已派 **sfd-eval** 去拉取对比，跑完向你汇总。", at: now },
+              { id: "e1b", role: "event", tone: "spawn", ref: "sfd-eval", text: "sfd-eval 启动：检查上游更新", at: now },
+              { id: "e1c", role: "event", tone: "done", ref: "sfd-eval", text: "sfd-eval 回报：已完成对比", at: now },
               {
                 id: "e2",
                 role: "collie",
-                text: "推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
+                text: "**结论：共 3 项核心更新**。\n\n| 模块 | 变化 |\n|---|---|\n| 路由 | 纯原型加速 |\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
                 options: ["继续启动", "先不跑"],
                 at: now,
               },
@@ -176,6 +179,9 @@ if (!threadHTML.includes("u-link-card") || !threadHTML.includes("u-url-pill")) {
 }
 if (!threadHTML.includes('class="math-block"') || !threadHTML.includes('class="math-inline"') || !threadHTML.includes("<mfrac>") || !threadHTML.includes("<munderover>") || !threadHTML.includes('<mover accent="true">')) {
   throw new Error("Expected LaTeX display/inline MathML rendering (<mfrac>, <munderover>, <mover>)");
+}
+if (!threadHTML.includes("collie-proc") || !threadHTML.includes("1 条中间进展 · 2 条调度轨迹") || !threadHTML.includes("md-table")) {
+  throw new Error("Expected settled Collie turn to fold interim replies & events into .collie-proc and render GFM md-table in final summary");
 }
 const cssText = fs.readFileSync("web/app.css", "utf8");
 if (/\.item\.active\s*>\s*\.dot[^{]*\{[^}]*opacity:\s*0/.test(cssText)) {

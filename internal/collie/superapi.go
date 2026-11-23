@@ -54,7 +54,11 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /hooks/{source}", s.webhook)
 }
 
-// ---------------------------------------------------------------- snapshot
+var leadingTriggerRefRe = regexp.MustCompile(`^#?t\d+\s*(?:[：:·—-]\s*|\s+)`)
+
+func stripLeadingTriggerRef(s string) string {
+	return strings.TrimSpace(leadingTriggerRefRe.ReplaceAllString(strings.TrimSpace(s), ""))
+}
 
 type routerView struct {
 	Alive   bool   `json:"alive"`
@@ -68,7 +72,8 @@ type routerView struct {
 	Handover bool `json:"handover,omitempty"`
 	Dreaming bool `json:"dreaming,omitempty"`
 	// It has already replied this turn, and is only wrapping up (memory…).
-	Replied bool `json:"replied,omitempty"`
+	Replied  bool   `json:"replied,omitempty"`
+	Activity string `json:"activity,omitempty"`
 	// The model and effort it runs with ("" = the agent's own default), and
 	// whether the settings have changed since it started.
 	Model   string `json:"model,omitempty"`
@@ -111,6 +116,13 @@ func (s *Server) superState(ctx context.Context) superView {
 					v.Router.Replied = r == "collie" // unless the human has said more since
 					break
 				}
+			}
+		}
+		if a.Status == "working" && !v.Router.Replied {
+			if sp.routerStep != "" && (sp.routerAskedAt.IsZero() || !sp.routerStepAt.Before(sp.routerAskedAt)) && time.Since(sp.routerStepAt) < 2*time.Minute {
+				v.Router.Activity = sp.routerStep
+			} else if a.Title != "" && !strings.EqualFold(a.Title, "router") && !strings.EqualFold(a.Title, "codex") {
+				v.Router.Activity = a.Title
 			}
 		}
 	} else if sp.routerLaunching {
@@ -356,6 +368,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		Re      string   `json:"re"`
 		Options []string `json:"options"`
 		Check   bool     `json:"check"`
+		Interim bool     `json:"interim"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -364,7 +377,7 @@ func (s *Server) superReply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "empty reply"})
 		return
 	}
-	e, warn := s.sup.Reply(body.Thread, body.Text, body.Re, body.Options, body.Check)
+	e, warn := s.sup.ReplyWithInterim(body.Thread, body.Text, body.Re, body.Options, body.Check, body.Interim)
 	res := map[string]any{"ok": true, "entry": e.ID}
 	if warn != "" {
 		res["warning"] = warn
@@ -459,6 +472,13 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	if body.By == "" {
 		body.By = routerName
 	}
+	if body.By == routerName {
+		targetLabel := body.Name
+		if targetLabel == "" {
+			targetLabel = firstNonEmpty(body.Kind, "worker")
+		}
+		s.sup.noteRouterStep("正在启动子任务 " + targetLabel + "…")
+	}
 	if body.Thread == "" {
 		body.Thread = mainThread
 	}
@@ -540,6 +560,8 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 	// as the sidebar chat composer!
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	text = stripLeadingTriggerRef(text)
+	s.sup.noteRouterStep("正在向会话 " + to + " 发送指令…")
 	if strings.Contains(to, ":") {
 		if err := s.herdr.Prompt(ctx, to, text); err != nil {
 			writeJSON(w, 409, map[string]any{"error": err.Error()})
@@ -695,6 +717,7 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	s.sup.noteRouterStep("正在读取 " + id + " 的最新内容…")
 	if out, ok := s.sup.Show(id); ok {
 		if strings.HasPrefix(out, "thread ") {
 			if older := threadHistory(s.sup.db, id, 1<<62, 40); len(older) > 15 {
@@ -763,6 +786,7 @@ func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) superList(w http.ResponseWriter, r *http.Request) {
+	s.sup.noteRouterStep("正在查看在线电脑与会话状态…")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	io.WriteString(w, s.sup.List())
 }

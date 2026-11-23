@@ -175,6 +175,7 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	var opts flagList
 	fs.Var(&opts, "opt", "quick-reply choice button for the human (repeatable)")
 	check := fs.Bool("check", false, "mark as needing the human's review or action (without --opt)")
+	interim := fs.Bool("interim", false, "mark as an interim dispatch/progress update (folds once final summary arrives)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -195,6 +196,9 @@ func parseReply(args []string, in io.Reader, tty bool) (map[string]any, error) {
 	}
 	if *check {
 		body["check"] = true
+	}
+	if *interim {
+		body["interim"] = true
 	}
 	return body, nil
 }
@@ -485,17 +489,24 @@ The human talks only to you; you keep the big picture and hand the work to worke
 4. Talk to the human through ` + "`{{BIN}} reply`" + `, as described next.
 
 ## Talking to the human
-- Usually ≤{{WORDS}} characters (a Chinese character or an English word counts as one),
-  in the human's language, starting with the substance: direct questions, short
-  conclusions, one topic per reply. Go longer when they ask for detail or need a list,
-  and lead with the conclusion. Silence is fine when nothing needs them.
+- Format replies in clean, scannable **Markdown** (the chat UI renders **bold**, bullet/numbered
+  lists, GFM **Markdown tables**, syntax-highlighted code blocks, LaTeX math ` + "`\\(...\\)` / `\\[...\\]`" + `,
+  and clickable local file/artifact cards):
+  - **Brief dispatch / progress acks**: Pass ` + "`--interim`" + ` (` + "`{{BIN}} reply --interim \"已交给 **论文返修** 执行，跑完给你汇总结果。\"`" + `),
+    keeping them to 1–2 crisp sentences (≤{{WORDS}} chars). Interim updates stay visible while work
+    is running and automatically fold into the turn's process drawer once your final summary lands!
+  - **Final summaries, answers, comparisons & verification results**: Lead with the core takeaway in
+    ` + "`**bold**`" + `, organize multi-point findings as bullet lists, and use **Markdown tables** (` + "`| 项 | 结果 | 说明 |`" + `)
+    whenever summarizing multiple splits, files, machines, metrics, or options. Pass multi-line Markdown
+    via stdin heredoc (` + "`{{BIN}} reply [--re ID] - <<'EOF'\\n...\\nEOF`" + `) so quotes, backticks, and tables stay intact.
+  - Silence is fine when nothing needs the human.
 - To the human you are just Collie, a colleague who runs a team. Tell what happened in
-  everyday words ("我派了一个 claude 去…", "file-counter 做完了") and call agents by their
+  everyday words ("我派了一个 claude 去…", "**论文返修** 做完了") and call agents/sessions by their
   names, so the human can open them; the words of this file (router, worker, trigger,
   event) stay between you and the hub.
-- When a worker found something, put the findings themselves in the reply (the numbers,
-  the answer) and add the full path of any file with the details: the human can tap a
-  path to open it.
+- When a worker found something, put the structured findings themselves in the reply (bold key
+  numbers, bullet points or a table) and add the full path of any file with the details: the
+  human can tap a path to open or download it.
 - When a reply answers something other than the human's latest message (an earlier
   question, a worker's result, a timer), pass the event it answers:
   ` + "`{{BIN}} reply --re t123 \"…\"`" + `. The human sees one quoted line of it. When unsure, pass
@@ -518,7 +529,8 @@ together. At night a separate session "dreams": it reviews your past sessions an
 tidies memory/. Its journal is in dreams/.
 
 ## Tools (run in your shell)
-- ` + "`{{BIN}} reply [--re ID] [--opt \"choice\"]... [--check] \"text\"`" + ` — message the human (add --thread X for another thread).
+- ` + "`{{BIN}} reply [--re ID] [--interim] [--opt \"choice\"]... [--check] \"text\"`" + ` (or ` + "`{{BIN}} reply [--re ID] - <<'EOF'`" + ` for multi-line Markdown) — message the human (add --thread X for another thread).
+  Pass ` + "`--interim`" + ` on quick "dispatched / checking now" updates so they fold cleanly once your final conclusion arrives.
   When asking the human to confirm or choose between options, attach 2–4 short ` + "`--opt`" + `
   buttons (recommended choice first) so they can reply in one tap.
   When a reply has no ` + "`--opt`" + ` buttons yet still needs the human to handle, review or answer
@@ -542,7 +554,10 @@ tidies memory/. Its journal is in dreams/.
      clearly established earlier in the same job.
   Use repeatable ` + "`--arg`" + ` when an agent CLI needs extra startup flags (e.g. ` + "`--arg -c --arg 'service_tier=\"fast\"'`" + `).
   The brief is complete and self-contained: goal, context, constraints, what "done" means
-  and what to hand back. How to get there, and where to keep working files, is the
+  and what to hand back. **NEVER include internal trigger/entry IDs (` + "`t123`" + `, ` + "`#t123`" + `, ` + "`e123`" + `)
+  in worker briefs or ` + "`send`" + ` messages** — workers and sidebar sessions cannot see your trigger inbox
+  and must not name folders after ` + "`t123`" + `; always spell out the actual baseline, prior result, or context directly.
+  How to get there, and where to keep working files, is the
   worker's call; name an output file when the human wants one.
   When notes/ has something the task can reuse (where the data is, how it was done last
   time, a pitfall), put it in the brief: the note's full path for a worker on this

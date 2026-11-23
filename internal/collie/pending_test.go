@@ -27,6 +27,14 @@ func TestParseReplyOptionsAndCheck(t *testing.T) {
 	if cbody["check"] != true {
 		t.Fatalf("expected check=true, got %#v", cbody)
 	}
+
+	ibody, err := parseReply([]string{"--interim", "已派给论文返修执行"}, nil, true)
+	if err != nil || ibody["interim"] != true {
+		t.Fatalf("expected interim=true, got %#v (err=%v)", ibody, err)
+	}
+	if got := stripLeadingTriggerRef("t214 用户已定方向：纯原型方案"); got != "用户已定方向：纯原型方案" {
+		t.Fatalf("stripLeadingTriggerRef failed: got %q", got)
+	}
 }
 
 func TestPendingResolutionDismissAndPersistence(t *testing.T) {

@@ -76,6 +76,8 @@ type Entry struct {
 	Options []string `json:"options,omitempty"`
 	// Marked by Collie (--check) when a reply without options still awaits the human's review or action.
 	Check bool `json:"check,omitempty"`
+	// Marked by Collie (--interim) for brief dispatch/progress updates that fold once the final summary lands.
+	Interim bool `json:"interim,omitempty"`
 }
 
 // A Quote is what a reply answers: a message of yours, a worker's work, a timer.
