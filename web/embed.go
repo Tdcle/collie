@@ -6,5 +6,5 @@ import "embed"
 
 // FS holds the files served at /.
 //
-//go:embed *.html *.css *.js *.svg *.png *.webmanifest vendor
+//go:embed *.html *.css *.js *.svg *.png *.webmanifest
 var FS embed.FS

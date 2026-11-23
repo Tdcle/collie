@@ -302,15 +302,26 @@ func (sp *Super) resolveRouterTarget(st Settings) (m *Machine, kind string, err 
 	hasKind := func(have []string, hk string) bool {
 		return have == nil || slices.Contains(have, hk)
 	}
-	pickKindOn := func(have []string) string {
-		if hasKind(have, wantHK) {
-			return wantKind
-		}
-		if wk := kinds[st.WorkerKind]; wk != "" && hasKind(have, wk) {
-			return st.WorkerKind
+	pickKindOn := func(machineID string, have []string) string {
+		// Prefer non-exhausted / authenticated agents first.
+		order := []string{wantKind}
+		if st.WorkerKind != "" && st.WorkerKind != wantKind {
+			order = append(order, st.WorkerKind)
 		}
 		for _, k := range []string{"codex", "claude", "antigravity"} {
-			if hasKind(have, kinds[k]) {
+			if !slices.Contains(order, k) {
+				order = append(order, k)
+			}
+		}
+		for _, k := range order {
+			if hk := kinds[k]; hk != "" && hasKind(have, hk) {
+				if bad, _ := sp.s.isAgentUnusableForDispatch(machineID, hk); !bad {
+					return k
+				}
+			}
+		}
+		for _, k := range order {
+			if hk := kinds[k]; hk != "" && hasKind(have, hk) {
 				return k
 			}
 		}
@@ -331,17 +342,17 @@ func (sp *Super) resolveRouterTarget(st Settings) (m *Machine, kind string, err 
 			if !ok {
 				break
 			}
-			if k := pickKindOn(have); k != "" {
+			if k := pickKindOn(mc.ID, have); k != "" {
 				cp := mc
 				return &cp, k, nil
 			}
 		}
 	}
 
-	// 2. Auto-select any online computer that has wantKind first (preferring connected nodes if wantMachine was a remote node), then any online computer with any supported agent.
+	// 2. Auto-select any online computer that has a healthy wantKind first (preferring connected nodes if wantMachine was a remote node), then any online computer with any healthy supported agent.
 	var offlineName string
 	if wantMachine != "" {
-		for _, mc := range ms {
+		for _, mc := range sp.s.allMachines() {
 			if mc.ID == wantMachine && !mc.Online {
 				offlineName = mc.Name
 			}
@@ -358,11 +369,11 @@ func (sp *Super) resolveRouterTarget(st Settings) (m *Machine, kind string, err 
 					continue
 				}
 				if pass == 0 {
-					if hasKind(have, wantHK) {
+					if bad, _ := sp.s.isAgentUnusableForDispatch(mc.ID, wantHK); hasKind(have, wantHK) && !bad {
 						cp := mc
 						return &cp, wantKind, nil
 					}
-				} else if k := pickKindOn(have); k != "" {
+				} else if k := pickKindOn(mc.ID, have); k != "" {
 					cp := mc
 					return &cp, k, nil
 				}

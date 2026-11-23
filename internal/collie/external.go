@@ -3,6 +3,8 @@ package collie
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -500,11 +502,31 @@ func (s *Server) viewableByID(id string) *External {
 
 // listExternal answers for this machine; the hub adds every connected node's.
 func (s *Server) listExternal(w http.ResponseWriter, r *http.Request) {
+	var sessions []*External
 	if s.node {
-		writeJSON(w, 200, map[string]any{"sessions": s.externalSessions()})
+		sessions = s.externalSessions()
+	} else {
+		sessions = s.collectAllExternal(false)
+	}
+	if sessions == nil {
+		sessions = []*External{}
+	}
+	raw, _ := json.Marshal(sessions)
+	sum := sha256.Sum256(raw)
+	etag := hex.EncodeToString(sum[:8])
+	want := strings.Trim(r.URL.Query().Get("etag"), `"`)
+	if want == "" {
+		want = strings.Trim(r.URL.Query().Get("hash"), `"`)
+	}
+	if want != "" && want == etag {
+		writeJSON(w, 200, map[string]any{"unchanged": true, "etag": etag, "hash": etag})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"sessions": s.collectAllExternal(false)})
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	_, _ = w.Write([]byte(`{"etag":"` + etag + `","hash":"` + etag + `","sessions":`))
+	_, _ = w.Write(raw)
+	_, _ = w.Write([]byte(`}`))
 }
 
 func (s *Server) collectAllExternal(forceFresh bool) []*External {
@@ -942,16 +964,7 @@ func (s *Server) takeOverExternal(w http.ResponseWriter, r *http.Request) {
 	}
 	var warn string
 	if p := strings.TrimSpace(body.Prompt); p != "" && pane != "" {
-		var perr error
-		for wait := time.Now().Add(25 * time.Second); ; {
-			perr = s.herdr.Prompt(ctx, pane, p)
-			var phe *HerdrError
-			if perr == nil || !errors.As(perr, &phe) || (phe.Code != "agent_not_ready" && phe.Code != "agent_not_found") || time.Now().After(wait) || ctx.Err() != nil {
-				break
-			}
-			time.Sleep(400 * time.Millisecond)
-		}
-		if perr != nil {
+		if perr := s.waitIdleAndPrompt(ctx, pane, cwd, p, 25*time.Second); perr != nil {
 			warn = "会话已连接，但消息发送失败：" + perr.Error()
 		}
 	}

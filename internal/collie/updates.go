@@ -76,8 +76,11 @@ func refreshLatest() {
 }
 
 func fetchLatestTag() string {
+	if t := fetchHubMirrorTag(); t != "" {
+		return t
+	}
 	c := &http.Client{
-		Timeout:       20 * time.Second,
+		Timeout:       12 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := c.Head("https://github.com/" + releaseRepo() + "/releases/latest")
@@ -94,6 +97,51 @@ func fetchLatestTag() string {
 		return t
 	}
 	return ""
+}
+
+// fetchHubMirrorTag queries the paired Hub's /dl/latest endpoint first so nodes
+// on networks where github.com is slow or unreachable can still self-update cleanly.
+func fetchHubMirrorTag() string {
+	nc, ok := loadNodeConfig()
+	if !ok || strings.TrimSpace(nc.Hub) == "" {
+		return ""
+	}
+	c := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+	resp, err := c.Get(strings.TrimRight(nc.Hub, "/") + "/dl/latest")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if t := strings.TrimSpace(string(raw)); parseVersion(t) != nil {
+		return t
+	}
+	return ""
+}
+
+// serveReleaseLatest answers GET /dl/latest with the newest release version known
+// to this Hub (either its own running version or a newer upstream tag).
+func (s *Server) serveReleaseLatest(w http.ResponseWriter, _ *http.Request) {
+	best := ""
+	if parseVersion(version) != nil {
+		best = version
+	}
+	if up := latestVersion(false); parseVersion(up) != nil && (best == "" || outdated(best, up)) {
+		best = up
+	}
+	if best == "" {
+		http.NotFound(w, nil)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write([]byte(best))
 }
 
 // parseVersion reads "v1.2.3" (nil for "dev" and anything else).

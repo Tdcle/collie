@@ -402,6 +402,7 @@
   let liveEv = null;
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && liveEv?.readyState === EventSource.CLOSED) connect();
+    if (!document.hidden) loadExternal();
   });
 
   // A finished agent you have open here has been seen: the hub then shows
@@ -734,16 +735,20 @@
       return;
     }
     let next = null, id = null, subTab = null;
-    if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
-    else if (h.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(h.slice(4)); }
-    else if (h.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(h.slice(4)); }
-    else if (h === "#/collie") next = "collie";
-    else if (h === "#/trace" || h.startsWith("#/trace/")) { next = "trace"; subTab = h.slice(8); if (subTab === "flow" || subTab === "events") { traceTab = subTab; store.set("traceTab", subTab); } }
-    else if (h === "#/memory" || h.startsWith("#/memory/")) { next = "memory"; subTab = h.slice(9); if (["active", "notes", "archive"].includes(subTab)) { memTab = subTab; store.set("memTab", subTab); } }
-    else if (h === "#/timers") next = "timers";
-    else if (h === "#/hooks") next = "hooks";
-    else if (h === "#/settings" || h.startsWith("#/settings/")) { next = "settings"; subTab = h.slice(11); if (subTab === "collie" || subTab === "local") { settingsTab = subTab; store.set("settingsTab", subTab); } }
-    else if (h === "#/devices") next = "devices";
+    const hRaw = h;
+    const qIdx = h.indexOf("?");
+    const hPath = qIdx >= 0 ? h.slice(0, qIdx) : h;
+    const hQuery = qIdx >= 0 ? new URLSearchParams(h.slice(qIdx + 1)) : null;
+    if (hPath.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(hPath.slice(4)); }
+    else if (hPath.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(hPath.slice(4)); }
+    else if (hPath.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(hPath.slice(4)); }
+    else if (hPath === "#/collie") next = "collie";
+    else if (hPath === "#/trace" || hPath.startsWith("#/trace/")) { next = "trace"; subTab = hPath.slice(8); if (subTab === "flow" || subTab === "events") { traceTab = subTab; store.set("traceTab", subTab); } }
+    else if (hPath === "#/memory" || hPath.startsWith("#/memory/")) { next = "memory"; subTab = hPath.slice(9); if (["active", "notes", "archive"].includes(subTab)) { memTab = subTab; store.set("memTab", subTab); } }
+    else if (hPath === "#/timers") next = "timers";
+    else if (hPath === "#/hooks") next = "hooks";
+    else if (hPath === "#/settings" || hPath.startsWith("#/settings/")) { next = "settings"; subTab = hPath.slice(11); if (subTab === "collie" || subTab === "local") { settingsTab = subTab; store.set("settingsTab", subTab); } }
+    else if (hPath === "#/devices") next = "devices";
     else if (!narrow()) {
       // Desktop has no empty home: reopen where you were, else Collie.
       const last = store.get("last", "#/collie");
@@ -751,7 +756,11 @@
       location.replace(ok ? last : "#/collie");
       return;
     }
-    if (next) store.set("last", h);
+    if (next) store.set("last", hPath);
+    if (hQuery?.get("quotas") === "1") {
+      history.replaceState(null, "", location.pathname + location.search + hPath);
+      setTimeout(() => { toggleQuotaPop(true); loadQuotas(true); }, 80);
+    }
     if (next === view && id === (next === "ext" ? extCur : current)) {
       if (subTab && PANEL_VIEWS.has(next)) openPanel(next);
       return;
@@ -943,7 +952,7 @@
           html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++; lastQuoted = "";
         } else if (e.role === "collie") {
-          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${msgActs(e, at)}</div></div>`;
+          html += `<div class="say${cont ? " cont" : ""}"><span class="avatar">${cont ? "" : `<img src="icon.svg" alt="">`}</span><div class="msg assistant" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(e.text)}${imagesIn(e.text)}${artifactsIn(e.text)}${msgActs(e, at)}</div></div>`;
           sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         } else {
           lastEvent = e.ref || "";
@@ -2398,13 +2407,28 @@
   });
 
   // ───────────────────────────── agents in other terminals (outside herdr)
-  let ext = [], extTimer, extStream = null, extCur = null;
-  async function loadExternal() {
-    if (document.hidden && ext.length) return;
-    try { ext = (await api("/api/external")).sessions || []; } catch { return; }
-    ext = ext.concat(...await fromHubs("/api/external", "ext"));
-    renderSide();
-    if (view === "ext") renderExtHead();
+  let ext = [], extHash = "", extTimer, extStream = null, extCur = null;
+  async function loadExternal(force = false) {
+    if (!force && document.hidden && ext.length) return;
+    let changed = false;
+    try {
+      const q = !force && extHash && ext.length ? `?hash=${encodeURIComponent(extHash)}` : "";
+      const r = await api("/api/external" + q);
+      if (!r.unchanged) {
+        extHash = r.hash || r.etag || "";
+        ext = r.sessions || [];
+        changed = true;
+      }
+    } catch { return; }
+    if (hubs.length) {
+      const remoteExt = (await fromHubs("/api/external", "ext")).flat();
+      ext = ext.filter((x) => !x.hub).concat(remoteExt);
+      changed = true;
+    }
+    if (changed) {
+      renderSide();
+      if (view === "ext") renderExtHead();
+    }
   }
 
   // The same list from every other hub, ids tagged; a hub that doesn't
@@ -2433,6 +2457,7 @@
     return best;
   };
   async function loadHistory() {
+    if (document.hidden && hist.length) return;
     try { hist = (await api("/api/history")).sessions || []; } catch { return; }
     hist = hist.concat(...await fromHubs("/api/history", "hist"));
     renderSide();
@@ -3065,241 +3090,16 @@
   });
   applyLook();
 
-  // ───────────────────────────── Top-Right Model Quota Popover (per Computer & Agent)
-  const quotaBtn = $("#quota-btn"), quotaPill = $("#quota-pill"), quotaDot = $("#quota-dot"), quotaPop = $("#quota-pop");
-  let quotaData = { machines: [], updated_at: null };
-  let quotaLoading = false, quotaFetchedAt = 0, quotaMachineTab = "all", quotaTimer = null;
-
-  function formatResetEta(iso) {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (isNaN(d)) return "";
-    const diffMs = d - Date.now();
-    if (diffMs <= 0) return "即将重置";
-    const mins = Math.ceil(diffMs / 60000);
-    if (mins < 60) return `${mins} 分钟后重置`;
-    const hrs = Math.floor(mins / 60), remM = mins % 60;
-    if (hrs < 24) return remM >= 10 && hrs < 6 ? `${hrs} 小时 ${remM} 分后重置` : `${hrs} 小时后重置`;
-    const days = Math.floor(hrs / 24);
-    if (days < 7) {
-      const wk = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
-      return `${wk} ${hhmm(d)} 重置`;
-    }
-    return `${d.getMonth() + 1}/${d.getDate()} ${hhmm(d)} 重置`;
-  }
-
-  function pctTone(pct) {
-    if (pct <= 12) return "danger";
-    if (pct <= 30) return "warn";
-    return "";
-  }
-
-  function renderQuotaBtn() {
-    if (!quotaBtn || !quotaPill) return;
-    const ms = quotaData.machines || [];
-    let minPct = Infinity, hasIssue = false, issueLabel = "";
-    for (const m of ms) {
-      if (!m.online) continue;
-      for (const a of (m.agents || [])) {
-        if (a.status === "exhausted" || a.balance_ok === false) {
-          hasIssue = true;
-          if (!issueLabel && a.balance) issueLabel = a.balance.replace(/\s+/g, "");
-        }
-        for (const b of (a.buckets || [])) {
-          if (typeof b.remaining_pct === "number" && b.remaining_pct < minPct) {
-            minPct = b.remaining_pct;
-          }
-        }
-      }
-    }
-    if (Number.isFinite(minPct)) {
-      const rounded = Math.round(minPct);
-      quotaPill.hidden = false;
-      quotaPill.textContent = `${rounded}%`;
-      const tone = rounded <= 12 ? "danger" : rounded <= 30 ? "warn" : "";
-      quotaPill.className = "hq-pill" + (tone ? " " + tone : "");
-      if (quotaDot) quotaDot.hidden = !(hasIssue && rounded > 12);
-      quotaBtn.title = hasIssue
-        ? `模型剩余用量：最低 ${rounded}%（另有账户余额不足或已耗尽，点击查看各电脑详情）`
-        : `模型剩余用量：当前最低剩余 ${rounded}%（点击按电脑与 Agent 查看）`;
-    } else if (hasIssue) {
-      quotaPill.hidden = false;
-      quotaPill.textContent = issueLabel || "不足";
-      quotaPill.className = "hq-pill danger";
-      if (quotaDot) quotaDot.hidden = true;
-      quotaBtn.title = "部分模型账户余额不足或配额已用尽（点击查看详情）";
-    } else {
-      quotaPill.hidden = true;
-      if (quotaDot) quotaDot.hidden = true;
-    }
-  }
-
-  function positionQuotaPop() {
-    if (!quotaPop || quotaPop.hidden || !quotaBtn) return;
-    const r = quotaBtn.getBoundingClientRect();
-    const popW = Math.min(432, innerWidth - 20);
-    const left = Math.max(10, Math.min(innerWidth - popW - 10, r.right - popW));
-    const top = Math.min(innerHeight - 120, Math.max(8, r.bottom + 8));
-    quotaPop.style.left = `${left}px`;
-    quotaPop.style.top = `${top}px`;
-    quotaPop.style.maxHeight = `${Math.max(220, innerHeight - top - 14)}px`;
-  }
-
-  function renderQuotaPop() {
-    if (!quotaPop || quotaPop.hidden) return;
-    const ms = quotaData.machines || [];
-    if (quotaMachineTab !== "all" && !ms.some((m) => (m.id || "hub") === quotaMachineTab)) {
-      quotaMachineTab = "all";
-    }
-    const visible = quotaMachineTab === "all" ? ms : ms.filter((m) => (m.id || "hub") === quotaMachineTab);
-    const updTxt = quotaLoading ? "正在刷新…" : quotaData.updated_at ? `${hhmm(quotaData.updated_at)} 更新` : "";
-
-    const tabsHTML = ms.length > 1 ? `<div class="qp-tabs">
-      <button type="button" class="qp-tab ${quotaMachineTab === "all" ? "on" : ""}" data-qtab="all">全部 (${ms.length})</button>
-      ${ms.map((m) => {
-        const mid = m.id || "hub";
-        return `<button type="button" class="qp-tab ${quotaMachineTab === mid ? "on" : ""}" data-qtab="${esc(mid)}">${osGlyph(m.os, !!m.relay)}<span>${esc(m.name || mid)}</span></button>`;
-      }).join("")}
-    </div>` : "";
-
-    const bodyHTML = !ms.length
-      ? `<div class="qp-empty">${quotaLoading ? "正在读取各台电脑的模型剩余用量…" : "暂无已连接的电脑或可用 Agent"}</div>`
-      : visible.map((m) => {
-          const agents = m.agents || [];
-          const stTxt = m.online ? "在线" : m.cached ? "离线 · 上次记录" : "离线";
-          const agHTML = !agents.length
-            ? `<div class="qp-agent is-muted"><div class="qp-a-head"><span class="qp-a-name">未检测到已安装的编码 Agent</span></div></div>`
-            : agents.map((a) => {
-                const buckets = a.buckets || [];
-                const hasRich = buckets.length > 0 || !!a.balance || a.status === "exhausted" || a.status === "api_key";
-                const mutedCls = hasRich ? "" : " is-muted";
-                const planBadge = a.provider && a.plan && !["OpenAI", "Anthropic", "Google"].includes(a.provider)
-                  ? `${a.provider} · ${a.plan}`
-                  : (a.plan || (a.provider && a.status === "api_key" ? a.provider : ""));
-                const balCls = a.balance_ok === false || a.status === "exhausted" ? " bad" : "";
-                return `<div class="qp-agent${mutedCls}">
-                  <div class="qp-a-head">
-                    <span class="qp-a-ico">${GLYPHS[a.kind] || GLYPHS.agent}</span>
-                    <span class="qp-a-name">${esc(AGENT_LABEL[a.kind] || a.kind)}</span>
-                    ${planBadge ? `<span class="qp-badge">${esc(planBadge)}</span>` : ""}
-                    ${a.reset_credits > 0 ? `<span class="qp-badge credit" title="拥有免费重置配额次数">可重置 ${a.reset_credits} 次</span>` : ""}
-                    ${a.balance ? `<span class="qp-bal${balCls}">${esc(a.balance)}</span>` : ""}
-                    ${!hasRich && a.note ? `<span class="qp-a-inline-note" title="${esc(a.note)}">${esc(a.note)}</span>` : ""}
-                  </div>
-                  ${buckets.length ? `<div class="qp-buckets">${buckets.map((b) => {
-                    const rem = Math.max(0, Math.min(100, Number(b.remaining_pct) || 0));
-                    const tone = pctTone(rem);
-                    const eta = formatResetEta(b.resets_at);
-                    const pctStr = Number.isInteger(rem) ? `${rem}%` : `${rem.toFixed(1)}%`;
-                    return `<div class="qp-bucket">
-                      <div class="qp-b-top">
-                        <span class="qp-b-label" title="${esc(b.model || b.label)}">${esc(b.label)}</span>
-                        <span class="qp-b-meta">
-                          ${eta ? `<span class="qp-b-reset">${esc(eta)}</span>` : ""}
-                          <span class="qp-b-pct${tone ? " " + tone : ""}">剩余 ${pctStr}</span>
-                        </span>
-                      </div>
-                      <div class="qp-track"><div class="qp-fill${tone ? " " + tone : ""}" style="width:${rem}%"></div></div>
-                    </div>`;
-                  }).join("")}</div>` : ""}
-                  ${hasRich && (a.note || a.model) ? `<div class="qp-note${a.balance_ok === false || a.status === "exhausted" ? " bad" : ""}">
-                    <span>${esc(a.note || "")}</span>
-                    ${a.model && !(a.note || "").includes(a.model) ? `<span class="mono">${esc(a.model)}</span>` : ""}
-                  </div>` : ""}
-                </div>`;
-              }).join("");
-
-          return `<section class="qp-machine">
-            <header class="qp-m-head">
-              <span class="qp-m-ico">${osGlyph(m.os, !!m.relay)}</span>
-              <span class="qp-m-name">${esc(m.name || m.id || "本地电脑")}</span>
-              <span class="qp-m-state"><span class="conn ${m.online ? "on" : "off"}"></span>${esc(stTxt)}</span>
-            </header>
-            <div class="qp-agents">${agHTML}</div>
-          </section>`;
-        }).join("");
-
-    quotaPop.innerHTML = `<header class="qp-head">
-      <div class="qp-head-left">
-        <b>模型剩余用量</b>
-        <span>按接入电脑与 Agent 实时汇总配额与余额</span>
-      </div>
-      <div class="qp-head-right">
-        ${updTxt ? `<span class="qp-updated">${esc(updTxt)}</span>` : ""}
-        <button type="button" class="qp-refresh${quotaLoading ? " spinning" : ""}" id="qp-refresh-btn" title="立即刷新实时配额">
-          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"/><path d="M21 3v5h-5"/></svg>
-        </button>
-      </div>
-    </header>
-    ${tabsHTML}
-    <div class="qp-body">${bodyHTML}</div>`;
-    positionQuotaPop();
-  }
-
-  async function loadQuotas(fresh = false) {
-    if (quotaLoading) return;
-    quotaLoading = true;
-    renderQuotaPop();
-    try {
-      const r = await api(`/api/quotas${fresh ? "?fresh=1" : ""}`);
-      const list = [...(r.machines || [])];
-      // Merge linked secondary hubs if configured.
-      for (const h of hubs) {
-        try {
-          const hr = await api(`/api/quotas${fresh ? "?fresh=1" : ""}`, { hub: h });
-          for (const hm of (hr.machines || [])) {
-            list.push({ ...hm, id: tagged(hm.id || "hub", h.key), name: `${hm.name || h.name} (${h.name})` });
-          }
-        } catch {}
-      }
-      quotaData = { machines: list, updated_at: r.updated_at || new Date().toISOString() };
-      quotaFetchedAt = Date.now();
-      renderQuotaBtn();
-    } catch (e) {
-      if (fresh) toast(e.message, "attn");
-    } finally {
-      quotaLoading = false;
-      renderQuotaPop();
-    }
-  }
-
-  function toggleQuotaPop(open) {
-    if (!quotaPop || !quotaBtn) return;
-    const want = open ?? quotaPop.hidden;
-    quotaPop.hidden = !want;
-    quotaBtn.classList.toggle("active", want);
-    quotaBtn.setAttribute("aria-expanded", String(want));
-    if (want) {
-      renderQuotaPop();
-      if (!quotaFetchedAt || Date.now() - quotaFetchedAt > 30000) loadQuotas(false);
-    }
-  }
-
-  quotaBtn?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleQuotaPop();
-  });
-  quotaPop?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const tab = e.target.closest("[data-qtab]")?.dataset.qtab;
-    if (tab) {
-      quotaMachineTab = tab;
-      renderQuotaPop();
-      return;
-    }
-    if (e.target.closest("#qp-refresh-btn")) {
-      loadQuotas(true);
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (quotaPop && !quotaPop.hidden && !quotaPop.contains(e.target) && !quotaBtn?.contains(e.target)) {
-      toggleQuotaPop(false);
-    }
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && quotaPop && !quotaPop.hidden) toggleQuotaPop(false);
-  });
-  addEventListener("resize", positionQuotaPop);
+  // ───────────────────────────── Top-Right Model Quota Popover (delegated to web/quota.js)
+  let quotaTimer = null;
+  const quotaUI = window.CollieQuota
+    ? window.CollieQuota.initQuotaUI({
+        $, api, toast, esc, hhmm, osGlyph, GLYPHS, AGENT_LABEL,
+        getHubs: () => hubs, tagged,
+      })
+    : { loadQuotas: async () => {}, toggleQuotaPop: () => {}, renderQuotaBtn: () => {}, renderQuotaPop: () => {} };
+  const loadQuotas = (fresh = false) => quotaUI.loadQuotas(fresh);
+  const toggleQuotaPop = (open) => quotaUI.toggleQuotaPop(open);
 
   function prefsHTML() {
     const seg = (key, cur, opts) => `<div class="seg" data-pref="${key}">${opts.map(([v, label]) =>
@@ -3967,7 +3767,7 @@
       } else {
         const pm = procItems[p].m;
         const rCls = pm.phase === "reasoning" ? " reasoning" : "";
-        out += `<div class="msg-note${rCls}">${md(pm.text)}${imagesIn(pm.text)}</div>`;
+        out += `<div class="msg-note${rCls}">${md(pm.text)}${imagesIn(pm.text)}${artifactsIn(pm.text)}</div>`;
         p++;
       }
     }
@@ -4102,7 +3902,8 @@
         procBuf = [];
         const rendered = md(mk.text);
         const extraImgs = imagesIn(mk.text);
-        html += `<div class="msg assistant">${rendered}${extraImgs}</div>`;
+        const extraArts = artifactsIn(mk.text);
+        html += `<div class="msg assistant">${rendered}${extraImgs}${extraArts}</div>`;
         cut();
       }
       flushProcessGroup(procBuf, procStart, segWorking);
@@ -4298,7 +4099,9 @@
     }
   }
   async function fetchFile(path, machine) {
-    const q = `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}${IMG_EXT.test(path) ? "&as=image" : ""}`;
+    const clean = String(path || "").split(/[?#]/)[0];
+    const asParam = IMG_EXT.test(clean) ? "&as=image" : /\.pdf$/i.test(clean) ? "&as=pdf" : "";
+    const q = `/api/file?path=${encodeURIComponent(path)}${machine ? "&machine=" + encodeURIComponent(machine) : ""}${asParam}`;
     const r = routeReq(q);
     const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
     if (res.status === 404) return null;
@@ -4418,44 +4221,36 @@
     } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== fileSeq) return;
     if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
-    const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
-    $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
-    if (fileUrl) URL.revokeObjectURL(fileUrl), fileUrl = "";
+    if (fileUrl) { URL.revokeObjectURL(fileUrl); fileUrl = ""; }
     if (f.kind === "image") {
       const ext = path.split(".").pop().toLowerCase();
       fileUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
+      const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+      $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
       body.innerHTML = `<div class="fv-img"><img src="${fileUrl}" alt=""></div>`;
       return;
     }
-    if (f.kind !== "text") {
-      const canDl = f.size > 0 && f.size <= (20 << 20);
-      body.innerHTML = `<p class="fv-note">这个文件不是纯文本（${fmtSize(f.size)}），无法直接在线预览文本。${canDl ? `<br><br><button type="button" class="btn primary" id="fv-dl-btn">下载到本地打开</button>` : ""}</p>`;
-      $("#fv-dl-btn")?.addEventListener("click", async () => {
-        const btn = $("#fv-dl-btn");
-        btn.disabled = true; btn.textContent = "正在下载…";
-        try {
-          const q = `/api/file?path=${encodeURIComponent(path)}${f.machine ? "&machine=" + encodeURIComponent(f.machine) : ""}&download=1`;
-          const r = routeReq(q);
-          const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
-          if (!res.ok) throw new Error("下载失败");
-          const blob = await res.blob();
-          const u = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = u; a.download = path.split(/[\\/]/).pop() || "download";
-          document.body.append(a); a.click(); a.remove();
-          setTimeout(() => URL.revokeObjectURL(u), 5000);
-          btn.textContent = "已下载";
-        } catch (err) {
-          toast(err.message || "下载失败", "err");
-          btn.disabled = false; btn.textContent = "下载到本地打开";
-        }
-      });
-      return;
-    }
+    const setObjectURL = (blob) => {
+      if (fileUrl) URL.revokeObjectURL(fileUrl);
+      fileUrl = URL.createObjectURL(blob);
+      return fileUrl;
+    };
+    if (await artifactUI.renderRichFilePane(path, f, setObjectURL)) return;
+    const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+    $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
     const text = await f.blob.text();
     const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
     body.innerHTML = MD_EXT.test(path) ? `<div class="msg assistant fv-md">${mdRender(text)}</div>${cut}` : `<pre class="fv-pre">${esc(text)}</pre>${cut}`;
   }
+  const artifactUI = window.CollieArtifacts
+    ? window.CollieArtifacts.initArtifacts({
+        $, esc, tilde, fmtSize, toast, routeReq, fileTries, findFile,
+        machineName, getMachinesCount: () => (state.machines || []).length,
+        mdRender: (s) => mdRender(s), showFilePane: () => showFilePane(),
+        openFile: (p) => openFile(p),
+      })
+    : { artifactsIn: () => "", renderRichFilePane: async () => false };
+  const artifactsIn = (t) => artifactUI.artifactsIn(t);
   // Images a message carries ("[image:~/.collie/images/….png]" or any local
   // Windows/Unix image path) show inline; tap to open the full viewer panel.
   const IMG_TOKEN = /\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]\n?/gi;
@@ -6027,9 +5822,46 @@
     };
     $("#local-app-x").onclick = () => { store.set("local-app-off", true); $("#local-app").hidden = true; };
   }
-  // ───────────────────────────── command palette (⌘K / Ctrl+K)
+  // ───────────────────────────── command palette (⌘K / Ctrl+K) + cross-machine full-text search
   const cmdk = $("#cmdk"), cmdkInput = $("#cmdk-input"), cmdkList = $("#cmdk-list");
   let cmdkItems = [], cmdkIdx = 0;
+  let cmdkSearchQ = "", cmdkSearchHits = [], cmdkSearchBusy = false, cmdkSearchTimer = null, cmdkSearchSeq = 0;
+
+  function highlightMatchHTML(str, needle) {
+    const raw = String(str || "");
+    if (!needle) return esc(raw);
+    const low = raw.toLowerCase(), nLow = needle.toLowerCase();
+    const idx = low.indexOf(nLow);
+    if (idx < 0) return esc(raw);
+    return esc(raw.slice(0, idx)) + `<mark class="cmdk-hl">${esc(raw.slice(idx, idx + needle.length))}</mark>` + esc(raw.slice(idx + needle.length));
+  }
+
+  async function runCmdkSearch(q) {
+    const trimmed = (q || "").trim();
+    if ([...trimmed].length < 2) {
+      cmdkSearchQ = "";
+      cmdkSearchHits = [];
+      cmdkSearchBusy = false;
+      return;
+    }
+    const seq = ++cmdkSearchSeq;
+    cmdkSearchQ = trimmed;
+    cmdkSearchBusy = true;
+    renderCmdk();
+    try {
+      const r = await api(`/api/search?q=${encodeURIComponent(trimmed)}`);
+      if (seq !== cmdkSearchSeq) return;
+      cmdkSearchHits = r.results || [];
+    } catch {
+      if (seq !== cmdkSearchSeq) return;
+      cmdkSearchHits = [];
+    } finally {
+      if (seq === cmdkSearchSeq) {
+        cmdkSearchBusy = false;
+        if (cmdk?.open) renderCmdk();
+      }
+    }
+  }
   function buildCmdkItems(q) {
     const needle = (q || "").trim().toLowerCase();
     const match = (...parts) => !needle || parts.some((p) => String(p || "").toLowerCase().includes(needle));
@@ -6125,33 +5957,62 @@
 
     if (projItems.length) groups.push(["项目快捷新建", projItems]);
     if (liveItems.length) groups.push(["进行中的会话", liveItems]);
+    if ([...needle].length >= 2 && (cmdkSearchHits.length || cmdkSearchBusy)) {
+      const ftItems = cmdkSearchHits.map((h) => {
+        const where = h.kind === "collie" ? "Collie 主对话" : `${KIND_LABEL[h.kind] || h.kind} · ${machineName(h.machine)}${h.cwd ? " · " + tilde(h.cwd) : ""}`;
+        return {
+          ico: h.kind === "collie" ? GLYPHS.collie : (GLYPHS[h.kind] || GLYPHS.agent),
+          title: h.title || "会话",
+          sub: where,
+          snippet: h.snippet || "",
+          meta: h.updated ? ago(h.updated) : "正文命中",
+          run: () => { if (h.hash) location.hash = h.hash; },
+        };
+      });
+      groups.push([cmdkSearchBusy ? "跨机对话正文检索（搜索中…）" : `跨机对话正文检索 (${ftItems.length})`, ftItems]);
+    }
     if (navActs.length) groups.push(["导航与快捷操作", navActs]);
     if (recentItems.length) groups.push(["最近会话", recentItems]);
     return groups;
   }
   function renderCmdk() {
-    const groups = buildCmdkItems(cmdkInput.value);
+    const rawQ = cmdkInput.value;
+    const needle = (rawQ || "").trim();
+    const groups = buildCmdkItems(rawQ);
     cmdkItems = [];
     let html = "";
     for (const [sec, list] of groups) {
       html += `<div class="cmdk-sec">${esc(sec)}</div>`;
+      if (!list.length && cmdkSearchBusy && sec.includes("正文检索")) {
+        html += `<div class="cmdk-searching">正在跨电脑检索历史对话正文…</div>`;
+        continue;
+      }
       for (const it of list) {
         const idx = cmdkItems.length;
         cmdkItems.push(it);
         html += `<button type="button" class="cmdk-item${idx === cmdkIdx ? " on" : ""}" data-ci="${idx}">
           <span class="ci-ico">${it.ico}</span>
-          <span class="ci-main"><div class="ci-title">${esc(it.title)}</div><div class="ci-sub">${esc(it.sub)}</div></span>
+          <span class="ci-main">
+            <div class="ci-title">${highlightMatchHTML(it.title, needle)}</div>
+            <div class="ci-sub">${esc(it.sub)}</div>
+            ${it.snippet ? `<div class="ci-snip">${highlightMatchHTML(it.snippet, needle)}</div>` : ""}
+          </span>
           <span class="ci-meta">${it.dot ? `<span class="dot ${esc(it.dot)}"></span>` : ""}${esc(it.meta || "")}</span>
         </button>`;
       }
     }
-    cmdkList.innerHTML = html || `<div class="cmdk-empty">没有找到匹配的会话或操作</div>`;
+    cmdkList.innerHTML = html || (cmdkSearchBusy ? `<div class="cmdk-empty">正在跨电脑检索历史对话正文…</div>` : `<div class="cmdk-empty">没有找到匹配的会话、操作或对话内容</div>`);
     cmdkList.querySelector(".cmdk-item.on")?.scrollIntoView({ block: "nearest" });
   }
   function openCmdk() {
     if (!cmdk || !$("#app") || $("#app").hidden) return;
     if (cmdk.open) { cmdk.close(); return; }
     closePick();
+    clearTimeout(cmdkSearchTimer);
+    cmdkSearchSeq++;
+    cmdkSearchQ = "";
+    cmdkSearchHits = [];
+    cmdkSearchBusy = false;
     cmdkInput.value = "";
     cmdkIdx = 0;
     renderCmdk();
@@ -6168,7 +6029,21 @@
     cmdk.close();
     it?.run();
   });
-  cmdkInput?.addEventListener("input", () => { cmdkIdx = 0; renderCmdk(); });
+  cmdkInput?.addEventListener("input", () => {
+    cmdkIdx = 0;
+    const q = cmdkInput.value.trim();
+    clearTimeout(cmdkSearchTimer);
+    if ([...q].length < 2) {
+      cmdkSearchSeq++;
+      cmdkSearchHits = [];
+      cmdkSearchBusy = false;
+      renderCmdk();
+      return;
+    }
+    cmdkSearchBusy = true;
+    renderCmdk();
+    cmdkSearchTimer = setTimeout(() => runCmdkSearch(q), 220);
+  });
   cmdk?.addEventListener("keydown", (e) => {
     if (!cmdkItems.length) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {

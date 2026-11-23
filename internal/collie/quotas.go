@@ -71,10 +71,11 @@ var localQuotaCache struct {
 
 var hubQuotaState = struct {
 	sync.Mutex
-	at      time.Time
-	online  string
-	list    []MachineQuota
-	lastMap map[string]MachineQuota
+	at         time.Time
+	refreshing bool
+	online     string
+	list       []MachineQuota
+	lastMap    map[string]MachineQuota
 }{
 	lastMap: map[string]MachineQuota{},
 }
@@ -191,6 +192,11 @@ func (s *Server) localMachineQuota(parent context.Context, fresh bool) MachineQu
 // listQuotas serves GET /api/quotas on the Hub, fanning out to all connected computers.
 func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 	fresh := r.URL.Query().Get("fresh") != ""
+	out, at := s.collectClusterQuotas(r.Context(), fresh)
+	writeJSON(w, 200, map[string]any{"machines": out, "updated_at": at})
+}
+
+func (s *Server) collectClusterQuotas(parent context.Context, fresh bool) ([]MachineQuota, time.Time) {
 	machines := map[string]Machine{}
 	var onlineSigParts []string
 	if s.herdr != nil {
@@ -209,8 +215,7 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 		list := hubQuotaState.list
 		at := hubQuotaState.at
 		hubQuotaState.Unlock()
-		writeJSON(w, 200, map[string]any{"machines": list, "updated_at": at})
-		return
+		return list, at
 	}
 	hubQuotaState.Unlock()
 
@@ -226,7 +231,7 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 	// Include Hub itself if it runs herdr locally or if there are no paired remote machines.
 	herdrOK := false
 	if s.herdr != nil && s.herdr.local != nil && s.herdr.local.conn != nil {
-		hCtx, cancel := context.WithTimeout(r.Context(), 1200*time.Millisecond)
+		hCtx, cancel := context.WithTimeout(parent, 1200*time.Millisecond)
 		_, err := s.herdr.local.conn.call(hCtx, "workspace.list", nil)
 		cancel()
 		herdrOK = err == nil
@@ -249,10 +254,10 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			hCtx := r.Context()
+			hCtx := parent
 			var cancel context.CancelFunc
 			if len(paired) > 0 {
-				hCtx, cancel = context.WithTimeout(r.Context(), 2200*time.Millisecond)
+				hCtx, cancel = context.WithTimeout(parent, 2200*time.Millisecond)
 				defer cancel()
 			}
 			mq := s.localMachineQuota(hCtx, fresh)
@@ -261,6 +266,9 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 				mq.Name = "Hub"
 			}
 			mq.Relay = !herdrOK
+			hubQuotaState.Lock()
+			hubQuotaState.lastMap["hub"] = mq
+			hubQuotaState.Unlock()
 			if len(paired) > 0 {
 				routerOnHub := false
 				if s.sup != nil {
@@ -295,7 +303,7 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 				osName = "unknown"
 			}
 			if online && s.herdr != nil {
-				if mq, err := s.fetchRemoteQuota(r.Context(), d.ID, fresh); err == nil {
+				if mq, err := s.fetchRemoteQuota(parent, d.ID, fresh); err == nil {
 					mq.ID = d.ID
 					mq.Name = d.Name
 					if mq.OS == "" {
@@ -313,7 +321,6 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			// Machine is offline or unreachable: return cached snapshot if available.
 			hubQuotaState.Lock()
 			cached, hasCached := hubQuotaState.lastMap[d.ID]
 			hubQuotaState.Unlock()
@@ -359,7 +366,6 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 			out = append(out, sl.mq)
 		}
 	}
-	// Online computers first, preserving creation order.
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Online != out[j].Online {
 			return out[i].Online
@@ -373,8 +379,236 @@ func (s *Server) listQuotas(w http.ResponseWriter, r *http.Request) {
 	hubQuotaState.online = onlineSig
 	hubQuotaState.list = out
 	hubQuotaState.Unlock()
+	return out, now
+}
 
-	writeJSON(w, 200, map[string]any{"machines": out, "updated_at": now})
+func (s *Server) ensureQuotaWarmAsync() {
+	if s == nil || s.node {
+		return
+	}
+	hubQuotaState.Lock()
+	stale := hubQuotaState.at.IsZero() || time.Since(hubQuotaState.at) > 5*time.Minute
+	busy := hubQuotaState.refreshing
+	if stale && !busy {
+		hubQuotaState.refreshing = true
+	}
+	hubQuotaState.Unlock()
+	if stale && !busy {
+		go func() {
+			defer func() {
+				hubQuotaState.Lock()
+				hubQuotaState.refreshing = false
+				hubQuotaState.Unlock()
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			s.collectClusterQuotas(ctx, false)
+		}()
+	}
+}
+
+// isAgentUnusableForDispatch reports whether cached quota/auth telemetry shows
+// that `kind` on `machineID` is exhausted, in arrears, or unauthenticated.
+func (s *Server) isAgentUnusableForDispatch(machineID, kind string) (bool, string) {
+	if s == nil {
+		return false, ""
+	}
+	canon := kinds[kind]
+	if canon == "" {
+		canon = kind
+	}
+	key := machineID
+	if key == "" {
+		key = "hub"
+	}
+	s.ensureQuotaWarmAsync()
+	hubQuotaState.Lock()
+	mq, ok := hubQuotaState.lastMap[key]
+	hubQuotaState.Unlock()
+	if !ok {
+		return false, ""
+	}
+	for _, a := range mq.Agents {
+		if a.Kind != canon {
+			continue
+		}
+		if a.Status == "exhausted" || (a.BalanceOK != nil && !*a.BalanceOK) {
+			why := strings.TrimSpace(a.Note)
+			if a.Balance != "" {
+				if why != "" {
+					why = a.Balance + "（" + why + "）"
+				} else {
+					why = "余额不足 " + a.Balance
+				}
+			} else if why == "" {
+				why = "配额已耗尽"
+			}
+			return true, why
+		}
+		if a.Status == "unauthed" {
+			return true, firstNonEmpty(a.Note, "尚未登录")
+		}
+		for _, b := range a.Buckets {
+			if b.RemainingPct <= 0 {
+				return true, b.Label + " 剩余 0%"
+			}
+		}
+	}
+	return false, ""
+}
+
+// machineQuotaBrief formats a compact one-line quota summary for `collie list`
+// so Collie's Router sees live remaining quotas and arrears before dispatching.
+func (s *Server) machineQuotaBrief(machineID string) string {
+	if s == nil {
+		return ""
+	}
+	key := machineID
+	if key == "" {
+		key = "hub"
+	}
+	s.ensureQuotaWarmAsync()
+	hubQuotaState.Lock()
+	mq, ok := hubQuotaState.lastMap[key]
+	hubQuotaState.Unlock()
+	if !ok || len(mq.Agents) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, a := range mq.Agents {
+		switch {
+		case a.Status == "exhausted" || (a.BalanceOK != nil && !*a.BalanceOK):
+			if a.Balance != "" {
+				parts = append(parts, fmt.Sprintf("%s=UNAVAILABLE(%s)", a.Kind, a.Balance))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s=EXHAUSTED", a.Kind))
+			}
+		case len(a.Buckets) > 0:
+			minRem := a.Buckets[0].RemainingPct
+			for _, b := range a.Buckets[1:] {
+				if b.RemainingPct < minRem {
+					minRem = b.RemainingPct
+				}
+			}
+			parts = append(parts, fmt.Sprintf("%s=%.0f%%", a.Kind, minRem))
+		case a.Balance != "":
+			parts = append(parts, fmt.Sprintf("%s=%s", a.Kind, strings.ReplaceAll(a.Balance, " ", "")))
+		case a.Status == "api_key":
+			parts = append(parts, fmt.Sprintf("%s=api_key", a.Kind))
+		case a.Status == "unauthed":
+			parts = append(parts, fmt.Sprintf("%s=unauthed", a.Kind))
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// checkQuotaAlerts periodically checks connected computers' quotas and pushes a
+// one-time Feishu/Webhook warning card per reset window when an agent drops
+// <= 15% remaining or enters negative/zero API balance.
+func (sp *Super) checkQuotaAlerts(parent context.Context) {
+	if sp == nil || sp.s == nil || sp.db == nil {
+		return
+	}
+	sp.mu.Lock()
+	enabled := sp.st.Settings.NotifyWebhook != "" || sp.st.Settings.NotifyLark
+	due := sp.quotaAlertAt.IsZero() || time.Since(sp.quotaAlertAt) >= 10*time.Minute
+	if enabled && due {
+		sp.quotaAlertAt = time.Now()
+	}
+	sp.mu.Unlock()
+	if !enabled || !due {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
+	defer cancel()
+	list, _ := sp.s.collectClusterQuotas(ctx, false)
+	if len(list) == 0 {
+		return
+	}
+
+	sent := map[string]string{}
+	var raw string
+	if sp.db.QueryRow(`SELECT v FROM kv WHERE k='quota_alerts_sent'`).Scan(&raw) == nil && raw != "" {
+		_ = json.Unmarshal([]byte(raw), &sent)
+	}
+	changed := false
+	activeKeys := map[string]bool{}
+	var alerts []notice
+
+	for _, m := range list {
+		if !m.Online {
+			continue
+		}
+		mName := firstNonEmpty(m.Name, m.ID)
+		for _, a := range m.Agents {
+			agLabel := map[string]string{"codex": "Codex", "claude": "Claude Code", "agy": "Antigravity", "gemini": "Gemini CLI"}[a.Kind]
+			if agLabel == "" {
+				agLabel = a.Kind
+			}
+			// 1. Negative / depleted gateway balance
+			if a.Balance != "" && ((a.BalanceOK != nil && !*a.BalanceOK) || a.Status == "exhausted") {
+				dedupKey := fmt.Sprintf("bal|%s|%s|%s", m.ID, a.Kind, a.Provider)
+				activeKeys[dedupKey] = true
+				if sent[dedupKey] != a.Balance {
+					sent[dedupKey] = a.Balance
+					changed = true
+					alerts = append(alerts, notice{
+						tone:     "error",
+						title:    fmt.Sprintf("%s · %s 余额预警", mName, agLabel),
+						text:     fmt.Sprintf("**%s** 上的 **%s**（%s）当前余额为 **%s**，%s。\nCollie 自动派活已自动避开该账户，请及时充值或切换配置。", mName, agLabel, firstNonEmpty(a.Provider, "API"), a.Balance, firstNonEmpty(a.Note, "可用余额不足")),
+						hash:     "/#/collie?quotas=1",
+						btnLabel: "打开控制台查看用量",
+					})
+				}
+			}
+			// 2. Low remaining percentage window (<= 15%)
+			for _, b := range a.Buckets {
+				if b.RemainingPct > 15 {
+					continue
+				}
+				cycle := firstNonEmpty(b.ResetsAt, "current")
+				tier := "low15"
+				tone := "blocked"
+				if b.RemainingPct <= 0 {
+					tier = "zero"
+					tone = "error"
+				}
+				dedupKey := fmt.Sprintf("pct|%s|%s|%s|%s", m.ID, a.Kind, b.ID, cycle)
+				activeKeys[dedupKey] = true
+				if sent[dedupKey] == "zero" || sent[dedupKey] == tier {
+					continue
+				}
+				sent[dedupKey] = tier
+				changed = true
+				alerts = append(alerts, notice{
+					tone:     tone,
+					title:    fmt.Sprintf("%s · %s 配额剩余 %.0f%%", mName, agLabel, b.RemainingPct),
+					text:     fmt.Sprintf("**%s** 上的 **%s**（%s）当前剩余 **%.0f%%**%s。", mName, agLabel, b.Label, b.RemainingPct, func() string { if a.ResetCredits > 0 { return fmt.Sprintf("（另有 %d 次免费重置额度可用）", a.ResetCredits) }; return "" }()),
+					hash:     "/#/collie",
+					btnLabel: "打开控制台查看用量",
+				})
+			}
+		}
+	}
+
+	// Prune stale keys from old billing cycles so kv stays tiny.
+	for k := range sent {
+		if !activeKeys[k] && len(sent) > 64 {
+			delete(sent, k)
+			changed = true
+		}
+	}
+	if changed {
+		if b, err := json.Marshal(sent); err == nil {
+			_, _ = sp.db.Exec(`INSERT INTO kv(k,v) VALUES('quota_alerts_sent',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, string(b))
+		}
+	}
+	if len(alerts) > 0 {
+		sp.mu.Lock()
+		sp.notifyBuf = append(sp.notifyBuf, alerts...)
+		sp.mu.Unlock()
+	}
 }
 
 func (s *Server) fetchRemoteQuota(parent context.Context, machine string, fresh bool) (MachineQuota, error) {

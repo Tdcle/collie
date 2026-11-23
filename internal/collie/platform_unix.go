@@ -188,6 +188,11 @@ func openURL(ctx context.Context, link string) error {
 }
 
 func replaceBinary(tmp, exe string) error {
+	if runtime.GOOS == "darwin" {
+		// Ad-hoc sign the fresh binary before renaming over an active executable
+		// so Apple Silicon kernel signature caching never SIGKILLs on restart.
+		_ = exec.Command("codesign", "-s", "-", "-f", tmp).Run()
+	}
 	return os.Rename(tmp, exe)
 }
 

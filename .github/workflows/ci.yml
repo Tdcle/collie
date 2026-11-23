@@ -20,6 +20,15 @@ jobs:
           cache: true
       - run: go test -v ./...
       - run: go build .
+      - name: Verify frontend JS syntax & demo build
+        if: matrix.os != 'windows-latest'
+        run: |
+          node --check web/quota.js
+          node --check web/artifacts.js
+          node --check web/app.js
+          node --check scripts/demo/demo.js
+          sh scripts/demo.sh
+          node --check docs/demo/app.js
       - name: Smoke test Windows installer (dry service)
         if: matrix.os == 'windows-latest'
         shell: pwsh

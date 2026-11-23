@@ -87,6 +87,7 @@ var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", s.static())
+	mux.HandleFunc("GET /dl/latest", s.serveReleaseLatest)
 	mux.HandleFunc("GET /dl/{asset}", s.serveReleaseMirror)
 	mux.HandleFunc("GET /install.ps1", s.serveInstallPS1)
 	mux.HandleFunc("GET /install.sh", s.serveInstallSH)
@@ -113,7 +114,6 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("POST /api/agents", wrap(s.launchAgent))
 	mux.Handle("POST /api/agents/{target}/prompt", wrap(s.promptAgent))
 	mux.Handle("POST /api/panes/{id}/interrupt", wrap(s.interruptPane))
-	mux.Handle("GET /api/panes/{id}/stream", wrap(s.streamPane))
 	mux.Handle("GET /api/panes/{id}/chat", wrap(s.streamChat))
 	mux.Handle("GET /api/panes/{id}/earlier", wrap(s.paneEarlier))
 	mux.Handle("GET /api/panes/{id}/last", wrap(s.lastMessage))
@@ -125,6 +125,7 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 	mux.Handle("GET /api/titles", wrap(s.getTitles))
 	mux.Handle("GET /api/models", wrap(s.listModels))
 	mux.Handle("GET /api/quota", wrap(s.nodeQuota))
+	mux.Handle("GET /api/search/node", wrap(s.nodeSearch))
 	mux.Handle("POST /api/trust", wrap(s.trustFolder))
 	mux.Handle("POST /api/update", wrap(s.selfUpdate))
 	mux.Handle("GET /api/router-sync", wrap(s.routerSync))
@@ -195,8 +196,21 @@ var webBuildOnce struct {
 func (s *Server) webBuild() string {
 	webBuildOnce.Do(func() {
 		h := sha256.New()
-		for _, p := range []string{"index.html", "app.js", "app.css"} {
+		var names []string
+		_ = fs.WalkDir(s.web, ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			ext := strings.ToLower(filepath.Ext(p))
+			if ext == ".html" || ext == ".js" || ext == ".css" {
+				names = append(names, p)
+			}
+			return nil
+		})
+		sort.Strings(names)
+		for _, p := range names {
 			b, _ := fs.ReadFile(s.web, p)
+			h.Write([]byte(p))
 			h.Write(b)
 		}
 		webBuildOnce.v = hex.EncodeToString(h.Sum(nil)[:6])
@@ -433,73 +447,6 @@ func (s *Server) streamState(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// streamPane mirrors one pane over SSE.
-//
-//	mode=screen: the visible viewport with ANSI styling, for an exact terminal render.
-//	mode=log:    recent output with soft wraps joined, for reading on narrow screens.
-func (s *Server) streamPane(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	mode := r.URL.Query().Get("mode")
-	sse, ok := newSSE(w)
-	if !ok {
-		return
-	}
-	interval := 200 * time.Millisecond
-	if mode == "log" {
-		interval = 700 * time.Millisecond
-	}
-	var lastText string
-	var lastSize Rect
-	var sizeAt time.Time
-	beat := time.Now()
-	for {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		var (
-			res ReadResult
-			err error
-		)
-		if mode == "log" {
-			res, err = s.herdr.Read(ctx, id, "recent_unwrapped", "text", 600)
-		} else {
-			if time.Since(sizeAt) > 2*time.Second {
-				if sz, e := s.herdr.PaneSize(ctx, id); e == nil {
-					lastSize = sz
-				}
-				sizeAt = time.Now()
-			}
-			res, err = s.herdr.Read(ctx, id, "visible", "ansi", 0)
-		}
-		cancel()
-		if err != nil {
-			var he *HerdrError
-			if errors.As(err, &he) && strings.Contains(he.Code, "not_found") {
-				b, _ := json.Marshal(map[string]any{"error": he.Message})
-				sse.send("gone", b)
-				return
-			}
-		} else if res.Text != lastText {
-			lastText = res.Text
-			b, _ := json.Marshal(map[string]any{
-				"text": res.Text, "revision": res.Revision,
-				"cols": lastSize.Width, "rows": lastSize.Height,
-			})
-			if sse.send("frame", b) != nil {
-				return
-			}
-			beat = time.Now()
-		}
-		if time.Since(beat) > 15*time.Second {
-			sse.comment()
-			beat = time.Now()
-		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(interval):
-		}
-	}
-}
-
 // ---------------------------------------------------------------- actions
 
 func (s *Server) sendText(w http.ResponseWriter, r *http.Request) {
@@ -679,22 +626,55 @@ func (s *Server) launchAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p := strings.TrimSpace(body.Prompt); p != "" {
-		// A fresh agent takes a few seconds before it takes input.
-		var err error
-		for wait := time.Now().Add(20 * time.Second); ; {
-			err = s.herdr.Prompt(ctx, paneID, p)
-			var he *HerdrError
-			if err == nil || !errors.As(err, &he) || (he.Code != "agent_not_ready" && he.Code != "agent_not_found") || time.Now().After(wait) || ctx.Err() != nil {
-				break
-			}
-			time.Sleep(400 * time.Millisecond)
-		}
-		if err != nil {
+		if err := s.waitIdleAndPrompt(ctx, paneID, cwd, p, 25*time.Second); err != nil {
 			writeJSON(w, 202, map[string]any{"pane_id": paneID, "workspace_id": wsID, "warning": "已启动，但第一个任务发送失败：" + err.Error()})
 			return
 		}
 	}
 	writeJSON(w, 200, map[string]any{"pane_id": paneID, "workspace_id": wsID})
+}
+
+// waitIdleAndPrompt waits for a freshly started herdr agent to finish its
+// startup banner / MCP initialization (where TUI briefly reports "working")
+// and settle into "idle" before submitting its very first prompt.
+func (s *Server) waitIdleAndPrompt(ctx context.Context, paneID, cwd, prompt string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		var detail struct {
+			Agent agentDetail `json:"agent"`
+		}
+		if err := s.herdr.Call(ctx, "agent.get", map[string]any{"target": paneID}, &detail); err == nil {
+			st := detail.Agent.Status
+			if st == "blocked" && s.sup != nil && cwd != "" {
+				s.sup.mu.Lock()
+				ask := s.sup.st.Settings.AskPermissions
+				s.sup.mu.Unlock()
+				if !ask {
+					_ = s.sup.answerTrust(ctx, paneID, cwd)
+				}
+			}
+			if st != "" && st != "idle" && st != "done" {
+				lastErr = fmt.Errorf("agent still %s during startup", st)
+				if time.Now().After(deadline) || ctx.Err() != nil {
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+		}
+		err := s.herdr.Prompt(ctx, paneID, prompt)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		var he *HerdrError
+		if !errors.As(err, &he) || (he.Code != "agent_not_ready" && he.Code != "agent_not_found" && he.Code != "agent_blocked") || time.Now().After(deadline) || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return lastErr
 }
 
 func resumedSessionArg(kind string, extra []string) string {

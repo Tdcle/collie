@@ -308,10 +308,40 @@
     }
     if (p === "/api/super/memory") return json(memory);
     if (p === "/api/super/say") return json({ ok: true, entry: collieSay(body.text || "", body.re) });
-    if (p === "/api/external") return json({ sessions: external });
+    if (p === "/api/external") {
+      if (q.get("hash") === "demo-ext-v1") return json({ unchanged: true, hash: "demo-ext-v1", etag: "demo-ext-v1" });
+      return json({ hash: "demo-ext-v1", etag: "demo-ext-v1", sessions: external });
+    }
+    if (p === "/api/search") {
+      const kw = (q.get("q") || "").trim().toLowerCase();
+      if (kw.length < 2) return json({ results: [] });
+      const hits = [];
+      for (const e of entries) {
+        if ((e.role === "user" || e.role === "collie") && e.text.toLowerCase().includes(kw)) {
+          hits.push({ id: "collie", title: "和 Collie 对话", kind: "collie", hash: "#/collie", snippet: e.text.slice(0, 96), updated: e.at });
+          break;
+        }
+      }
+      for (const [pid, msgs] of Object.entries(chats)) {
+        if (pid === "w1:p1") continue;
+        const m = msgs.find((x) => (x.text || "").toLowerCase().includes(kw));
+        if (m) {
+          const ag = agents.find((a) => a.pane_id === pid);
+          hits.push({ id: pid, title: ag?.topic || ag?.name || pid, kind: ag?.kind || "codex", machine: ag?.machine || "", cwd: ag?.cwd || "", hash: "#/p/" + encodeURIComponent(pid), snippet: m.text.slice(0, 96), updated: new Date().toISOString() });
+        }
+      }
+      for (const [xid, msgs] of Object.entries(extChats)) {
+        const m = msgs.find((x) => (x.text || "").toLowerCase().includes(kw));
+        if (m) {
+          const ex = external.find((x) => x.id === xid);
+          hits.push({ id: xid, title: ex?.title || xid, kind: ex?.kind || "claude", machine: ex?.machine || "", cwd: ex?.cwd || "", hash: "#/x/" + encodeURIComponent(xid), snippet: m.text.slice(0, 96), updated: ex?.updated || new Date().toISOString() });
+        }
+      }
+      return json({ results: hits });
+    }
     if (p === "/api/history") return json({ sessions: history });
     if (p === "/api/hubs") return json({ hubs: [] });
-    if (p === "/api/version") return json({ version: "v0.2.5", latest: "v0.2.5", outdated: [] });
+    if (p === "/api/version") return json({ version: "v0.2.52", latest: "v0.2.52", outdated: [] });
     if (p === "/api/local-app") return json({ url: "" });
     if (p === "/api/models") return json(models[q.get("kind")] || { models: [], efforts: [] });
     if (p === "/api/file" && /images\/0d3a9e5c71b2f4e8a6c1\.png$|uploads\/.*\.png$/.test(q.get("path") || "")) {
@@ -320,7 +350,7 @@
     }
     if (p === "/api/file") {
       if (q.get("machine") !== "macbook" || !/CHANGELOG\.md$/.test(q.get("path") || "")) return json({ error: "找不到这个文件" }, 404);
-      return new Response(changelog, { headers: { "X-File-Kind": "text", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
+      return new Response(changelog, { headers: { "X-File-Kind": "markdown", "X-File-Size": String(new Blob([changelog]).size), "X-File-Path": encodeURIComponent("~/code/shop-web/CHANGELOG.md") } });
     }
     if (p === "/api/dirs") {
       const mId = q.get("machine") || "";
@@ -366,10 +396,10 @@
     }
     if (p === "/api/devices") return json({
       devices: [
-        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.51", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
-        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.51", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
+        { id: "macbook", kind: "machine", name: "Mac", os: "darwin/arm64", online: true, home: "/Users/alex", version: "v0.2.52", agents: ["claude", "codex", "gemini"], created_at: ago(60 * 24 * 3), last_seen: ago(0) },
+        { id: "winbox", kind: "machine", name: "Win", os: "windows/amd64", online: true, home: "C:\\Users\\alex", version: "v0.2.52", agents: ["claude", "codex"], created_at: ago(60 * 24 * 2), last_seen: ago(0) },
       ],
-      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.51", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.51",
+      hub: { name: "devbox", home: "/home/alex", os: "linux/amd64", herdr: true, version: "v0.2.52", agents: ["claude", "codex", "agy", "gemini"] }, addresses: ["http://192.168.1.20:7788"], latest: "v0.2.52",
     });
     if (p === "/api/quotas") return json({
       updated_at: new Date().toISOString(),
