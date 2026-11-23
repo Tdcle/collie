@@ -27,6 +27,7 @@ jobs:
           node --check web/artifacts.js
           node --check web/app.js
           node --check scripts/demo/demo.js
+          node scripts/check-web.mjs
           sh scripts/demo.sh
           node --check docs/demo/app.js
       - name: Smoke test Windows installer (dry service)

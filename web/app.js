@@ -22,6 +22,7 @@
     return s.replace(/^\/Users\/[^/]+|^\/home\/[^/]+|^\/root(?=$|\/)|^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "~");
   };
   const hhmm = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+  const fmtSize = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
   // 21:52 today, 昨天 18:30, 11月18日 18:30 before that.
   const sepTime = (t) => {
     const d = new Date(t), now = new Date(), y = new Date(now - 86400e3);
@@ -4532,7 +4533,6 @@
   function grow(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, innerHeight * 0.4) + "px"; }
   // Files go to the machine where the agent runs, then their paths ride
   // along in the message (agents read images and files by path).
-  const fmtSize = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
   function uploadFileToMachine(file, name, m) {
     const up = routeReq(`/api/uploads?name=${encodeURIComponent(name)}${m ? "&machine=" + encodeURIComponent(m) : ""}`);
     return fetch(up.url, {
