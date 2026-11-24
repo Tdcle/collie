@@ -335,15 +335,16 @@ kbd {
 .sf-machine .pick.side-m:hover { background: var(--surface); border-color: var(--line-2); }
 .sf-machine .pick.side-m .pi { width: 15px; height: 15px; }
 .sf-machine .pick.side-m .pi svg { width: 14px; height: 14px; }
-.sf-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sf-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 .sf-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 31px; padding: 0 9px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 31px; padding: 0 6px; border-radius: 9px;
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface) 65%, var(--bg-2));
-  color: var(--fg-2); font-size: 12px; font-weight: 500;
+  color: var(--fg-2); font-size: 11.5px; font-weight: 500; white-space: nowrap;
   transition: background .12s, border-color .12s, color .12s, box-shadow .12s;
 }
+.sf-btn .sf-eye { width: 12.5px; height: 12.5px; flex: none; opacity: .8; }
 .sf-btn:hover { background: var(--surface); border-color: var(--line-2); color: var(--fg); }
 .sf-btn .dot { width: 7px; height: 7px; }
 .sf-btn:not(.on) .dot.working::after { display: none; }

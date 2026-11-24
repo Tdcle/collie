@@ -116,7 +116,9 @@ function runScenario(authed) {
             pending: [
               { id: "e2", at: now, summary: "是否继续启动评估？", options: ["继续启动", "先不跑"] },
             ],
-            workers: [],
+            workers: [
+              { name: "sfd-eval", kind: "codex", machine: "mac", status: "gone", ended: true, session: "s-worker" },
+            ],
           }),
         };
       }
@@ -125,6 +127,7 @@ function runScenario(authed) {
           ok: true, status: 200, headers: { get: () => "" },
           json: async () => ({ sessions: [
             { id: "cx-newer@mac", kind: "codex", machine: "mac", session: "s-newer", title: "普通较新会话", cwd: "/tmp/a", updated: "2026-11-24T10:00:00Z" },
+            { id: "cx-worker@mac", kind: "codex", machine: "mac", session: "s-worker", title: "子任务评估会话", cwd: "/tmp/w", updated: "2026-11-24T10:05:00Z" },
             { id: "cx-older-pinned@mac", kind: "codex", machine: "mac", session: "s-pinned", title: "置顶核心会话", cwd: "/tmp/b", updated: "2026-11-20T08:00:00Z" },
           ] }),
         };
@@ -148,7 +151,7 @@ function runScenario(authed) {
   vm.runInContext(fs.readFileSync("web/quota.js", "utf8"), ctx, { filename: "web/quota.js" });
   vm.runInContext(fs.readFileSync("web/artifacts.js", "utf8"), ctx, { filename: "web/artifacts.js" });
   vm.runInContext(fs.readFileSync("web/app.js", "utf8"), ctx, { filename: "web/app.js" });
-  return { getEl };
+  return { getEl, listeners };
 }
 
 // 1. Unauthenticated visitor must see #login!
@@ -184,6 +187,16 @@ if (!threadHTML.includes('class="u-fold"') || !threadHTML.includes("展开全文
 const sideListHTML = auth.getEl("#session-list").innerHTML;
 if (!sideListHTML.includes("is-pinned") || !sideListHTML.includes("pin-mark") || sideListHTML.indexOf("置顶核心会话") > sideListHTML.indexOf("普通较新会话")) {
   throw new Error("Expected pinned standalone session to render with .pin-mark and sort above newer unpinned sessions");
+}
+if (!sideListHTML.includes("子任务评估会话") || !sideListHTML.includes("by-collie") || !auth.getEl("#sf-hide-collie")) {
+  throw new Error("Expected Collie-dispatched worker session badge (.by-collie) and #sf-hide-collie filter button");
+}
+for (const fn of (auth.listeners.get("#session-filter:click") || [])) {
+  fn({ target: { closest: (s) => s === "[data-hide-collie]" ? {} : null } });
+}
+const filteredSideHTML = auth.getEl("#session-list").innerHTML;
+if (filteredSideHTML.includes("子任务评估会话") || !filteredSideHTML.includes("普通较新会话") || !filteredSideHTML.includes("置顶核心会话")) {
+  throw new Error("Expected clicking #sf-hide-collie to hide Collie-dispatched worker sessions while keeping user sessions");
 }
 if (threadHTML.includes("art-badge sheet")) {
   throw new Error("Regression: 'art-badge sheet' collides with dialog.sheet!");

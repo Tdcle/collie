@@ -611,13 +611,43 @@
   const isCollieOwned = (v) => v.name === ROUTER || isWorker(v.name);
   let sideMachine = null; // null = 全部; string = filter sidebar sessions to that machine id
   let sideStatus = null;  // null | "running" | "blocked" (mutually exclusive toggle)
+  let hideCollie = store.get("hideCollie", false); // persistent toggle to hide Collie-dispatched worker sessions
   const osKey = (os) => /^darwin/i.test(os || "") ? "mac" : /^windows/i.test(os || "") ? "win" : "linux";
+
+  function workerLookup() {
+    const names = new Set();
+    const sessKeys = new Set();
+    const rawSess = new Set();
+    for (const w of (sup.workers || [])) {
+      if (w.name) names.add(w.name);
+      if (w.session) {
+        rawSess.add(w.session);
+        const ck = canonSessKey(w.kind, w.machine, w.session);
+        if (ck) sessKeys.add(ck);
+      }
+    }
+    for (const h of (hist || [])) {
+      if (h.name && names.has(h.name) && h.session) {
+        rawSess.add(h.session);
+        const ck = canonSessKey(h.kind, h.machine, h.session);
+        if (ck) sessKeys.add(ck);
+      }
+    }
+    return { names, sessKeys, rawSess };
+  }
+  const isInternalRouterCwd = (cwd) => /[\\/]\.collie[\\/](?:router|dream)(?:[\\/]|$)/i.test(cleanPath(cwd || ""));
 
   $("#side-machine-sel")?.addEventListener("change", (e) => {
     sideMachine = e.target.value === "__all" ? null : e.target.value;
     renderSide();
   });
   $("#session-filter")?.addEventListener("click", (e) => {
+    if (e.target.closest("[data-hide-collie]")) {
+      hideCollie = !hideCollie;
+      store.set("hideCollie", hideCollie);
+      renderSide();
+      return;
+    }
     const b = e.target.closest("button[data-sf]");
     if (!b) return;
     const v = b.dataset.sf;
@@ -640,6 +670,7 @@
     const wrap = $("#sf-machine-wrap"), mSel = $("#side-machine-sel");
     if (wrap && mSel) {
       if (workMachines.length > 1) {
+        const wl = workerLookup();
         const countFor = (id) => {
           const mm = (x) => id === null || (x || "") === id;
           const seen = new Set();
@@ -649,25 +680,31 @@
             const meta = getSessMeta(a.kind, a.machine, a.session, "p:" + a.pane_id);
             if (meta?.deleted || meta?.archived) continue;
             const ck = canonSessKey(a.kind, a.machine, a.session);
+            const byC = wl.names.has(a.name) || Boolean(a.session && (wl.rawSess.has(a.session) || (ck && wl.sessKeys.has(ck))));
             if (ck) seen.add(ck);
+            if (hideCollie && byC && !meta?.pinned) continue;
             n++;
           }
           for (const e of ext) {
-            if (!mm(e.machine)) continue;
+            if (!mm(e.machine) || isInternalRouterCwd(e.cwd)) continue;
             const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
             if (meta?.deleted || meta?.archived) continue;
             const ck = canonSessKey(e.kind, e.machine, e.session);
             if (ck && seen.has(ck)) continue;
             if (ck) seen.add(ck);
+            const byC = Boolean(e.session && (wl.rawSess.has(e.session) || (ck && wl.sessKeys.has(ck))));
+            if (hideCollie && byC && !meta?.pinned) continue;
             n++;
           }
           for (const h of hist) {
-            if (h.name === ROUTER || !mm(h.machine)) continue;
+            if (h.name === ROUTER || h.name === "collie-dream" || !mm(h.machine)) continue;
             const meta = getSessMeta(h.kind, h.machine, h.session, "h:" + h.id);
             if (meta?.deleted || meta?.archived) continue;
             const ck = canonSessKey(h.kind, h.machine, h.session);
             if (ck && seen.has(ck)) continue;
             if (ck) seen.add(ck);
+            const byC = wl.names.has(h.name) || Boolean(h.session && (wl.rawSess.has(h.session) || (ck && wl.sessKeys.has(ck))));
+            if (hideCollie && byC && !meta?.pinned) continue;
             n++;
           }
           return n;
@@ -3201,34 +3238,36 @@
 
   function renderSessions() {
     const many = (state.machines || []).length > 1;
-    const extRow = (e, inProj = false, pinned = false) => {
+    const wl = workerLookup();
+    const extRow = (e, inProj = false, pinned = false, byCollie = false) => {
       const open = e.live && e.status === "idle";
       const where = [KIND_LABEL[e.kind] || e.kind, !inProj && many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const showDot = e.live && SHOW_SIDE_DOT.has(e.status);
       const dot = showDot ? sideDotHTML(e.status, EXT_STATE) : "";
       const attnCls = e.live && e.status === "blocked" ? "attn-row" : "";
       const smenuKey = "x:" + e.id;
+      const pMark = !inProj ? pinMarkHTML(smenuKey, pinned) : "";
+      const nameHTML = byCollie ? `<span class="nm">${esc(extName(e))}</span><span class="by-collie">Collie 派出</span>${pMark}` : `${esc(extName(e))}${pMark}`;
       return `<li class="s-li ${attnCls}${!inProj && pinned ? " is-pinned" : ""}"><a class="item ${showDot ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(extName(e))}${!inProj ? pinMarkHTML(smenuKey, pinned) : ""}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
+        <span class="body"><div class="name">${nameHTML}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
         <button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
-    const histRow = (h, inProj = false, pinned = false) => {
-      const wPast = sup.workers.find((w) => w.name === h.name || (w.session && w.session === h.session));
+    const histRow = (h, inProj = false, pinned = false, byCollie = false) => {
       const sub = [KIND_LABEL[h.kind] || h.kind, !inProj && many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
       const smenuKey = "h:" + h.id;
       const pMark = !inProj ? pinMarkHTML(smenuKey, pinned) : "";
       return `<li class="s-li${!inProj && pinned ? " is-pinned" : ""}"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${wPast ? `<span class="nm">${esc(histName(h))}</span><span class="by-collie">Collie 派出</span>${pMark}` : `${esc(histName(h))}${pMark}`}</div><div class="sub">${esc(sub)}</div></span></a>
+        <span class="body"><div class="name">${byCollie ? `<span class="nm">${esc(histName(h))}</span><span class="by-collie">Collie 派出</span>${pMark}` : `${esc(histName(h))}${pMark}`}</div><div class="sub">${esc(sub)}</div></span></a>
         <button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
-    const paneRow = (a, inProj = false, lastT = 0, pinned = false) => {
+    const paneRow = (a, inProj = false, lastT = 0, pinned = false, byCollie = false) => {
       if (!inProj) {
         const html = itemHTML(a, pinned);
         return a.status === "blocked" ? html.replace('<li class="s-li', '<li class="s-li attn-row') : html;
       }
-      const named = a.is_agent && a.name !== ROUTER && !isWorker(a.name) && a.name && !autoName(a.name) && a.topic && a.topic !== a.name ? a.name + " · " : "";
+      const named = a.is_agent && a.name !== ROUTER && !byCollie && a.name && !autoName(a.name) && a.topic && a.topic !== a.name ? a.name + " · " : "";
       const quiet = !SHOW_SIDE_DOT.has(a.status);
       const whenPart = quiet && lastT ? " · " + ago(new Date(lastT).toISOString()) : "";
       const sub = a.is_agent ? `${named}${KIND_LABEL[a.kind] || a.kind}${whenPart}` : tilde(a.cwd);
@@ -3236,7 +3275,7 @@
       const attnCls = a.status === "blocked" ? "attn-row" : "";
       return `<li class="s-li ${attnCls}"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && a.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(a.pane_id)}">
         <span class="glyph">${glyph(a)}</span>
-        <span class="body"><div class="name">${isCollieOwned(a) && a.name !== ROUTER ? `<span class="nm">${esc(title(a))}</span><span class="by-collie">Collie 派出</span>` : esc(title(a))}</div><div class="sub">${esc(sub)}</div></span>
+        <span class="body"><div class="name">${byCollie ? `<span class="nm">${esc(title(a))}</span><span class="by-collie">Collie 派出</span>` : esc(title(a))}</div><div class="sub">${esc(sub)}</div></span>
         ${sideDotHTML(a.status)}</a>${more}</li>`;
     };
 
@@ -3262,6 +3301,7 @@
       const isRunning = isActivelyRunning(a.status);
       const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "failed" ? 2 : 3;
       const wLive = sup.workers.find((w) => w.name === a.name && !w.ended);
+      const byCollie = a.name !== ROUTER && (wl.names.has(a.name) || Boolean(a.session && (wl.rawSess.has(a.session) || (ck && wl.sessKeys.has(ck)))));
       const t = (ck && extTimeMap.get(ck)) || +new Date(wLive?.created_at || 0) || +new Date(meta?.updated_at || 0) || 0;
       const proj = projectOfSession(a.kind, a.machine, a.session, a.cwd, "p:" + a.pane_id);
       const pinned = !proj && !!meta?.pinned;
@@ -3270,10 +3310,11 @@
         proj,
         pinned,
         pinnedAt: meta?.pinned_at || 0,
+        byCollie,
         archived: !!meta?.archived && !isBlocked && !isRunning,
         isRunning, isBlocked, groupRank, t,
         active: view === "pane" && current === a.pane_id,
-        html: paneRow(a, !!proj, t, pinned),
+        html: paneRow(a, !!proj, t, pinned, byCollie),
       });
     }
 
@@ -3287,6 +3328,8 @@
       pool.push({
         key: "w:" + w.name,
         proj,
+        pinned: false,
+        byCollie: true,
         archived: false,
         isRunning: true, isBlocked: false, groupRank: 1, t,
         active: false,
@@ -3298,7 +3341,7 @@
     }
 
     for (const e of ext) {
-      if (!matchM(e.machine)) continue;
+      if (!matchM(e.machine) || isInternalRouterCwd(e.cwd)) continue;
       const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
       if (meta?.deleted) continue;
       const ck = canonSessKey(e.kind, e.machine, e.session);
@@ -3309,16 +3352,18 @@
       const groupRank = isBlocked ? 0 : isRunning ? 1 : 3;
       const proj = projectOfSession(e.kind, e.machine, e.session, e.cwd, "x:" + e.id);
       const pinned = !proj && !!meta?.pinned;
+      const byCollie = Boolean(e.session && (wl.rawSess.has(e.session) || (ck && wl.sessKeys.has(ck))));
       pool.push({
         key: e.id,
         proj,
         pinned,
         pinnedAt: meta?.pinned_at || 0,
+        byCollie,
         archived: !!meta?.archived && !isBlocked && !isRunning,
         isRunning, isBlocked, groupRank,
         t: +new Date(e.updated || e.started) || 0,
         active: view === "ext" && extCur === e.id,
-        html: extRow(e, !!proj, pinned),
+        html: extRow(e, !!proj, pinned, byCollie),
       });
     }
 
@@ -3331,22 +3376,25 @@
       if (ck) seenKeys.add(ck);
       const proj = projectOfSession(h.kind, h.machine, h.session, h.cwd, "h:" + h.id);
       const pinned = !proj && !!meta?.pinned;
+      const byCollie = wl.names.has(h.name) || Boolean(h.session && (wl.rawSess.has(h.session) || (ck && wl.sessKeys.has(ck))));
       pool.push({
         key: "h:" + h.id,
         proj,
         pinned,
         pinnedAt: meta?.pinned_at || 0,
+        byCollie,
         archived: !!meta?.archived,
         isRunning: false, isBlocked: false, groupRank: 3,
         t: +new Date(h.ended) || 0,
         active: view === "ext" && extCur === "h:" + h.id,
-        html: histRow(h, !!proj, pinned),
+        html: histRow(h, !!proj, pinned, byCollie),
       });
     }
 
     pool.sort((x, y) => (x.groupRank - y.groupRank) || (y.t - x.t));
-    const unarchived = pool.filter((x) => !x.archived);
-    const archived = pool.filter((x) => x.archived);
+    const allowCollie = (x) => !hideCollie || !x.byCollie || x.pinned || (sideStatus === "blocked" && x.isBlocked);
+    const unarchived = pool.filter((x) => !x.archived && allowCollie(x));
+    const archived = pool.filter((x) => x.archived && allowCollie(x));
 
     const runCount = unarchived.filter((x) => x.isRunning).length;
     const blkCount = unarchived.filter((x) => x.isBlocked).length;
@@ -3358,6 +3406,11 @@
       b.classList.toggle("on", on);
       b.setAttribute("aria-pressed", String(on));
     });
+    const hcBtn = $("#sf-hide-collie");
+    if (hcBtn) {
+      hcBtn.classList.toggle("on", Boolean(hideCollie));
+      hcBtn.setAttribute("aria-pressed", String(Boolean(hideCollie)));
+    }
 
     const matchStatus = (x) => sideStatus === "running" ? x.isRunning : sideStatus === "blocked" ? x.isBlocked : true;
 

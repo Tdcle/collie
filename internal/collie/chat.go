@@ -1182,7 +1182,7 @@ type Approval struct {
 var (
 	numberedRe = regexp.MustCompile(`^\s*([❯›>▸●➜→]\s*)?(\d)[.)]\s+(.{1,90}?)\s*$`)
 	cursorRe   = regexp.MustCompile(`^\s*[❯›>▸●➜→]\s+(.{1,90}?)\s*$`)
-	hintRe     = regexp.MustCompile(`(?i)(enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue|choose)`)
+	hintRe     = regexp.MustCompile(`(?i)((enter|esc|↑|↓|tab)\b.*(confirm|cancel|select|navigate|continue|choose)|\bt\s+trust\b.*\besc\s+back\b)`)
 	frameRe    = regexp.MustCompile(`^[\s│┃|╭╮╰╯─━═┌┐└┘╌┄┈]*$`)
 	ruleRe     = regexp.MustCompile(`[─━═]{12,}`)
 )
@@ -1210,6 +1210,22 @@ func parseApproval(screen string) Approval {
 		lines = append(lines, l)
 	}
 	a := Approval{Screen: strings.Join(tailSlice(lines, 18), "\n")}
+	if strings.Contains(screen, "hook needs review before it can run") {
+		trimmed := trimBlank(lines)
+		for k := len(trimmed) - 1; k >= 0 && k >= len(trimmed)-3; k-- {
+			low := strings.ToLower(trimmed[k])
+			if strings.Contains(low, "t trust") && strings.Contains(low, "esc back") {
+				a.Hint = strings.TrimSpace(trimmed[k])
+				a.Question = strings.Join(tailSlice(trimmed[:k], 8), "\n")
+				a.Choices = []Choice{
+					{Text: "t", Label: "信任并启用该 Hook (t)", Current: true},
+					{Keys: []string{"esc"}, Label: "暂不信任并返回 (Esc)"},
+				}
+				a.after = len(trimmed) - 1 - k
+				return a
+			}
+		}
+	}
 
 	// Find the menu block: the last run of numbered or cursor-style options.
 	end := -1

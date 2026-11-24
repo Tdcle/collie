@@ -207,3 +207,53 @@ func TestAskBox(t *testing.T) {
 		t.Fatalf("question: %q", a.Question)
 	}
 }
+
+func TestCodexHooksModalDetectionAndApproval(t *testing.T) {
+	herdrHookScreen := `
+  SessionStart hooks
+  1 hook needs review before it can run.
+
+› [!]  1  Unnamed hook · new
+
+  Event     SessionStart
+  Source    User config - ~\.codex\hooks.json
+  Command   powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\26422\.codex\herdr-agent-state.ps1" session
+  Mode      Sync
+  Timeout   10s
+  Trust     New hook - review required
+
+
+  t trust · esc back`
+	if !codexHerdrHookReview(herdrHookScreen) {
+		t.Fatal("expected herdr-agent-state SessionStart hook review screen to match codexHerdrHookReview")
+	}
+
+	customHookScreen := strings.ReplaceAll(herdrHookScreen, "herdr-agent-state.ps1", "custom-audit.ps1")
+	if codexHerdrHookReview(customHookScreen) {
+		t.Fatal("expected non-herdr custom hook NOT to auto-match codexHerdrHookReview")
+	}
+	if !screenAsks(customHookScreen) {
+		t.Fatal("expected custom hook review modal ('t trust · esc back') to be detected by screenAsks")
+	}
+	a := parseApproval(customHookScreen)
+	if len(a.Choices) != 2 || a.Choices[0].Text != "t" {
+		t.Fatalf("expected 2 choices with first choice 't', got %+v", a.Choices)
+	}
+
+	hooksToggleScreen := `
+  SessionStart hooks
+  Turn hooks on or off. Your changes are saved automatically.
+
+› [x]  1  Unnamed hook
+
+  space/enter toggle · esc back`
+	hooksListScreen := `
+  Hooks
+  Lifecycle hooks from config and enabled plugins.
+
+  enter details · esc close`
+	if !codexDismissibleOverlay(hooksToggleScreen) || !codexDismissibleOverlay(hooksListScreen) {
+		t.Fatal("expected both Codex Hooks toggle and list overlays to match codexDismissibleOverlay")
+	}
+}
+

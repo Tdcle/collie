@@ -287,6 +287,9 @@ func (sp *Super) writeRouterFilesFor(m *Machine) error {
 }
 
 func (sp *Super) trustOwnDir(ctx context.Context, pane string) {
+	if sp.s != nil && sp.s.herdr != nil {
+		_ = sp.s.herdr.unlockCodexPane(ctx, pane)
+	}
 	dir := sp.routerDir()
 	if _, m := split(pane); m != "" {
 		if mc, err := sp.s.herdr.machine(m); err == nil {

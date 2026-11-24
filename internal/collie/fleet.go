@@ -687,23 +687,58 @@ func codexScreenLocked(screen string) bool {
 	return strings.Contains(screen, "This conversation is open in another app")
 }
 
+func codexHerdrHookReview(screen string) bool {
+	return strings.Contains(screen, "herdr-agent-state") &&
+		(strings.Contains(screen, "t trust") || strings.Contains(screen, "hook needs review before it can run"))
+}
+
+func codexDismissibleOverlay(screen string) bool {
+	low := strings.ToLower(screen)
+	return strings.Contains(low, "space/enter toggle") && strings.Contains(low, "esc back") ||
+		strings.Contains(low, "enter details") && strings.Contains(low, "esc close")
+}
+
 // unlockCodexPane clears Codex TUI's "This conversation is open in another app"
-// banner before submitting a prompt. It presses 'r' (retry) in case the desktop
-// app already switched away from this conversation, without ever pressing 'f'
-// (fork), so we never create a duplicate session.
+// banner and auto-trusts/dismisses herdr's own SessionStart hook review overlay
+// before submitting a prompt. It presses 'r' (retry) in case the desktop app
+// already switched away, without ever pressing 'f' (fork), and rejects sending
+// if a genuine user approval dialog is currently open on screen.
 func (h *Herdr) unlockCodexPane(ctx context.Context, pane string) error {
 	vis, err := h.Read(ctx, pane, "visible", "text", 0)
-	if err != nil || !codexScreenLocked(vis.Text) {
+	if err != nil {
 		return nil
 	}
-	_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"r"}}, nil)
-	for i := 0; i < 6; i++ {
-		time.Sleep(350 * time.Millisecond)
-		if v, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && !codexScreenLocked(v.Text) {
-			return nil
+	if codexHerdrHookReview(vis.Text) {
+		_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"t"}}, nil)
+		time.Sleep(280 * time.Millisecond)
+		vis, _ = h.Read(ctx, pane, "visible", "text", 0)
+	}
+	for i := 0; i < 4 && codexDismissibleOverlay(vis.Text); i++ {
+		_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"esc"}}, nil)
+		time.Sleep(220 * time.Millisecond)
+		vis, _ = h.Read(ctx, pane, "visible", "text", 0)
+	}
+	if codexScreenLocked(vis.Text) {
+		_ = h.Call(ctx, "pane.send_keys", map[string]any{"pane_id": pane, "keys": []string{"r"}}, nil)
+		cleared := false
+		for i := 0; i < 6; i++ {
+			time.Sleep(350 * time.Millisecond)
+			if v, e := h.Read(ctx, pane, "visible", "text", 0); e == nil {
+				vis = v
+				if !codexScreenLocked(v.Text) {
+					cleared = true
+					break
+				}
+			}
+		}
+		if !cleared {
+			return errors.New("这个对话正被电脑上的 Codex 桌面端窗口打开占用，请先在桌面端切到别的对话再发，以继续在同一个会话中对话")
 		}
 	}
-	return errors.New("这个对话正被电脑上的 Codex 桌面端窗口打开占用，请先在桌面端切到别的对话再发，以继续在同一个会话中对话")
+	if screenAsks(vis.Text) {
+		return &HerdrError{Code: "agent_blocked", Message: "agent is showing a question"}
+	}
+	return nil
 }
 
 // Prompt submits text to an agent. herdr 0.8 refuses agent.prompt while it
