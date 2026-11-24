@@ -2459,16 +2459,16 @@
         const stripped = l.replace(/^[-*]\s+/, "");
         const inferred = /^\(inferred\)\s*/i.test(stripped) || /（inferred）|\(inferred\)\s*$/i.test(stripped);
         const clean = stripped.replace(/^\(inferred\)\s*/i, "").replace(/\s*(?:（inferred）|\(inferred\))\s*$/i, "");
-        const badge = inferred ? `<span class="mem-infer-tag" title="做梦会话从多次对话习惯中自动归纳出的隐性偏好">做梦推断</span>` : `<span class="mem-rule-dot"></span>`;
-        // Make `见 notes/xxx.md` clickable without touching HTML attributes!
-        const rendered = md(clean)
+        const tag = inferred ? ` <span class="mem-infer-tag" title="做梦会话从多次对话习惯中自动归纳出的隐性偏好">做梦推断</span>` : "";
+        const inlineHtml = md(clean)
+          .replace(/^<p>([\s\S]*?)<\/p>\s*$/, "$1")
           .replace(/<code>notes\/([a-zA-Z0-9._-]+\.md)<\/code>/g, (_, fn) =>
-            `<button type="button" class="mem-inline-note" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">notes/${esc(fn)} ↗</button>`)
+            `<button type="button" class="mem-inline-note" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">notes/${esc(fn)}</button>`)
           .replace(/(^|>|[\s（(，、：:])notes\/([a-zA-Z0-9._-]+\.md)/g, (_, pre, fn) =>
-            `${pre}<button type="button" class="mem-inline-note" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">notes/${esc(fn)} ↗</button>`);
-        return `<li class="mem-rule-li ${inferred ? "is-inferred" : ""}">${badge}<div class="mem-rule-txt">${rendered}</div></li>`;
+            `${pre}<button type="button" class="mem-inline-note" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">notes/${esc(fn)}</button>`);
+        return `<li>${inlineHtml}${tag}</li>`;
       }).join("");
-      return `<ul class="mem-rule-list">${items}</ul>`;
+      return `<ul class="mem-ins-list">${items}</ul>`;
     };
 
     const card = (f, o = {}) => {
@@ -2489,7 +2489,8 @@
       </details>`;
     };
 
-    // ── Top Overview Bento + Collapsible Architecture Schematic ──
+    // ── Top Overview Bento + Architectural Flowchart (shown ONLY on 核心预载 tab) ──
+    const dreamTimeShort = r.dream_at && r.dream_at !== "off" ? r.dream_at : "手动";
     const overviewHTML = `<div class="mem-bento">
       <div class="mem-stat-card">
         <div class="mem-stat-top">
@@ -2532,61 +2533,132 @@
       <summary class="mem-arch-head">
         <span class="mem-arch-title">
           <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>
-          <b>记忆与 Skill 是怎么产生、存储和加载的？</b>
-          <span class="muted">（并非全靠做梦生成：平时实时记录 + 凌晨做梦精炼 + 三级按需加载）</span>
+          <b>记忆与 Skill 架构流转图</b>
+          <span class="muted">鼠标悬停节点查看详细说明 · 点击存储块可跳转对应分栏</span>
         </span>
-        <span class="mem-arch-cue">${memArchOpen ? "收起示意图" : "展开示意图"}</span>
+        <span class="mem-arch-cue">${memArchOpen ? "收起流程图" : "展开流程图"}</span>
       </summary>
       <div class="mem-arch-diagram">
-        <div class="ma-col">
-          <div class="ma-col-hd"><span class="ma-step">1</span>写入与精炼来源（谁在写？）</div>
-          <div class="ma-box">
-            <div class="ma-box-t"><span class="ma-dot live"></span>日常对话与派活 · 实时写入</div>
-            <p>你说的新偏好当场记入 <code>instructions.md</code>；跨轮派活建立 <code>tasks/*.md</code>；子任务跑通的命令与路径沉淀进 <code>notes/*.md</code>；<b>Hub 程序自动实时覆写</b>最近 10 条回复到 <code>messages.md</code>。</p>
-          </div>
-          <div class="ma-box">
-            <div class="ma-box-t"><span class="ma-dot dream"></span>凌晨 ${esc(r.dream_at && r.dream_at !== "off" ? r.dream_at : "手动")} 做梦 · 离线精炼</div>
-            <p>独立启动 <code>collie-dream</code> 回顾近期聊天与推理日志：<b>去重压缩指令</b>（归纳隐性习惯标为 <code>做梦推断</code>）、结项移入 <code>tasks/done/</code>、合并笔记，并将重复 ≥3 次的成熟流程提议固化为 <b>Skill</b>。</p>
-          </div>
-        </div>
+        <svg class="mem-flow-svg" viewBox="0 0 980 422" role="img" aria-label="长期记忆与自建 Skill 架构流转图">
+          <defs>
+            <marker id="mf-arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+              <path class="mf-head" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+            <marker id="mf-arr-c" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+              <path class="mf-head-c" d="M0,0 L10,5 L0,10 z"/>
+            </marker>
+          </defs>
 
-        <div class="ma-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+          <!-- Top Row: 3 Writers -->
+          <g class="mf-hover" data-mf-title="日常对话与派活（盘中实时写入）" data-mf-tip="并非所有记忆都等做梦才写：平时你交代的新偏好当场写入 instructions.md；派发跨轮复杂任务时建立 tasks/*.md；子任务跑通的仓库路径、验证命令与踩坑经验直接沉淀进 notes/*.md 并更新 index.md。">
+            <rect class="mf-box" x="24" y="16" width="292" height="62" rx="10"/>
+            <text class="mf-t" x="42" y="42">日常对话与派活</text>
+            <text class="mf-s" x="42" y="63">实时写入新规矩、在途任务与项目经验</text>
+          </g>
 
-        <div class="ma-col">
-          <div class="ma-col-hd"><span class="ma-step">2</span>Hub 权威三层存储（点击可直达）</div>
-          <button type="button" class="ma-tier tier-must ${tab === "active" ? "is-cur" : ""}" data-mem-jump="active">
-            <div class="ma-tier-top"><b>第一层 · 启动必读层</b><span class="mem-load-pill must">每次全量预载 · ≤10 KB</span></div>
-            <div class="ma-tier-files"><code>instructions.md</code> · <code>notes/index.md</code>(仅目录) · <code>tasks/*.md</code> · <code>messages.md</code> · <code>Skill 触发描述</code></div>
-          </button>
-          <div class="ma-tier-pair">
-            <button type="button" class="ma-tier tier-lazy ${tab === "notes" ? "is-cur" : ""}" data-mem-jump="notes">
-              <div class="ma-tier-top"><b>第二层 A · 经验笔记</b><span class="mem-load-pill lazy">按需 Read · 0 闲置开销</span></div>
-              <div class="ma-tier-files"><code>notes/&lt;专题&gt;.md</code> 完整排障与项目路径（${topicNotes.length} 篇）</div>
-            </button>
-            <button type="button" class="ma-tier tier-lazy ${tab === "skills" ? "is-cur" : ""}" data-mem-jump="skills">
-              <div class="ma-tier-top"><b>第二层 B · 自建技能</b><span class="mem-load-pill lazy">命中触发 · 多机同步</span></div>
-              <div class="ma-tier-files"><code>skills/&lt;名&gt;/SKILL.md</code> 操作手册（${skills.length} 个）</div>
-            </button>
-          </div>
-          <button type="button" class="ma-tier tier-cold ${tab === "archive" ? "is-cur" : ""}" data-mem-jump="archive">
-            <div class="ma-tier-top"><b>第三层 · 冷归档留痕</b><span class="mem-load-pill cold">不注入新会话</span></div>
-            <div class="ma-tier-files"><code>dreams/*.md</code> 做梦日记 · <code>tasks/done/*.md</code> 已结项任务（共 ${done.length + (r.dreams?.length || 0)} 条）</div>
-          </button>
-        </div>
+          <g class="mf-hover" data-mf-title="凌晨做梦整理（collie-dream 离线精炼）" data-mf-tip="每日 ${esc(dreamTimeShort)} 空闲时独立唤醒 collie-dream，读取近期聊天与推理日志：① 逐行压缩去重 instructions.md（控制在 ≤10 KB，多次重复的隐性习惯标为 inferred）；② 完结任务移入 tasks/done/；③ 合并笔记，发现重复 ≥3 次的固定流程在主对话提议做成 Skill，并写下 dreams/ 日记。">
+            <rect class="mf-dream" x="344" y="16" width="292" height="62" rx="10"/>
+            <text class="mf-ct" x="362" y="42">凌晨做梦整理 · collie-dream</text>
+            <text class="mf-s" x="362" y="63">${esc(dreamTimeShort === "手动" ? "按需触发" : "每日 " + dreamTimeShort)} 离线精炼 · 归档结项 · 提议 Skill</text>
+          </g>
 
-        <div class="ma-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+          <g class="mf-hover" data-mf-title="Hub 网关自动快照（零 Token 消耗）" data-mf-tip="每当 Collie 向你发送一条正式回复，Hub 的 Go 进程会自动将最近 10 条回复摘录覆写到 memory/messages.md（不调用大模型），避免重启或切换新会话后重复汇报已经说过的话。">
+            <rect class="mf-box" x="664" y="16" width="292" height="62" rx="10"/>
+            <text class="mf-t" x="682" y="42">Hub 网关自动快照</text>
+            <text class="mf-s" x="682" y="63">每次正式回复后自动覆写最近 10 条摘要</text>
+          </g>
 
-        <div class="ma-col">
-          <div class="ma-col-hd"><span class="ma-step">3</span>新会话分级注入（怎么加载？）</div>
-          <div class="ma-box">
-            <div class="ma-box-t"><span class="ma-dot brain"></span>Collie 主脑新会话唤醒</div>
-            <p>开场仅注入 <b>第一层（当前仅 ${kb(upFront)}）</b>，秒级掌握全局偏好与笔记目录；聊到具体项目（如 SFD-Net）时，再顺着 <code>index.md</code> 指针按需 <code>Read</code> 对应专题笔记或展开中枢 Skill。</p>
-          </div>
-          <div class="ma-box">
-            <div class="ma-box-t"><span class="ma-dot sync"></span>Mac / Win 各电脑会话共享</div>
-            <p>存于 Hub 的<b>全节点共享 Skill</b> 会自动下发到所有在线电脑的 <code>~/.agents/skills</code>、<code>~/.codex/skills</code> 与 <code>~/.claude/skills</code>，任何独立会话或 Worker 开箱即用。</p>
-          </div>
-        </div>
+          <!-- Connectors: Writers -> Hub -->
+          <path class="mf-line" d="M170,78 V120"/>
+          <text class="mf-m" x="180" y="104">实时沉淀</text>
+          <path class="mf-line-c" d="M490,78 V120"/>
+          <text class="mf-m" x="500" y="104">去重 · 合并 · 归档</text>
+          <path class="mf-line" d="M810,78 V120"/>
+          <text class="mf-m" x="820" y="104">直写 messages.md</text>
+
+          <!-- Middle Frame: Hub Canonical Store -->
+          <rect class="mf-hub" x="16" y="124" width="948" height="186" rx="15"/>
+          <text class="mf-t" x="36" y="150">hub 权威主本</text>
+          <text class="mf-s" x="132" y="150">统一保存在服务器 ${esc(tilde(r.dir))} · 换电脑或换模型自动双向同步</text>
+
+          <!-- Zone 1: Tier 1 Up-front -->
+          <g class="mf-hover" data-mf-title="第一层：核心预载层（当前 ${kb(upFront)} / 建议上限 ${kb(budget)}）" data-mf-tip="每次 Collie 开启新会话时开场必读的全部内容：长期指令 (${kb(insB)}) + 笔记目录索引 (${kb(idxB)}，只读目录不读正文) + 未完结在途任务 (${kb(tskB)})，外加最近回复快照 (${kb(msgSize)}) 与各 Skill 的一句话触发条件。体积极小，毫秒级读完。">
+            <rect class="mf-zone-must" x="34" y="164" width="368" height="130" rx="10"/>
+            <text class="mf-ct" x="50" y="188">核心预载层</text>
+            <text class="mf-m" x="386" y="188" text-anchor="end">每次新会话必读 · ${kb(upFront)} / ${kb(budget)}</text>
+
+            <rect class="mf-inner" x="48" y="200" width="164" height="36" rx="7"/>
+            <text class="mf-k" x="60" y="222">instructions.md</text>
+
+            <rect class="mf-inner" x="222" y="200" width="166" height="36" rx="7"/>
+            <text class="mf-k" x="234" y="222">notes/index.md</text>
+
+            <rect class="mf-inner" x="48" y="244" width="164" height="36" rx="7"/>
+            <text class="mf-k" x="60" y="266">tasks/*.md (${tasks.length})</text>
+
+            <rect class="mf-inner" x="222" y="244" width="166" height="36" rx="7"/>
+            <text class="mf-k" x="234" y="266">messages.md</text>
+          </g>
+
+          <!-- Zone 2: Tier 2 Lazy On-Demand -->
+          <rect class="mf-zone-lazy" x="420" y="164" width="324" height="130" rx="10"/>
+          <text class="mf-t2" x="436" y="188">按需懒加载层</text>
+          <text class="mf-m" x="728" y="188" text-anchor="end">平时 0 开销 · 点击跳转</text>
+
+          <g class="mf-hover mf-click" data-mem-jump="notes" data-mf-title="第二层 A：专题经验笔记（共 ${topicNotes.length} 篇 · 点击打开）" data-mf-tip="存放各项目仓库路径、板端实验口径与机器环境差异（如 sfd-net.md、collie.md）。新会话启动绝不预载正文；只有聊到对应项目时，Collie 才顺着 index.md 目录指针精准 Read 所需的那一篇。">
+            <rect class="mf-inner mf-card-btn" x="434" y="200" width="142" height="80" rx="8"/>
+            <text class="mf-t2" x="448" y="224">经验笔记</text>
+            <text class="mf-k" x="448" y="246">notes/*.md</text>
+            <text class="mf-m" x="448" y="266">${topicNotes.length} 篇专题 · 点此查阅</text>
+          </g>
+
+          <g class="mf-hover mf-click" data-mem-jump="skills" data-mf-title="第二层 B：Hub 托管自建 Skill（共 ${skills.length} 个 · 点击管理）" data-mf-tip="主本存 Hub，分两档：①「Collie 中枢自用」(.agents/skills) 仅供主脑调度续派使用；②「全节点共享」(skills/) 自动分发至所有在线电脑。新会话仅加载 YAML 里的触发条件，命中场景才读取 SKILL.md 正文。">
+            <rect class="mf-inner mf-card-btn" x="588" y="200" width="142" height="80" rx="8"/>
+            <text class="mf-t2" x="602" y="224">自建技能</text>
+            <text class="mf-k" x="602" y="246">SKILL.md</text>
+            <text class="mf-m" x="602" y="266">${skills.length} 个技能 · 点此管理</text>
+          </g>
+
+          <!-- Pointer dashed arrow: notes/index.md -> notes/*.md -->
+          <path class="mf-dash" d="M388,218 H431"/>
+
+          <!-- Zone 3: Tier 3 Cold Archive -->
+          <g class="mf-hover mf-click" data-mem-jump="archive" data-mf-title="第三层：冷归档留痕（点击查看做梦日记与结项归档）" data-mf-tip="包含历次夜间做梦日记 (dreams/*.md) 与已完结的历史任务卡 (tasks/done/*.md)。它们永不注入新会话上下文，不占任何 Token 预算，仅供你随时回溯复盘与做梦对比。">
+            <rect class="mf-zone-cold" x="762" y="164" width="184" height="130" rx="10"/>
+            <text class="mf-t2" x="776" y="188">冷归档留痕</text>
+            <text class="mf-m" x="932" y="188" text-anchor="end">不加载</text>
+
+            <rect class="mf-inner" x="776" y="200" width="156" height="36" rx="7"/>
+            <text class="mf-k" x="788" y="222">dreams/*.md (${r.dreams?.length || 0})</text>
+
+            <rect class="mf-inner" x="776" y="244" width="156" height="36" rx="7"/>
+            <text class="mf-k" x="788" y="266">tasks/done/ (${done.length})</text>
+          </g>
+
+          <!-- Connectors: Hub -> Runtime Consumers -->
+          <path class="mf-line-c" d="M218,294 V348"/>
+          <text class="mf-m" x="228" y="330">开场全量注入</text>
+
+          <path class="mf-dash" d="M505,294 V328 H392 V348"/>
+          <text class="mf-m" x="404" y="321">命中话题 / 场景时按需 Read</text>
+
+          <path class="mf-line" d="M659,294 V328 H732 V348"/>
+          <text class="mf-m" x="668" y="321">出站隧道自动同步共享 Skill</text>
+
+          <!-- Bottom Row: Runtime Consumers -->
+          <g class="mf-hover" data-mf-title="Collie 主脑新会话唤醒（Mac / Hub）" data-mf-tip="每次唤醒或上下文轮转重开新会话时，先一次性读入「核心预载层」；执行过程中若涉及具体项目或续派侧栏，再按需读取对应笔记全文或展开中枢自用 Skill。">
+            <rect class="mf-box" x="24" y="352" width="448" height="58" rx="10"/>
+            <text class="mf-t" x="42" y="376">Collie 主脑会话唤醒</text>
+            <text class="mf-s" x="42" y="397">先读预载层掌握全局规矩 · 盘中按指针懒加载专题笔记与中枢 Skill</text>
+          </g>
+
+          <g class="mf-hover" data-mf-title="Mac · Windows 所有独立会话与派出 Worker" data-mf-tip="在「自建技能」中设为【全节点共享】的 Skill，会由 Hub 通过隧道自动同步到每台在线电脑的 ~/.agents/skills、~/.codex/skills 与 ~/.claude/skills（带 .collie-managed 安全标记，绝不覆盖你原有的本地技能）。">
+            <rect class="mf-box" x="508" y="352" width="448" height="58" rx="10"/>
+            <text class="mf-t" x="526" y="376">Mac · Windows 独立会话与派出 Worker</text>
+            <text class="mf-s" x="526" y="397">全节点共享 Skill 自动下发至 ~/.agents · ~/.codex · ~/.claude</text>
+          </g>
+        </svg>
+        <div class="mem-flow-tip" id="mem-flow-tip" hidden></div>
       </div>
     </details>`;
 
@@ -2726,8 +2798,7 @@
         </div>
       </div>` : `<div class="card"><div class="empty-state"><span class="es-ico">${emptyIcon}</span><b>还没有沉淀的专题经验笔记</b><span>Collie 在跨机排障或执行项目任务后，会自动将值得复用的机器与项目经验归纳到这里。</span></div></div>`;
 
-      return `${overviewHTML}
-        <div class="mem-sec">
+      return `<div class="mem-sec first">
           <div class="mem-sec-hd">
             <h4>按需检索的专题经验笔记</h4>
             <span class="mem-load-pill lazy">命中话题时才 Read · 不占 10 KB 启动预算</span>
@@ -2832,8 +2903,7 @@
         <span>当做梦整理发现某套操作在 3 次以上任务中反复固定出现时，Collie 会在主对话里向你提议一键生成 Skill；你也可以点击右上方「+ 新建 Skill」直接创建。</span>
       </div></div>`;
 
-      return `${overviewHTML}
-        <div class="mem-sec">
+      return `<div class="mem-sec first">
           <div class="mem-sec-hd">
             <h4>Collie 自建与托管的 Skill</h4>
             <span class="mem-load-pill lazy">Hub 权威存储 · 启动仅读触发条件，命中才读正文</span>
@@ -2866,12 +2936,13 @@
       return chips.join("") + md(rest.join("\n"));
     };
 
-    return `${overviewHTML}
-      <div class="mem-sec">
+    return `<div class="mem-sec first">
         <div class="mem-sec-hd">
           <h4>夜间做梦整理日记</h4>
           <span class="mem-load-pill cold">冷归档 · 不注入新会话</span>
-          <span class="mem-src-pill">每次做梦自动生成，记录精简了哪些规则与发现的模式</span>
+          <span class="mem-src-pill">${r.last_dream ? `上次整理：${dayTime(r.last_dream)}` : "记录每次做梦精简了哪些规则与发现的模式"}</span>
+          <span class="grow"></span>
+          <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "整理中…" : "立即整理记忆"}</button>
         </div>
         <div class="card">${r.dreams?.length
           ? r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""} data-path="dreams/${esc(d.name)}"><summary><span class="mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span><span class="muted mono" style="font-size:11.5px">${kb(d.size || d.text?.length || 0)}</span></summary><div class="mem-body msg assistant">${renderDreamBody(d.text)}</div></details>`).join("")
@@ -3365,9 +3436,40 @@
       memArchOpen = e.target.open;
       store.set("memArchOpen", memArchOpen);
       const cue = e.target.querySelector(".mem-arch-cue");
-      if (cue) cue.textContent = memArchOpen ? "收起示意图" : "展开示意图";
+      if (cue) cue.textContent = memArchOpen ? "收起流程图" : "展开流程图";
     }
   }, true);
+
+  // Floating hover tooltip for SVG nodes in `#/memory` flowchart
+  $("#panel-body").addEventListener("pointermove", (e) => {
+    const tipEl = $("#mem-flow-tip");
+    if (!tipEl) return;
+    const g = e.target?.closest?.("[data-mf-tip]");
+    if (!g) {
+      if (!tipEl.hidden) tipEl.hidden = true;
+      return;
+    }
+    const title = g.dataset.mfTitle || "";
+    const body = g.dataset.mfTip || "";
+    const sig = title + "\n" + body;
+    if (tipEl._sig !== sig) {
+      tipEl._sig = sig;
+      tipEl.innerHTML = `${title ? `<div class="mft-t">${esc(title)}</div>` : ""}<div class="mft-b">${esc(body)}</div>`;
+    }
+    tipEl.hidden = false;
+    const wrap = tipEl.parentElement.getBoundingClientRect();
+    const tw = tipEl.offsetWidth || 300, th = tipEl.offsetHeight || 90;
+    let x = e.clientX - wrap.left + 14;
+    let y = e.clientY - wrap.top + 14;
+    if (x + tw > wrap.width - 10) x = Math.max(10, e.clientX - wrap.left - tw - 12);
+    if (y + th > wrap.height - 8) y = Math.max(8, e.clientY - wrap.top - th - 12);
+    tipEl.style.left = `${Math.round(x)}px`;
+    tipEl.style.top = `${Math.round(y)}px`;
+  });
+  $("#panel-body").addEventListener("pointerleave", () => {
+    const tipEl = $("#mem-flow-tip");
+    if (tipEl) tipEl.hidden = true;
+  });
 
   $("#panel-body").addEventListener("input", (e) => {
     if (e.target?.matches?.("[data-mem-arch-filter]")) {

@@ -268,17 +268,20 @@ if (/\.item\.active\s*>\s*\.dot[^{]*\{[^}]*opacity:\s*0/.test(cssText)) {
   throw new Error("Regression: active sidebar session item must NOT hide working spinner (.dot)!");
 }
 
-// 3. Memory & Skills Studio (#/memory) must render architecture diagram, inferred rule tags, and Hub Skills tab!
+// 3. Memory & Skills Studio (#/memory) must render SVG flowchart ONLY on active tab, compact instructions, and Hub Skills tab!
 const memView = runScenario(true, "#/memory");
 await new Promise((r) => setTimeout(r, 50));
 const memHTML = memView.getEl("#panel-body").innerHTML;
-if (!memHTML.includes("mem-arch-diagram") || !memHTML.includes("mem-infer-tag") || !memHTML.includes("data-mem-note=\"notes/sfd-net.md\"")) {
-  throw new Error("Expected #/memory active tab to render visual architecture diagram, inferred rule tag, and clickable note links");
+if (!memHTML.includes("mem-flow-svg") || !memHTML.includes("mem-ins-list") || !memHTML.includes("mem-infer-tag") || !memHTML.includes("data-mem-note=\"notes/sfd-net.md\"")) {
+  throw new Error("Expected #/memory active tab to render SVG flowchart, compact instructions list, inferred tag, and clickable note links");
 }
 for (const fn of (memView.listeners.get("#panel-body:click") || [])) {
   await fn({ target: { closest: (s) => s === "[data-mem-jump]" ? { dataset: { memJump: "skills" } } : null } });
 }
 const skillsHTML = memView.getEl("#panel-body").innerHTML;
+if (skillsHTML.includes("mem-bento") || skillsHTML.includes("mem-flow-svg")) {
+  throw new Error("Expected non-active tabs (skills/notes/archive) NOT to repeat top mem-bento or flowchart");
+}
 if (!skillsHTML.includes("collie-resume-sidebar") || !skillsHTML.includes("Collie 中枢自用 Skill") || !skillsHTML.includes("续派到原侧栏会话")) {
   throw new Error("Expected #/memory skills tab to render Hub-managed collie-resume-sidebar skill details");
 }
