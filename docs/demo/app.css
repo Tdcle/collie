@@ -2151,88 +2151,107 @@ select.picked { display: none; }
 .mem-legend .lg-dot.tsk { background: var(--attn); }
 .mem-legend .lg-sep { opacity: .5; }
 
-/* Architecture flowchart card (SVG diagram + hover tooltip) */
+/* Architecture flowchart card (Horizontal Signal-Flow SVG + hover tooltip) */
 .mem-arch-card {
   margin-bottom: 18px; border-radius: 15px; border: 1px solid var(--line);
   background: var(--surface); box-shadow: var(--shadow-xs); overflow: hidden;
 }
 .mem-arch-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 11px 16px; cursor: pointer; list-style: none; user-select: none;
-  background: color-mix(in srgb, var(--bg-2) 40%, var(--surface));
+  padding: 10px 16px; cursor: pointer; list-style: none; user-select: none;
+  background: color-mix(in srgb, var(--bg-2) 34%, var(--surface));
 }
 .mem-arch-head::-webkit-details-marker { display: none; }
-.mem-arch-head:hover { background: color-mix(in srgb, var(--bg-2) 66%, var(--surface)); }
+.mem-arch-head:hover { background: color-mix(in srgb, var(--bg-2) 58%, var(--surface)); }
 .mem-arch-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; color: var(--fg); min-width: 0; }
 .mem-arch-title svg { width: 15px; height: 15px; color: var(--signal); flex: none; }
 .mem-arch-title .muted { font-size: 12px; font-weight: 450; }
 .mem-arch-cue {
-  flex: none; font-size: 11.5px; font-weight: 550; color: var(--signal);
-  padding: 3px 9px; border-radius: 999px; background: var(--signal-soft);
+  flex: none; font-size: 11.5px; font-weight: 500; color: var(--fg-2);
+  padding: 2px 9px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line);
 }
 .mem-arch-diagram {
   position: relative; padding: 10px 14px 12px; border-top: 1px solid var(--line);
-  background: var(--surface); overflow-x: auto;
+  background-color: var(--surface);
+  background-image: radial-gradient(color-mix(in srgb, var(--fg-3) 14%, transparent) 1px, transparent 1px);
+  background-size: 16px 16px;
+  overflow-x: auto;
 }
-.mem-flow-svg {
-  display: block; width: 100%; min-width: 680px; height: auto;
-  font-family: var(--sans);
+svg.mem-flow-svg {
+  display: block; width: 100%; min-width: 660px; height: auto;
+  stroke: none; stroke-width: 0; fill: none;
+  font-family: var(--sans); -webkit-font-smoothing: antialiased;
 }
-.mem-flow-svg .mf-box {
-  fill: color-mix(in srgb, var(--bg-2) 72%, var(--surface));
-  stroke: var(--line-2); stroke-width: 1.2; transition: stroke .14s, fill .14s;
+svg.mem-flow-svg text {
+  stroke: none; stroke-width: 0;
 }
-.mem-flow-svg .mf-dream {
-  fill: color-mix(in srgb, #f59e0b 10%, var(--surface));
-  stroke: color-mix(in srgb, #d97706 42%, var(--line-2)); stroke-width: 1.25; transition: stroke .14s, fill .14s;
+.mem-flow-svg .mf-edge {
+  font-size: 10.5px; font-weight: 500; fill: var(--fg-3);
+  paint-order: stroke fill;
+  stroke: var(--surface) !important; stroke-width: 5px !important; stroke-linejoin: round;
 }
-.mem-flow-svg .mf-hub {
-  fill: none; stroke: var(--fg); stroke-opacity: .72; stroke-width: 1.35;
+.mem-flow-svg .mf-edge.ok { fill: var(--ok); }
+.mem-flow-svg .mf-edge.sig { fill: var(--signal); }
+.mem-flow-svg .mf-eyebrow {
+  fill: var(--fg-3); font-size: 10.5px; font-weight: 500; letter-spacing: .06em;
 }
-.mem-flow-svg .mf-zone-must {
-  fill: color-mix(in srgb, #f59e0b 9%, var(--surface));
-  stroke: color-mix(in srgb, #d97706 38%, var(--line-2)); stroke-width: 1.2; transition: stroke .14s;
+.mem-flow-svg .mf-hub-wrap {
+  fill: color-mix(in srgb, var(--bg-2) 48%, var(--surface));
+  stroke: var(--line-2); stroke-width: 1.1; stroke-dasharray: 5 4;
 }
-.mem-flow-svg .mf-zone-lazy {
-  fill: color-mix(in srgb, var(--bg-2) 42%, var(--surface));
-  stroke: var(--line-2); stroke-width: 1.15;
+.mem-flow-svg .mf-card {
+  fill: var(--surface); stroke: var(--line-2); stroke-width: 1.1;
+  transition: stroke .15s ease, fill .15s ease, filter .15s ease;
+  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, .035));
 }
-.mem-flow-svg .mf-zone-cold {
-  fill: color-mix(in srgb, var(--bg-2) 35%, var(--surface));
-  stroke: var(--line-2); stroke-width: 1.15; stroke-dasharray: 4 3; transition: stroke .14s;
+.mem-flow-svg .mf-card.dream {
+  fill: color-mix(in srgb, #8b5cf6 6%, var(--surface));
+  stroke: color-mix(in srgb, #8b5cf6 34%, var(--line-2));
 }
-.mem-flow-svg .mf-inner {
-  fill: var(--surface); stroke: var(--line-2); stroke-width: 1; transition: stroke .14s, fill .14s;
+.mem-flow-svg .mf-card.tier1 {
+  fill: color-mix(in srgb, var(--ok) 6%, var(--surface));
+  stroke: color-mix(in srgb, var(--ok) 36%, var(--line-2));
 }
-.mem-flow-svg .mf-t { fill: var(--fg); font-size: 13.5px; font-weight: 650; }
-.mem-flow-svg .mf-t2 { fill: var(--fg); font-size: 12.8px; font-weight: 650; }
-.mem-flow-svg .mf-ct { fill: #b45309; font-size: 13.5px; font-weight: 650; }
-[data-theme="dark"] .mem-flow-svg .mf-ct { fill: #fbbf24; }
-.mem-flow-svg .mf-s { fill: var(--fg-2); font-size: 11.6px; }
-.mem-flow-svg .mf-m { fill: var(--fg-3); font-size: 11px; }
-.mem-flow-svg .mf-k { fill: var(--fg); font-size: 11.8px; font-family: var(--mono); }
-.mem-flow-svg .mf-line { stroke: var(--fg-3); stroke-width: 1.25; fill: none; marker-end: url(#mf-arr); }
-.mem-flow-svg .mf-dash { stroke: var(--fg-3); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3.5; marker-end: url(#mf-arr); }
-.mem-flow-svg .mf-line-c { stroke: #b45309; stroke-width: 1.35; fill: none; marker-end: url(#mf-arr-c); }
-[data-theme="dark"] .mem-flow-svg .mf-line-c { stroke: #f59e0b; }
-.mem-flow-svg .mf-head { fill: var(--fg-3); }
-.mem-flow-svg .mf-head-c { fill: #b45309; }
-[data-theme="dark"] .mem-flow-svg .mf-head-c { fill: #f59e0b; }
-.mem-flow-svg .mf-hover { cursor: help; }
-.mem-flow-svg .mf-click { cursor: pointer; }
-.mem-flow-svg .mf-hover:hover > rect {
+.mem-flow-svg .mf-card.tier2 {
+  fill: var(--surface);
+  stroke: color-mix(in srgb, var(--signal) 28%, var(--line-2));
+}
+.mem-flow-svg .mf-card.tier3 {
+  fill: color-mix(in srgb, var(--bg-2) 38%, var(--surface));
+  stroke: var(--line); stroke-dasharray: 4 3; filter: none;
+}
+.mem-flow-svg .mf-dot { stroke: none; }
+.mem-flow-svg .mf-dot.ok { fill: var(--ok); }
+.mem-flow-svg .mf-dot.sig { fill: var(--signal); }
+.mem-flow-svg .mf-dot.dream { fill: #8b5cf6; }
+.mem-flow-svg .mf-dot.muted { fill: none; stroke: var(--fg-3); stroke-width: 1.3; }
+.mem-flow-svg .mf-junc { fill: var(--surface); stroke: var(--fg-3); stroke-width: 1.4; }
+.mem-flow-svg .mf-title { fill: var(--fg); font-size: 12.8px; font-weight: 540; }
+.mem-flow-svg .mf-title.muted { fill: var(--fg-2); font-weight: 480; }
+.mem-flow-svg .mf-cap { fill: var(--fg-3); font-size: 11px; font-weight: 440; }
+.mem-flow-svg .mf-mono { fill: var(--fg-3); font-size: 11px; font-weight: 430; font-family: var(--mono); }
+.mem-flow-svg .mf-badge-ok { fill: var(--ok); font-size: 11.2px; font-weight: 560; font-family: var(--mono); }
+.mem-flow-svg .mf-wire { stroke: var(--line-2); stroke-width: 1.3; fill: none; }
+.mem-flow-svg .mf-wire-ok { stroke: color-mix(in srgb, var(--ok) 72%, var(--fg-3)); stroke-width: 1.45; fill: none; }
+.mem-flow-svg .mf-wire-sig { stroke: color-mix(in srgb, var(--signal) 72%, var(--fg-3)); stroke-width: 1.4; fill: none; }
+.mem-flow-svg .mf-wire-dash { stroke: color-mix(in srgb, var(--signal) 65%, var(--fg-3)); stroke-width: 1.3; stroke-dasharray: 4 3.5; fill: none; }
+.mem-flow-svg .mf-head { fill: var(--fg-3); stroke: none; }
+.mem-flow-svg .mf-head-ok { fill: color-mix(in srgb, var(--ok) 78%, var(--fg-3)); stroke: none; }
+.mem-flow-svg .mf-head-sig { fill: color-mix(in srgb, var(--signal) 78%, var(--fg-3)); stroke: none; }
+.mem-flow-svg .mf-node { cursor: help; }
+.mem-flow-svg .mf-node.mf-jump { cursor: pointer; }
+.mem-flow-svg .mf-node:hover > .mf-card {
   stroke: var(--signal); stroke-width: 1.5;
-}
-.mem-flow-svg .mf-click:hover > .mf-card-btn {
-  fill: color-mix(in srgb, var(--signal-soft) 45%, var(--surface));
+  fill: color-mix(in srgb, var(--signal-soft) 30%, var(--surface));
 }
 .mem-flow-tip {
-  position: absolute; z-index: 30; width: min(330px, calc(100% - 24px)); pointer-events: none;
-  padding: 10px 12px; border-radius: 11px; border: 1px solid var(--line-2);
+  position: absolute; z-index: 30; width: min(320px, calc(100% - 24px)); pointer-events: none;
+  padding: 10px 13px; border-radius: 12px; border: 1px solid var(--line-2);
   background: color-mix(in srgb, var(--surface) 96%, var(--bg)); box-shadow: var(--shadow-lg);
-  font-size: 12px; line-height: 1.55; color: var(--fg-2);
+  backdrop-filter: blur(8px);
+  font-size: 12px; line-height: 1.58; color: var(--fg-2);
 }
-.mem-flow-tip .mft-t { font-size: 12.5px; font-weight: 650; color: var(--fg); margin-bottom: 4px; }
+.mem-flow-tip .mft-t { font-size: 12.5px; font-weight: 600; color: var(--fg); margin-bottom: 4px; }
 .mem-flow-tip .mft-b { color: var(--fg-2); }
 
 /* Loading & scope pills */

@@ -2533,129 +2533,116 @@
       <summary class="mem-arch-head">
         <span class="mem-arch-title">
           <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>
-          <b>记忆与 Skill 架构流转图</b>
-          <span class="muted">鼠标悬停节点查看详细说明 · 点击存储块可跳转对应分栏</span>
+          <b>记忆与 Skill 流转机制</b>
+          <span class="muted">悬停节点看说明 · 点击中间模块可跳转</span>
         </span>
-        <span class="mem-arch-cue">${memArchOpen ? "收起流程图" : "展开流程图"}</span>
+        <span class="mem-arch-cue">${memArchOpen ? "收起" : "展开"}</span>
       </summary>
       <div class="mem-arch-diagram">
-        <svg class="mem-flow-svg" viewBox="0 0 980 422" role="img" aria-label="长期记忆与自建 Skill 架构流转图">
+        <svg class="mem-flow-svg" viewBox="0 0 940 228" role="img" aria-label="长期记忆与 Skill 流转图">
           <defs>
-            <marker id="mf-arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-              <path class="mf-head" d="M0,0 L10,5 L0,10 z"/>
+            <marker id="mf-arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+              <path class="mf-head" d="M1,1 L7,4 L1,7 z"/>
             </marker>
-            <marker id="mf-arr-c" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-              <path class="mf-head-c" d="M0,0 L10,5 L0,10 z"/>
+            <marker id="mf-arr-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+              <path class="mf-head-ok" d="M1,1 L7,4 L1,7 z"/>
+            </marker>
+            <marker id="mf-arr-sig" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+              <path class="mf-head-sig" d="M1,1 L7,4 L1,7 z"/>
             </marker>
           </defs>
 
-          <!-- Top Row: 3 Writers -->
-          <g class="mf-hover" data-mf-title="日常对话与派活（盘中实时写入）" data-mf-tip="并非所有记忆都等做梦才写：平时你交代的新偏好当场写入 instructions.md；派发跨轮复杂任务时建立 tasks/*.md；子任务跑通的仓库路径、验证命令与踩坑经验直接沉淀进 notes/*.md 并更新 index.md。">
-            <rect class="mf-box" x="24" y="16" width="292" height="62" rx="10"/>
-            <text class="mf-t" x="42" y="42">日常对话与派活</text>
-            <text class="mf-s" x="42" y="63">实时写入新规矩、在途任务与项目经验</text>
+          <!-- Column Eyebrows -->
+          <text class="mf-eyebrow" x="104" y="20" text-anchor="middle">写入来源</text>
+          <text class="mf-eyebrow" x="472" y="20" text-anchor="middle">HUB 权威分层存储（${esc(tilde(r.dir))}）</text>
+          <text class="mf-eyebrow" x="836" y="20" text-anchor="middle">会话加载端</text>
+
+          <!-- Inbound Manifold Curves (3 -> Hub Junction -> 3 Tiers, zero crossings) -->
+          <path class="mf-wire" d="M180,58 C206,58 206,120 224,120"/>
+          <path class="mf-wire" d="M180,120 H224"/>
+          <path class="mf-wire" d="M180,182 C206,182 206,120 224,120"/>
+          <path class="mf-wire" d="M224,120 C242,120 244,68 265,68" marker-end="url(#mf-arr)"/>
+          <path class="mf-wire" d="M224,120 C242,120 244,126 265,126" marker-end="url(#mf-arr)"/>
+          <path class="mf-wire" d="M224,120 C242,120 244,182 265,182" marker-end="url(#mf-arr)"/>
+          <circle class="mf-junc" cx="224" cy="120" r="3.5"/>
+
+          <!-- Hub Soft Container -->
+          <rect class="mf-hub-wrap" x="252" y="30" width="440" height="184" rx="15"/>
+
+          <!-- Left Column: 3 Minimal Source Pills -->
+          <g class="mf-node" data-mf-title="日常对话与派活（盘中实时写入）" data-mf-tip="并非所有记忆都等做梦才写：平时你说的新规矩当场写入 instructions.md；派发跨轮任务建立 tasks/*.md；子任务跑通的仓库路径与排障命令直接记入 notes/*.md 并更新目录。">
+            <rect class="mf-card" x="28" y="36" width="152" height="44" rx="11"/>
+            <circle class="mf-dot ok" cx="46" cy="58" r="3.5"/>
+            <text class="mf-title" x="58" y="62">日常对话</text>
+            <text class="mf-cap" x="166" y="62" text-anchor="end">实时</text>
           </g>
 
-          <g class="mf-hover" data-mf-title="凌晨做梦整理（collie-dream 离线精炼）" data-mf-tip="每日 ${esc(dreamTimeShort)} 空闲时独立唤醒 collie-dream，读取近期聊天与推理日志：① 逐行压缩去重 instructions.md（控制在 ≤10 KB，多次重复的隐性习惯标为 inferred）；② 完结任务移入 tasks/done/；③ 合并笔记，发现重复 ≥3 次的固定流程在主对话提议做成 Skill，并写下 dreams/ 日记。">
-            <rect class="mf-dream" x="344" y="16" width="292" height="62" rx="10"/>
-            <text class="mf-ct" x="362" y="42">凌晨做梦整理 · collie-dream</text>
-            <text class="mf-s" x="362" y="63">${esc(dreamTimeShort === "手动" ? "按需触发" : "每日 " + dreamTimeShort)} 离线精炼 · 归档结项 · 提议 Skill</text>
+          <g class="mf-node" data-mf-title="凌晨做梦整理（collie-dream 离线精炼）" data-mf-tip="每日 ${esc(dreamTimeShort)} 空闲时独立启动 collie-dream 回顾近期对话与命令日志：压缩去重 instructions.md（归纳隐性习惯标为做梦推断）、完结任务归入 tasks/done/、合并笔记，并将重复 ≥3 次的流程提议固化为 Skill。">
+            <rect class="mf-card dream" x="28" y="98" width="152" height="44" rx="11"/>
+            <circle class="mf-dot dream" cx="46" cy="120" r="3.5"/>
+            <text class="mf-title" x="58" y="124">凌晨做梦</text>
+            <text class="mf-cap" x="166" y="124" text-anchor="end">${esc(dreamTimeShort)}</text>
           </g>
 
-          <g class="mf-hover" data-mf-title="Hub 网关自动快照（零 Token 消耗）" data-mf-tip="每当 Collie 向你发送一条正式回复，Hub 的 Go 进程会自动将最近 10 条回复摘录覆写到 memory/messages.md（不调用大模型），避免重启或切换新会话后重复汇报已经说过的话。">
-            <rect class="mf-box" x="664" y="16" width="292" height="62" rx="10"/>
-            <text class="mf-t" x="682" y="42">Hub 网关自动快照</text>
-            <text class="mf-s" x="682" y="63">每次正式回复后自动覆写最近 10 条摘要</text>
+          <g class="mf-node" data-mf-title="Hub 网关自动快照（零 Token 消耗）" data-mf-tip="每当 Collie 发送正式回复，Hub Go 进程会自动把最近 10 条回复摘录覆写到 messages.md（不调用大模型），避免重启或换新会话后失忆重复汇报。">
+            <rect class="mf-card" x="28" y="160" width="152" height="44" rx="11"/>
+            <circle class="mf-dot sig" cx="46" cy="182" r="3.5"/>
+            <text class="mf-title" x="58" y="186">网关快照</text>
+            <text class="mf-cap" x="166" y="186" text-anchor="end">自动</text>
           </g>
 
-          <!-- Connectors: Writers -> Hub -->
-          <path class="mf-line" d="M170,78 V120"/>
-          <text class="mf-m" x="180" y="104">实时沉淀</text>
-          <path class="mf-line-c" d="M490,78 V120"/>
-          <text class="mf-m" x="500" y="104">去重 · 合并 · 归档</text>
-          <path class="mf-line" d="M810,78 V120"/>
-          <text class="mf-m" x="820" y="104">直写 messages.md</text>
-
-          <!-- Middle Frame: Hub Canonical Store -->
-          <rect class="mf-hub" x="16" y="124" width="948" height="186" rx="15"/>
-          <text class="mf-t" x="36" y="150">hub 权威主本</text>
-          <text class="mf-s" x="132" y="150">统一保存在服务器 ${esc(tilde(r.dir))} · 换电脑或换模型自动双向同步</text>
-
-          <!-- Zone 1: Tier 1 Up-front -->
-          <g class="mf-hover" data-mf-title="第一层：核心预载层（当前 ${kb(upFront)} / 建议上限 ${kb(budget)}）" data-mf-tip="每次 Collie 开启新会话时开场必读的全部内容：长期指令 (${kb(insB)}) + 笔记目录索引 (${kb(idxB)}，只读目录不读正文) + 未完结在途任务 (${kb(tskB)})，外加最近回复快照 (${kb(msgSize)}) 与各 Skill 的一句话触发条件。体积极小，毫秒级读完。">
-            <rect class="mf-zone-must" x="34" y="164" width="368" height="130" rx="10"/>
-            <text class="mf-ct" x="50" y="188">核心预载层</text>
-            <text class="mf-m" x="386" y="188" text-anchor="end">每次新会话必读 · ${kb(upFront)} / ${kb(budget)}</text>
-
-            <rect class="mf-inner" x="48" y="200" width="164" height="36" rx="7"/>
-            <text class="mf-k" x="60" y="222">instructions.md</text>
-
-            <rect class="mf-inner" x="222" y="200" width="166" height="36" rx="7"/>
-            <text class="mf-k" x="234" y="222">notes/index.md</text>
-
-            <rect class="mf-inner" x="48" y="244" width="164" height="36" rx="7"/>
-            <text class="mf-k" x="60" y="266">tasks/*.md (${tasks.length})</text>
-
-            <rect class="mf-inner" x="222" y="244" width="166" height="36" rx="7"/>
-            <text class="mf-k" x="234" y="266">messages.md</text>
+          <!-- Center Hub Tiers -->
+          <g class="mf-node" data-mf-title="第一层：核心预载（当前 ${kb(upFront)} / 上限 ${kb(budget)}）" data-mf-tip="每次 Collie 开启新会话开场必读的全部文件：长期指令 instructions.md (${kb(insB)}) + 笔记目录 notes/index.md (${kb(idxB)}，只读目录不读正文) + 在途任务 tasks/*.md (${kb(tskB)}) + 最近回复 messages.md (${kb(msgSize)}) + 各 Skill 一句话触发条件。">
+            <rect class="mf-card tier1" x="268" y="44" width="408" height="48" rx="11"/>
+            <circle class="mf-dot ok" cx="286" cy="68" r="3.8"/>
+            <text class="mf-title" x="300" y="72">核心预载</text>
+            <text class="mf-cap" x="366" y="72">指令 · 目录 · 在途 · 快照</text>
+            <text class="mf-badge-ok" x="660" y="72" text-anchor="end">${kb(upFront)}</text>
           </g>
 
-          <!-- Zone 2: Tier 2 Lazy On-Demand -->
-          <rect class="mf-zone-lazy" x="420" y="164" width="324" height="130" rx="10"/>
-          <text class="mf-t2" x="436" y="188">按需懒加载层</text>
-          <text class="mf-m" x="728" y="188" text-anchor="end">平时 0 开销 · 点击跳转</text>
-
-          <g class="mf-hover mf-click" data-mem-jump="notes" data-mf-title="第二层 A：专题经验笔记（共 ${topicNotes.length} 篇 · 点击打开）" data-mf-tip="存放各项目仓库路径、板端实验口径与机器环境差异（如 sfd-net.md、collie.md）。新会话启动绝不预载正文；只有聊到对应项目时，Collie 才顺着 index.md 目录指针精准 Read 所需的那一篇。">
-            <rect class="mf-inner mf-card-btn" x="434" y="200" width="142" height="80" rx="8"/>
-            <text class="mf-t2" x="448" y="224">经验笔记</text>
-            <text class="mf-k" x="448" y="246">notes/*.md</text>
-            <text class="mf-m" x="448" y="266">${topicNotes.length} 篇专题 · 点此查阅</text>
+          <g class="mf-node mf-jump" data-mem-jump="notes" data-mf-title="第二层 A：专题经验笔记（共 ${topicNotes.length} 篇 · 点击查看）" data-mf-tip="存放各项目仓库路径、实验口径与机器差异（如 sfd-net.md）。新会话启动不预载正文；聊到对应项目时才顺着 index.md 目录指针精准 Read 所需的那一篇，平时零开销。">
+            <rect class="mf-card tier2" x="268" y="102" width="198" height="48" rx="11"/>
+            <circle class="mf-dot sig" cx="286" cy="126" r="3.5"/>
+            <text class="mf-title" x="300" y="130">经验笔记</text>
+            <text class="mf-cap" x="452" y="130" text-anchor="end">${topicNotes.length} 篇 ↗</text>
           </g>
 
-          <g class="mf-hover mf-click" data-mem-jump="skills" data-mf-title="第二层 B：Hub 托管自建 Skill（共 ${skills.length} 个 · 点击管理）" data-mf-tip="主本存 Hub，分两档：①「Collie 中枢自用」(.agents/skills) 仅供主脑调度续派使用；②「全节点共享」(skills/) 自动分发至所有在线电脑。新会话仅加载 YAML 里的触发条件，命中场景才读取 SKILL.md 正文。">
-            <rect class="mf-inner mf-card-btn" x="588" y="200" width="142" height="80" rx="8"/>
-            <text class="mf-t2" x="602" y="224">自建技能</text>
-            <text class="mf-k" x="602" y="246">SKILL.md</text>
-            <text class="mf-m" x="602" y="266">${skills.length} 个技能 · 点此管理</text>
+          <g class="mf-node mf-jump" data-mem-jump="skills" data-mf-title="第二层 B：自建 Skill（共 ${skills.length} 个 · 点击管理）" data-mf-tip="权威主本保存在 Hub，分两档：①「Collie 中枢自用」仅供主脑调度续派；②「全节点共享」自动分发到各台电脑。启动仅读触发条件，命中场景才展开 SKILL.md 全文。">
+            <rect class="mf-card tier2" x="478" y="102" width="198" height="48" rx="11"/>
+            <circle class="mf-dot sig" cx="496" cy="126" r="3.5"/>
+            <text class="mf-title" x="510" y="130">自建 Skill</text>
+            <text class="mf-cap" x="662" y="130" text-anchor="end">${skills.length} 个 ↗</text>
           </g>
 
-          <!-- Pointer dashed arrow: notes/index.md -> notes/*.md -->
-          <path class="mf-dash" d="M388,218 H431"/>
-
-          <!-- Zone 3: Tier 3 Cold Archive -->
-          <g class="mf-hover mf-click" data-mem-jump="archive" data-mf-title="第三层：冷归档留痕（点击查看做梦日记与结项归档）" data-mf-tip="包含历次夜间做梦日记 (dreams/*.md) 与已完结的历史任务卡 (tasks/done/*.md)。它们永不注入新会话上下文，不占任何 Token 预算，仅供你随时回溯复盘与做梦对比。">
-            <rect class="mf-zone-cold" x="762" y="164" width="184" height="130" rx="10"/>
-            <text class="mf-t2" x="776" y="188">冷归档留痕</text>
-            <text class="mf-m" x="932" y="188" text-anchor="end">不加载</text>
-
-            <rect class="mf-inner" x="776" y="200" width="156" height="36" rx="7"/>
-            <text class="mf-k" x="788" y="222">dreams/*.md (${r.dreams?.length || 0})</text>
-
-            <rect class="mf-inner" x="776" y="244" width="156" height="36" rx="7"/>
-            <text class="mf-k" x="788" y="266">tasks/done/ (${done.length})</text>
+          <g class="mf-node mf-jump" data-mem-jump="archive" data-mf-title="第三层：做梦日记与历史归档（点击查看）" data-mf-tip="包含历次夜间做梦日记 (dreams/*.md，${r.dreams?.length || 0} 篇) 与已结项历史任务 (tasks/done/*.md，${done.length} 项)。永不注入新会话上下文，不占任何 Token 预算，仅供复盘与做梦对比。">
+            <rect class="mf-card tier3" x="268" y="160" width="408" height="42" rx="10"/>
+            <circle class="mf-dot muted" cx="286" cy="181" r="3.2"/>
+            <text class="mf-title muted" x="300" y="185">做梦与归档</text>
+            <text class="mf-cap" x="378" y="185">日记 · 历史结项</text>
+            <text class="mf-cap" x="660" y="185" text-anchor="end">不加载 ↗</text>
           </g>
 
-          <!-- Connectors: Hub -> Runtime Consumers -->
-          <path class="mf-line-c" d="M218,294 V348"/>
-          <text class="mf-m" x="228" y="330">开场全量注入</text>
+          <!-- Outbound Non-Crossing Curves (Hub -> Consumers) -->
+          <path class="mf-wire-ok" d="M676,68 C714,68 718,70 754,70" marker-end="url(#mf-arr-ok)"/>
+          <text class="mf-edge ok" x="715" y="61" text-anchor="middle">必读</text>
 
-          <path class="mf-dash" d="M505,294 V328 H392 V348"/>
-          <text class="mf-m" x="404" y="321">命中话题 / 场景时按需 Read</text>
+          <path class="mf-wire-dash" d="M676,118 C714,118 718,86 754,86" marker-end="url(#mf-arr-sig)"/>
+          <text class="mf-edge sig" x="715" y="106" text-anchor="middle">按需</text>
 
-          <path class="mf-line" d="M659,294 V328 H732 V348"/>
-          <text class="mf-m" x="668" y="321">出站隧道自动同步共享 Skill</text>
+          <path class="mf-wire-sig" d="M676,134 C714,134 718,162 754,162" marker-end="url(#mf-arr-sig)"/>
+          <text class="mf-edge sig" x="715" y="156" text-anchor="middle">同步</text>
 
-          <!-- Bottom Row: Runtime Consumers -->
-          <g class="mf-hover" data-mf-title="Collie 主脑新会话唤醒（Mac / Hub）" data-mf-tip="每次唤醒或上下文轮转重开新会话时，先一次性读入「核心预载层」；执行过程中若涉及具体项目或续派侧栏，再按需读取对应笔记全文或展开中枢自用 Skill。">
-            <rect class="mf-box" x="24" y="352" width="448" height="58" rx="10"/>
-            <text class="mf-t" x="42" y="376">Collie 主脑会话唤醒</text>
-            <text class="mf-s" x="42" y="397">先读预载层掌握全局规矩 · 盘中按指针懒加载专题笔记与中枢 Skill</text>
+          <!-- Right Column: 2 Runtime Targets -->
+          <g class="mf-node" data-mf-title="Collie 主脑新会话（Mac / Hub）" data-mf-tip="每次唤醒或上下文轮转重开时，先一次性注入「核心预载」（${kb(upFront)}）；对话中涉及具体项目或续派侧栏时，再按需 Read 对应经验笔记或展开中枢 Skill。">
+            <rect class="mf-card" x="758" y="48" width="154" height="58" rx="12"/>
+            <text class="mf-title" x="776" y="73">Collie 主脑</text>
+            <text class="mf-cap" x="776" y="92">开场预载 + 按需查</text>
           </g>
 
-          <g class="mf-hover" data-mf-title="Mac · Windows 所有独立会话与派出 Worker" data-mf-tip="在「自建技能」中设为【全节点共享】的 Skill，会由 Hub 通过隧道自动同步到每台在线电脑的 ~/.agents/skills、~/.codex/skills 与 ~/.claude/skills（带 .collie-managed 安全标记，绝不覆盖你原有的本地技能）。">
-            <rect class="mf-box" x="508" y="352" width="448" height="58" rx="10"/>
-            <text class="mf-t" x="526" y="376">Mac · Windows 独立会话与派出 Worker</text>
-            <text class="mf-s" x="526" y="397">全节点共享 Skill 自动下发至 ~/.agents · ~/.codex · ~/.claude</text>
+          <g class="mf-node" data-mf-title="Mac · Windows 所有会话与 Worker" data-mf-tip="设为「全节点共享」的 Skill 会由 Hub 通过隧道自动同步到所有在线电脑的 ~/.agents/skills、~/.codex/skills 与 ~/.claude/skills（带安全标记，不覆盖本地已有技能），任何会话开箱即用。">
+            <rect class="mf-card" x="758" y="132" width="154" height="58" rx="12"/>
+            <text class="mf-title" x="776" y="157">Mac · Win 节点</text>
+            <text class="mf-cap" x="776" y="176">共享 Skill 下发</text>
           </g>
         </svg>
         <div class="mem-flow-tip" id="mem-flow-tip" hidden></div>
@@ -3436,7 +3423,7 @@
       memArchOpen = e.target.open;
       store.set("memArchOpen", memArchOpen);
       const cue = e.target.querySelector(".mem-arch-cue");
-      if (cue) cue.textContent = memArchOpen ? "收起流程图" : "展开流程图";
+      if (cue) cue.textContent = memArchOpen ? "收起" : "展开";
     }
   }, true);
 
