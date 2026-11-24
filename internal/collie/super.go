@@ -546,6 +546,18 @@ func (sp *Super) liveAgents(ctx context.Context) (map[string]liveAgent, bool) {
 	return m, true
 }
 
+// A worker waiting for its brief has no task progress yet. The separate live
+// agent snapshot still carries the raw readiness needed to deliver that brief.
+func (w *Worker) observedStatus(raw string) string {
+	if w.FirstTurn == "queued" && raw != "blocked" && raw != "failed" {
+		return "waiting"
+	}
+	if w.FirstTurn == "delivered" && (raw == "idle" || raw == "done") {
+		return "waiting"
+	}
+	return raw
+}
+
 func (sp *Super) tick(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
@@ -556,10 +568,9 @@ func (sp *Super) tick(parent context.Context) {
 	now := time.Now()
 
 	type finished struct {
-		w            *Worker
-		blocked      bool
-		fromWorking  bool
-		askedAt      time.Time
+		w           *Worker
+		blocked     bool
+		fromWorking bool
 	}
 	var fin []finished
 	var dead []*Worker
@@ -580,7 +591,7 @@ func (sp *Super) tick(parent context.Context) {
 	for _, w := range sp.st.Workers {
 		if w.Ended {
 			if a, ok := live[w.Name]; ok && w.Status == "gone" && w.PaneID != "" && a.Pane == w.PaneID {
-				w.Ended, w.Status = false, a.Status
+				w.Ended, w.Status = false, w.observedStatus(a.Status)
 				sp.ingestLocked("worker", w.Thread, w.Name, fmt.Sprintf("worker %s is back: herdr restored its pane (status %s).", w.Name, a.Status), "", "", w.Name)
 				sp.addEntryLocked("event", w.Thread, w.Name+" 回来了（herdr 恢复了它的窗格）", w.Name, "info")
 				sp.changed()
@@ -588,6 +599,9 @@ func (sp *Super) tick(parent context.Context) {
 			continue
 		}
 		a, alive := live[w.Name]
+		if w.FirstTurn == "queued" && w.PaneID == "" && (!alive || a.Kind == "") {
+			continue // startAgent is still opening the pane
+		}
 		if !alive {
 			if w.Status != "starting" && w.Status != "failed" {
 				delete(sp.noAgent, w.Name)
@@ -627,6 +641,24 @@ func (sp *Super) tick(parent context.Context) {
 			w.Session = a.Session
 			sp.dirty = true
 		}
+		// A new pane can alternate between working and done while drawing its
+		// welcome screen. Keep delivery on raw readiness, but publish completion
+		// only once the dispatched brief has a result.
+		if w.FirstTurn == "reported" && (a.Status == "idle" || a.Status == "done") {
+			w.FirstTurn, w.Status = "", a.Status
+			delete(sp.workerAskedAt, w.Name)
+			sp.changed()
+			continue
+		}
+		if w.FirstTurn == "delivered" && (a.Status == "done" || a.Status == "idle") {
+			if w.PaneID != a.Pane || w.Status != "waiting" {
+				w.PaneID, w.Status = a.Pane, "waiting"
+				sp.changed()
+			}
+			fin = append(fin, finished{w: w})
+			continue
+		}
+		a.Status = w.observedStatus(a.Status)
 		prev := w.Status
 		asked := sp.workerAskedAt[w.Name]
 		if a.Status != prev {
@@ -639,18 +671,18 @@ func (sp *Super) tick(parent context.Context) {
 			case (prev == "working" || prev == "waiting") && (a.Status == "done" || a.Status == "idle"):
 				delete(sp.workerAskedAt, w.Name)
 				if now.Sub(w.ReportAt) > 90*time.Second {
-					fin = append(fin, finished{w: w, fromWorking: true, askedAt: asked})
+					fin = append(fin, finished{w: w, fromWorking: true})
 				}
 			case !asked.IsZero() && (a.Status == "done" || a.Status == "idle"):
 				delete(sp.workerAskedAt, w.Name)
 				if now.Sub(w.ReportAt) > 90*time.Second {
-					fin = append(fin, finished{w: w, askedAt: asked})
+					fin = append(fin, finished{w: w})
 				}
 			}
 		} else if !asked.IsZero() && (a.Status == "done" || a.Status == "idle") && now.Sub(asked) >= 5*time.Second {
 			delete(sp.workerAskedAt, w.Name)
 			if now.Sub(w.ReportAt) > 90*time.Second {
-				fin = append(fin, finished{w: w, askedAt: asked})
+				fin = append(fin, finished{w: w})
 			}
 		}
 	}
@@ -724,7 +756,7 @@ func (sp *Super) tick(parent context.Context) {
 	sp.mu.Unlock()
 
 	for _, f := range fin {
-		sp.workerSettled(ctx, f.w, f.blocked, f.fromWorking, f.askedAt)
+		sp.workerSettled(ctx, f.w, f.blocked, f.fromWorking)
 	}
 	for _, w := range dead {
 		sp.workerDead(ctx, w)
@@ -827,12 +859,27 @@ func replace(list []string, from, to string) []string {
 // deliver submits all pending triggers for one session as a single prompt.
 func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 	sort.Slice(list, func(i, j int) bool { return list[i].At.Before(list[j].At) })
+	sp.mu.Lock()
+	fresh := target == routerName && sp.routerFresh
+	var firstBrief string
+	if w := sp.st.Workers[target]; w != nil && w.FirstTurn == "queued" {
+		firstBrief = w.briefHeader()
+	}
+	sp.mu.Unlock()
+	if firstBrief != "" {
+		// A follow-up can arrive while the agent is still starting. Its
+		// initial instructions must head the first delivered batch.
+		i := slices.IndexFunc(list, func(t *Trigger) bool { return t.Source == "system" && firstLine(t.Text) == firstBrief })
+		if i < 0 {
+			return
+		}
+		brief := list[i]
+		copy(list[1:i+1], list[:i])
+		list[0] = brief
+	}
 	if len(list) > 20 {
 		list = list[:20]
 	}
-	sp.mu.Lock()
-	fresh := target == routerName && sp.routerFresh
-	sp.mu.Unlock()
 
 	var b strings.Builder
 	if target == routerName {
@@ -912,6 +959,9 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 			}
 		}
 	} else {
+		if w := sp.st.Workers[target]; w != nil && w.FirstTurn == "queued" {
+			w.FirstTurn = "delivered"
+		}
 		sp.workerAskedAt[target] = time.Now()
 	}
 	for _, t := range list {
@@ -970,6 +1020,7 @@ func (sp *Super) workerDead(ctx context.Context, w *Worker) {
 		return
 	}
 	w.Status = "failed"
+	sp.st.recordWorkerStart(w, "failed", firstNonEmpty(why, firstLine(tail)))
 	if why != "" {
 		w.Note = why
 	}
@@ -1027,20 +1078,30 @@ func isUnacceptedCollieDraft(summary string) bool {
 		strings.Contains(summary, "> [collie]")
 }
 
-func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked, fromWorking bool, askedAt time.Time) {
+func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked, fromWorking bool) {
 	sp.mu.Lock()
 	ask := sp.st.Settings.AskPermissions
+	snapshot := *w
 	sp.mu.Unlock()
-	if blocked && !ask && sp.answerTrust(ctx, w.PaneID, w.Cwd) {
+	if !blocked && snapshot.FirstTurn == "reported" {
+		return
+	}
+	first := !blocked && snapshot.FirstTurn == "delivered"
+	if blocked && !ask && sp.answerTrust(ctx, snapshot.PaneID, snapshot.Cwd) {
 		log.Printf("worker %s: trusted its folder %s", w.Name, w.Cwd)
 		return
 	}
-	summary := sp.lastAssistant(ctx, w)
+	var summary string
+	if first {
+		summary = sp.firstWorkerReply(ctx, &snapshot)
+	} else {
+		summary = sp.lastAssistant(ctx, &snapshot)
+	}
 	// When an agent TUI (such as Codex) renders its input prompt before finishing
 	// account/routing discovery, the delivered [collie] prompt sits buffered in
 	// its input box while status stays "idle". Never mistake that buffered draft
 	// for a completed assistant turn!
-	if !blocked && !fromWorking && isUnacceptedCollieDraft(summary) {
+	if !first && !blocked && !fromWorking && isUnacceptedCollieDraft(summary) {
 		sp.mu.Lock()
 		if !w.Ended && time.Since(w.CreatedAt) < 40*time.Second {
 			sp.workerAskedAt[w.Name] = time.Now()
@@ -1048,19 +1109,34 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked, fromWork
 		sp.mu.Unlock()
 		return
 	}
+	agentErr := ""
+	if !blocked {
+		agentErr = sp.workerAgentError(ctx, &snapshot, summary+"\n"+snapshot.Task)
+	}
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
+	if w.Ended || sp.st.Workers[w.Name] != w || (first && w.FirstTurn != "delivered") {
+		return
+	}
 	if blocked {
+		if w.FirstTurn != "" {
+			sp.st.recordWorkerStart(w, "blocked", "")
+		}
 		sp.ingestLocked("worker", w.Thread, w.Name,
 			fmt.Sprintf("worker %s is BLOCKED on a dialog in its terminal (the human also sees it as a card in chat). Screen:\n%s%s\nIf the answer follows from what the human asked, or is routine, answer it yourself: `collie answer %s <choice>`. Leave it to the human only when it is theirs to decide (see ROUTER.md).", w.Name, summary, sp.choicesText(ctx, w.PaneID), w.Name), "", "", w.Name)
 		sp.addEntryLocked("event", w.Thread, w.Name+" 等你确认", w.Name, "blocked")
 		return
 	}
-	if msg := sp.workerAgentError(ctx, w, summary); msg != "" {
+	if msg := agentErr; msg != "" {
 		noWorkDone := w.LastReport == "" && (summary == "" || summary == "(no output captured)" || strings.Contains(summary, msg))
 		wsToClose := ""
+		if first {
+			w.FirstTurn, w.Status = "", "idle"
+			delete(sp.workerAskedAt, w.Name)
+		}
 		if noWorkDone {
 			w.Ended, w.Status, w.Note = true, "failed", msg
+			sp.st.recordWorkerStart(w, "failed", msg)
 			wsToClose = w.WorkspaceID
 		}
 		sp.ingestLocked("worker", w.Thread, w.Name,
@@ -1075,6 +1151,14 @@ func (sp *Super) workerSettled(ctx context.Context, w *Worker, blocked, fromWork
 			}(wsToClose)
 		}
 		return
+	}
+	if first {
+		if summary == "" {
+			return
+		}
+		w.FirstTurn, w.Status = "", "done"
+		delete(sp.workerAskedAt, w.Name)
+		sp.st.recordWorkerStart(w, "replied", "")
 	}
 	sp.ingestLocked("worker", w.Thread, w.Name,
 		fmt.Sprintf("worker %s finished a turn. Last message:\n%s", w.Name, summary), "", "", w.Name)
@@ -1107,6 +1191,58 @@ func agentStopLine(screen, summary string) string {
 	for _, l := range tail {
 		if workerQuotaRe.MatchString(l) && !strings.Contains(summary, strings.Trim(l, "⎿⏺●•✗✘⚠■│ ")) {
 			return clip(strings.Trim(l, "⎿⏺●•✗✘⚠■│ "), 200)
+		}
+	}
+	return ""
+}
+
+// Ask the pane owner for a final transcript message belonging to this dispatch.
+func (sp *Super) firstWorkerReply(ctx context.Context, w *Worker) string {
+	brief := w.briefHeader()
+	pane, machine := split(w.PaneID)
+	if machine == "" {
+		return sp.s.workerReply(ctx, pane, brief, sp.transcripts)
+	}
+	c, err := sp.s.herdr.Client(machine)
+	if err != nil {
+		return ""
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://node/api/panes/"+url.PathEscape(pane)+"/last?worker_brief="+url.QueryEscape(brief), nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Reply *string `json:"worker_reply"`
+		User  string  `json:"user"`
+		Text  string  `json:"text"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return ""
+	}
+	if out.Reply != nil {
+		return *out.Reply
+	}
+	// Older nodes return a user/reply pair or a bare screen. Confirm the
+	// phase using their existing transcript endpoint before accepting a pair.
+	if firstLine(out.User) != brief || w.Session == "" || out.Text == "" {
+		return ""
+	}
+	query := url.Values{"kind": {w.Kind}, "session": {w.Session}, "cwd": {w.Cwd}}
+	req, _ = http.NewRequestWithContext(ctx, "GET", "http://node/api/transcript?"+query.Encode(), nil)
+	legacy, err := c.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer legacy.Body.Close()
+	var page struct {
+		Messages []*Message `json:"messages"`
+	}
+	if json.NewDecoder(legacy.Body).Decode(&page) == nil && len(page.Messages) > 0 {
+		last := page.Messages[len(page.Messages)-1]
+		if last.Text == out.Text {
+			return last.finalReply()
 		}
 	}
 	return ""
@@ -1193,7 +1329,6 @@ func (sp *Super) Show(id string) (string, bool) {
 
 func (sp *Super) List() string {
 	projs := sp.s.snapshotProjects()
-	machines := sp.s.allMachines()
 	metaSnap := sp.s.sessionMetaSnapshot()
 	findMeta := func(kind, machine, session, fallback string) *SessionMeta {
 		if ck := canonicalSessionKey(kind, machine, session); ck != "" {
@@ -1212,6 +1347,7 @@ func (sp *Super) List() string {
 		st = sp.s.state(lctx)
 		cancel()
 	}
+	machines := sp.s.allMachines()
 	var extList []*External
 	if sp.s != nil {
 		extList = sp.s.collectAllExternal(false)
@@ -1229,8 +1365,11 @@ func (sp *Super) List() string {
 		have := m.Agents
 		if m.Local {
 			have = localAgents(sp.s.home, false)
-			if !m.Online && len(have) == 0 {
-				state = "relay-only"
+			if !m.Online {
+				state = "offline"
+				if have != nil && len(have) == 0 {
+					state = "relay-only"
+				}
 			}
 		} else if !m.Online {
 			state = "offline"
@@ -1240,15 +1379,33 @@ func (sp *Super) List() string {
 			id = "hub"
 		}
 		ag := "none"
+		if have == nil {
+			ag = "unknown"
+		}
 		if len(have) > 0 {
 			ag = strings.Join(have, ",")
 		}
-		qBrief := sp.s.machineQuotaBrief(m.ID)
-		if qBrief != "" {
-			fmt.Fprintf(&b, "  %-14s %-11s %s  agents=%s  quotas=%s  home=%s\n", id, state, m.Name, ag, qBrief, m.Home)
-		} else {
-			fmt.Fprintf(&b, "  %-14s %-11s %s  agents=%s  home=%s\n", id, state, m.Name, ag, m.Home)
+		fmt.Fprintf(&b, "  %-14s %-11s %s  installed=%s  last_worker_start=", id, state, m.Name, ag)
+		var results []string
+		for _, kind := range agentKinds {
+			start, ok := sp.st.WorkerStarts[m.ID][kind]
+			if !ok {
+				if slices.Contains(have, kind) {
+					results = append(results, kind+":untried")
+				}
+				continue
+			}
+			desc := fmt.Sprintf("%s:%s (%s %s", kind, start.Result, start.Name, start.At.Format(time.RFC3339))
+			if start.Detail != "" {
+				desc += ", " + start.Detail
+			}
+			results = append(results, desc+")")
 		}
+		b.WriteString(firstNonEmpty(strings.Join(results, "; "), "unknown"))
+		if q := sp.s.machineQuotaBrief(m.ID); q != "" {
+			fmt.Fprintf(&b, "  quotas=%s", q)
+		}
+		fmt.Fprintf(&b, "  home=%s\n", m.Home)
 	}
 	b.WriteString("projects (pinned workspaces; use their machine and cwd when the human refers to them):\n")
 	if len(projs) == 0 {

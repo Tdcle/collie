@@ -287,8 +287,9 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.mu.Unlock()
 		return nil, nil, fmt.Errorf("directory not found: %s", dir)
 	}
-	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "starting", Session: resume}
+	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "waiting", FirstTurn: "queued", Session: resume}
 	sp.st.Workers[name] = w
+	sp.st.recordWorkerStart(w, "starting", "")
 	if subscribe {
 		th := sp.threadLocked(thread)
 		if !contains(th.Subscribers, name) {
@@ -355,6 +356,7 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		blocked := err != nil && errors.As(err, &he) && he.Code == "agent_not_ready"
 		if err != nil && !blocked {
 			w.Status, w.Ended, w.Note = "failed", true, err.Error()
+			sp.st.recordWorkerStart(w, "failed", w.Note)
 			sp.addEntryLocked("event", thread, name+" 启动失败："+err.Error(), name, "error")
 			sp.mu.Unlock()
 			if !tell(err) {
@@ -362,14 +364,15 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 			}
 			return
 		}
-		w.Status = "idle"
+		w.Status = "waiting"
+		sp.st.recordWorkerStart(w, "started", "")
 		if blocked {
 			w.Status = "blocked"
+			sp.st.recordWorkerStart(w, "blocked", err.Error())
 		}
-		sp.changed()
+		sp.ingestLocked("system", thread, routerName, workerBrief(bin, w), "", name, name)
 		sp.mu.Unlock()
 		tell(nil)
-		sp.Ingest("system", thread, routerName, workerBrief(bin, w), "", name, name)
 	}()
 	return w, started, nil
 }
@@ -395,8 +398,12 @@ func firstLine(s string) string {
 	return s
 }
 
+func (w *Worker) briefHeader() string {
+	return fmt.Sprintf("You are worker %q, managed by Collie (thread %s, dispatched %s). Your task:", w.Name, w.Thread, w.CreatedAt.UTC().Format(time.RFC3339Nano))
+}
+
 func workerBrief(bin string, w *Worker) string {
-	return fmt.Sprintf(`You are worker %q, managed by Collie (thread %s). Your task:
+	return fmt.Sprintf(`%s
 
 %s
 
@@ -404,7 +411,7 @@ How this works:
 - Collie relays between you and the human, through %s report "…".
 - When the task is done, report the outcome: what you found or changed, and where the details are.
 - When you need what only the human can give (a decision, access), or the same failure keeps coming back after a few different approaches, report "BLOCKED: <what you need> · tried: <what you tried> · I'd pick: <your choice>". Collie decides or asks them, and tells you.
-- Follow-ups for your thread arrive as messages starting with [collie].`, w.Name, w.Thread, strings.TrimSpace(w.Task), shellBin(bin))
+- Follow-ups for your thread arrive as messages starting with [collie].`, w.briefHeader(), strings.TrimSpace(w.Task), shellBin(bin))
 }
 
 func (sp *Super) Report(name, text string) error {
@@ -415,7 +422,11 @@ func (sp *Super) Report(name, text string) error {
 		return fmt.Errorf("unknown worker %s", name)
 	}
 	delete(sp.workerAskedAt, name)
+	if w.FirstTurn != "" {
+		w.FirstTurn = "reported"
+	}
 	w.LastReport, w.ReportAt = text, time.Now()
+	sp.st.recordWorkerStart(w, "replied", "")
 	sp.ingestLocked("worker", w.Thread, name, fmt.Sprintf("report from %s:\n%s", name, text), "", "", name)
 	tone := "done"
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(text)), "BLOCKED:") {
@@ -434,4 +445,19 @@ func (sp *Super) workerByPane(pane string) string {
 		}
 	}
 	return ""
+}
+
+// Keep the latest dispatch for each machine and agent even when a worker name is reused.
+func (st *State) recordWorkerStart(w *Worker, result, detail string) {
+	starts := st.WorkerStarts[w.Machine]
+	if starts == nil {
+		starts = map[string]workerStart{}
+		st.WorkerStarts[w.Machine] = starts
+	}
+	kind := kinds[w.Kind]
+	prev := starts[kind]
+	if prev.At.After(w.CreatedAt) || (prev.At.Equal(w.CreatedAt) && prev.Result == "replied") {
+		return
+	}
+	starts[kind] = workerStart{Name: w.Name, At: w.CreatedAt, Result: result, Detail: clip(strings.Join(strings.Fields(detail), " "), 140)}
 }

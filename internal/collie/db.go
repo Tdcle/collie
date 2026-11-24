@@ -99,6 +99,10 @@ func loadState(db *sql.DB, home string) (*State, error) {
 		}
 	}
 
+	if raw := kv["worker_starts"]; raw != "" {
+		json.Unmarshal([]byte(raw), &st.WorkerStarts)
+	}
+
 	var trig []*Trigger
 	err = loadRows(db, `SELECT data FROM (SELECT data, n FROM triggers ORDER BY n DESC LIMIT 600) ORDER BY n`, func(t *Trigger) { trig = append(trig, t) })
 	if err != nil {
@@ -117,7 +121,25 @@ func loadState(db *sql.DB, home string) (*State, error) {
 	st.Triggers = trig
 	loadRows(db, `SELECT data FROM (SELECT data, n FROM entries ORDER BY n DESC LIMIT 600) ORDER BY n`, func(e *Entry) { st.Entries = append(st.Entries, e) })
 	loadRows(db, `SELECT data FROM threads ORDER BY last_at DESC LIMIT 500`, func(t *Thread) { st.Threads[t.ID] = t })
-	loadRows(db, `SELECT data FROM workers`, func(w *Worker) { st.Workers[w.Name] = w })
+	loadRows(db, `SELECT data FROM workers`, func(w *Worker) {
+		st.Workers[w.Name] = w
+		// Older hubs only kept the worker record. Recover what it proves.
+		if old := st.WorkerStarts[w.Machine][kinds[w.Kind]]; !old.At.IsZero() && !old.At.Before(w.CreatedAt) {
+			return
+		}
+		result, detail := "unknown", ""
+		switch {
+		case w.LastReport != "":
+			result = "replied"
+		case w.Status == "failed":
+			result, detail = "failed", w.Note
+		case w.Status == "blocked":
+			result = "blocked"
+		case w.PaneID != "":
+			result = "started"
+		}
+		st.recordWorkerStart(w, result, detail)
+	})
 	loadRows(db, `SELECT data FROM timers`, func(t *Timer) { st.Timers = append(st.Timers, t) })
 	return st, nil
 }
@@ -138,6 +160,7 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 
 	put(`INSERT INTO kv(k,v) VALUES('seq',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.Itoa(st.Seq))
 	put(`INSERT INTO kv(k,v) VALUES('settings',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Settings))
+	put(`INSERT INTO kv(k,v) VALUES('worker_starts',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.WorkerStarts))
 	put(`INSERT INTO kv(k,v) VALUES('policies',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Policies))
 	dismissed := make([]string, 0, len(st.Dismissed))
 	for id, on := range st.Dismissed {

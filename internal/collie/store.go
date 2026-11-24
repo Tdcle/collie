@@ -52,6 +52,7 @@ type Worker struct {
 	Run        *[2]string `json:"run,omitempty"`
 	Status     string     `json:"status"` // starting | working | idle | done | blocked | unknown | gone | failed
 	Note       string     `json:"note,omitempty"`
+	FirstTurn  string     `json:"first_turn,omitempty"` // queued, delivered, or reported (until its pane settles)
 	LastReport string     `json:"last_report,omitempty"`
 	ReportAt   time.Time  `json:"report_at,omitempty"`
 	Ended      bool       `json:"ended,omitempty"`
@@ -140,23 +141,32 @@ type Settings struct {
 	AskPermissions bool `json:"ask_permissions,omitempty"`
 }
 
+type workerStart struct {
+	Name   string    `json:"name"`
+	At     time.Time `json:"at"`
+	Result string    `json:"result"`
+	Detail string    `json:"detail,omitempty"`
+}
+
 type State struct {
-	Seq       int                `json:"seq"`
-	Triggers  []*Trigger         `json:"triggers"`
-	Threads   map[string]*Thread `json:"threads"`
-	Workers   map[string]*Worker `json:"workers"`
-	Entries   []*Entry           `json:"entries"`
-	Dismissed map[string]bool    `json:"dismissed,omitempty"`
-	Timers    []*Timer           `json:"timers"`
-	Policies  []Policy           `json:"policies"`
-	Settings  Settings           `json:"settings"`
+	WorkerStarts map[string]map[string]workerStart `json:"worker_starts,omitempty"`
+	Seq          int                               `json:"seq"`
+	Triggers     []*Trigger                        `json:"triggers"`
+	Threads      map[string]*Thread                `json:"threads"`
+	Workers      map[string]*Worker                `json:"workers"`
+	Entries      []*Entry                          `json:"entries"`
+	Dismissed    map[string]bool                   `json:"dismissed,omitempty"`
+	Timers       []*Timer                          `json:"timers"`
+	Policies     []Policy                          `json:"policies"`
+	Settings     Settings                          `json:"settings"`
 }
 
 func defaultState(home string) *State {
 	return &State{
-		Threads:   map[string]*Thread{},
-		Workers:   map[string]*Worker{},
-		Dismissed: map[string]bool{},
+		WorkerStarts: map[string]map[string]workerStart{},
+		Threads:      map[string]*Thread{},
+		Workers:      map[string]*Worker{},
+		Dismissed:    map[string]bool{},
 		Policies: []Policy{
 			{Source: "webhook:github", Action: "candidate"},
 			{Source: "webhook:feishu", Action: "candidate"},

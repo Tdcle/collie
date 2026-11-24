@@ -49,6 +49,8 @@ type transcript struct {
 	began     int64 // where reading started (0: the top of the log)
 	lineAt    int64 // where the line being parsed starts
 	limit     int64 // stop reading here (0: at the end)
+
+	workerBrief string // most recent dispatch header, even after older messages are trimmed
 }
 
 const (
@@ -218,7 +220,38 @@ func (m *msgSync) patch(t *transcript) *msgPatch {
 	return &msgPatch{Base: base, From: from, Msgs: append([]*Message{}, view[from-base:]...), Earlier: t.earlierCursor()}
 }
 
-func (t *transcript) add(m *Message) { m.at = t.lineAt; t.msgs = append(t.msgs, m) }
+func (t *transcript) add(m *Message) {
+	if m.Kind == "user" && strings.HasPrefix(m.Text, "You are worker ") {
+		t.workerBrief = firstLine(m.Text)
+	}
+	m.at = t.lineAt
+	t.msgs = append(t.msgs, m)
+}
+
+func (s *Server) workerReply(ctx context.Context, pane, brief string, cache map[string]*transcript) string {
+	var info struct {
+		Agent agentDetail `json:"agent"`
+	}
+	if s.herdr.Call(ctx, "agent.get", map[string]any{"target": pane}, &info) != nil {
+		return ""
+	}
+	tr := s.transcriptFor(pane, pane, info.Agent, cache)
+	if tr == nil {
+		return ""
+	}
+	tr.update()
+	if tr.workerBrief != brief || len(tr.msgs) == 0 {
+		return ""
+	}
+	return tr.msgs[len(tr.msgs)-1].finalReply()
+}
+
+func (m *Message) finalReply() string {
+	if m.Kind == "assistant" && (m.Phase == "final_answer" || m.Phase == "") {
+		return clip(m.Text, 1200)
+	}
+	return ""
+}
 
 // earlierCursor: where the messages before the view end, or 0 when the view
 // starts at the top of the log.
@@ -1630,6 +1663,11 @@ func boolStr(b bool) string {
 // worker summaries.
 func (s *Server) lastMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if brief := r.URL.Query().Get("worker_brief"); brief != "" {
+		reply := s.workerReply(r.Context(), id, brief, map[string]*transcript{})
+		writeJSON(w, 200, map[string]string{"worker_reply": reply})
+		return
+	}
 	var info struct {
 		Agent agentDetail `json:"agent"`
 	}
