@@ -158,13 +158,26 @@
   ];
   const memFile = (name, text, min) => ({ name, text, size: text.length * 2, mod: ago(min) });
   const memory = {
-    dir: "~/.collie", loaded: 5200, budget: 8192, dreaming: false, last_dream: ago(60 * 9), next_dream: later(60 * 15), dreams: [
-      { name: "2026-11-18.md", text: "从 fix-flaky-test 里记下了分页测试的坑，写进 shop-api.md；合并了两条重复的笔记\n\n- shop-api.md：同一秒内的订单按 created_at 排序不稳定，要加 id 兜底\n- agents.md：Codex 在 devbox 上跑 shop-api 的测试更稳\n- 你更喜欢先在 devbox 上跑测试，再在 Mac 上看界面（inferred）" },
+    dir: "~/.collie/router", loaded: 1850, up_front: 1420, messages_size: 430, budget: 10240, dream_at: "04:00", dreaming: false, last_dream: ago(60 * 9), next_dream: later(60 * 15),
+    dreams: [
+      { name: "2026-11-18.md", size: 420, text: "从 fix-flaky-test 里记下了分页测试的坑，写进 shop-api.md；合并了两条重复的笔记\n可做成 skill：订单库只读巡检\n\n- shop-api.md：同一秒内的订单按 created_at 排序不稳定，要加 id 兜底\n- agents.md：Codex 在 devbox 上跑 shop-api 的测试更稳\n- 你更喜欢先在 devbox 上跑测试，再在 Mac 上看界面（inferred）" },
+    ],
+    skills: [
+      {
+        slug: "collie-resume-sidebar",
+        scope: "router",
+        name: "collie-resume-sidebar",
+        description: "当用户指定已有侧栏会话继续工作，或要求核验续派任务是否接单完成时使用。",
+        text: "---\nname: collie-resume-sidebar\ndescription: 当用户指定已有侧栏会话继续工作，或要求核验续派任务是否接单完成时使用。\n---\n\n# 续派到原侧栏会话\n\n1. 先用 `collie list` 与 `collie show` 核对原会话上下文纯净度。\n2. 确认无误后通过 `collie send` 续派并校验回执。\n",
+        body: "# 续派到原侧栏会话\n\n1. 先用 `collie list` 与 `collie show` 核对原会话上下文纯净度。\n2. 确认无误后通过 `collie send` 续派并校验回执。",
+        size: 380,
+        mod: ago(120),
+      },
     ],
     files: [
-      memFile("instructions.md", "# 指令\n- 发布说明用中文，每条一句话\n- 跑测试优先用 devbox，界面相关的活放 macbook\n- 动生产数据库前先问我", 60 * 24),
+      memFile("instructions.md", "# Instructions from the human\n发布说明用中文，每条一句话\n跑测试优先用 devbox，界面相关的活放 macbook。见 notes/shop-api.md\n(inferred) 解释方案时先给流程图，再给实测数字对比\n动生产数据库前先问我", 60 * 24),
       memFile("tasks/v1.4-release.md", "# v1.4 发布\n- [x] 发布说明\n- [ ] 分页测试修复（fix-flaky-test）\n- [ ] 开 PR", 6),
-      memFile("notes/index.md", "# 笔记索引\n- shop-api.md：订单服务，怎么跑测试、分页的坑\n- shop-web.md：前端，怎么起、发布说明放哪\n- agents.md：哪个 agent 在哪台电脑上好用\n- machines.md：devbox 和 macbook 各装了什么", 60 * 30),
+      memFile("notes/index.md", "# Notes\nshop-api.md — 订单服务，怎么跑测试、分页的坑\nshop-web.md — 前端，怎么起、发布说明放哪\nagents.md — 哪个 agent 在哪台电脑上好用\nmachines.md — devbox 和 macbook 各装了什么", 60 * 30),
       memFile("notes/shop-api.md", "# shop-api\n- 仓库 ~/code/shop-api（devbox），Go 1.25，测试 `make test`\n- 分页测试偶发失败：同一秒内的订单按 `created_at` 排序不稳定，排序要加 `id` 兜底（fix-flaky-test 查出来的）\n- 测试数据库用 docker 起，`make db`；跑完 `make db-down`\n- CI 只跑 `./internal/...`（截至 11-18）", 60 * 9),
       memFile("notes/shop-web.md", "# shop-web\n- 仓库 ~/code/shop-web（macbook），Vite + React，`pnpm dev`\n- 发布说明写在 CHANGELOG.md，按「需要注意 / 改动」两段", 60 * 30),
       memFile("notes/agents.md", "# agent 经验\n- Codex 在 devbox 上跑 shop-api 的测试更稳，Claude 偶尔会改错测试本身\n- 界面相关的活给 macbook 上的 Claude\n- macbook 上没装 Antigravity", 60 * 9),

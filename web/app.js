@@ -887,7 +887,7 @@
     else if (hPath === "#/file") { next = "file"; id = (hQuery?.get("path") || "") + "@" + (hQuery?.get("machine") || ""); }
     else if (hPath === "#/collie") next = "collie";
     else if (hPath === "#/trace" || hPath.startsWith("#/trace/")) { next = "trace"; }
-    else if (hPath === "#/memory" || hPath.startsWith("#/memory/")) { next = "memory"; subTab = hPath.slice(9); if (["active", "notes", "archive"].includes(subTab)) { memTab = subTab; store.set("memTab", subTab); } }
+    else if (hPath === "#/memory" || hPath.startsWith("#/memory/")) { next = "memory"; subTab = hPath.slice(9); if (["active", "notes", "skills", "archive"].includes(subTab)) { memTab = subTab; store.set("memTab", subTab); } }
     else if (hPath === "#/timers") next = "timers";
     else if (hPath === "#/hooks") next = "hooks";
     else if (hPath === "#/settings" || hPath.startsWith("#/settings/")) { next = "settings"; subTab = hPath.slice(11); if (subTab === "collie" || subTab === "local") { settingsTab = subTab; store.set("settingsTab", subTab); } }
@@ -2026,10 +2026,51 @@
 
   // ───────────────────────────── panel views (执行轨迹 / 长期记忆 / 定时任务 / 外部触发 / 设置)
   let traceFilter = store.get("traceFilter", "all"); // "all" | "running" | "attn" | "done"
-  let memTab = store.get("memTab", "active");       // "active" | "notes" | "archive"
+  let memTab = store.get("memTab", "active");       // "active" | "notes" | "skills" | "archive"
+  if (!["active", "notes", "skills", "archive"].includes(memTab)) memTab = "active";
+  let memArchOpen = store.get("memArchOpen", true);
+  let memSelNote = "";
+  let memSelSkill = "";
+  let memCreatingNote = false;
+  let memCreatingSkill = false;
+  let memArchiveFilter = "";
+  let memLastData = null;
   let settingsTab = store.get("settingsTab", "collie"); // "collie" | "local"
   const expandedTraceCards = new Set();
   let autoTimer;
+
+  function memTabBadges(r) {
+    if (!r) return {};
+    const files = r.files || [];
+    const upFront = typeof r.up_front === "number" ? r.up_front : (r.loaded || 0);
+    const notesN = files.filter((f) => f.name.startsWith("notes/") && f.name !== "notes/index.md").length;
+    const skillsN = (r.skills || []).length;
+    const archN = (r.dreams?.length || 0) + files.filter((f) => f.name.startsWith("tasks/done/")).length;
+    return {
+      active: kb(upFront),
+      notes: notesN ? String(notesN) : "",
+      skills: skillsN ? String(skillsN) : "",
+      archive: archN ? String(archN) : "",
+    };
+  }
+
+  function renderPanelTabs(which = view, memData = memLastData) {
+    const meta = PANEL_META[which];
+    const tabsBar = $("#panel-tabs-bar"), tabsEl = $("#panel-tabs");
+    if (!tabsBar || !tabsEl) return;
+    if (meta?.tabs) {
+      const cur = meta.cur();
+      const badges = which === "memory" ? memTabBadges(memData) : {};
+      tabsBar.hidden = false;
+      tabsEl.innerHTML = meta.tabs().map(([k, l]) => {
+        const b = badges[k] ? `<span class="tab-cnt">${esc(badges[k])}</span>` : "";
+        return `<button type="button" data-tab="${k}" class="${k === cur ? "on" : ""}">${esc(l)}${b}</button>`;
+      }).join("");
+    } else {
+      tabsBar.hidden = true;
+      tabsEl.innerHTML = "";
+    }
+  }
 
   const PANEL_META = {
     trace: {
@@ -2039,10 +2080,10 @@
     },
     memory: {
       name: "长期记忆",
-      sub: "Collie 在新会话中自动继承的长期指令、进行中任务与经验笔记",
-      tabs: () => [["active", "指令与在途任务"], ["notes", "经验笔记"], ["archive", "做梦整理与归档"]],
+      sub: "Hub 权威托管 · 跨电脑自动同步的长期指令、按需经验库、自建 Skill 与做梦记录",
+      tabs: () => [["active", "核心预载"], ["notes", "经验笔记"], ["skills", "自建技能"], ["archive", "做梦与归档"]],
       cur: () => memTab,
-      set: (t) => { memTab = t; store.set("memTab", t); },
+      set: (t) => { memTab = t; store.set("memTab", t); memEditing = false; memCreatingNote = false; memCreatingSkill = false; },
     },
     timers: {
       name: "定时任务",
@@ -2075,25 +2116,25 @@
     const meta = PANEL_META[which];
     if (!meta) return;
     memEditing = false;
+    memCreatingNote = false;
+    memCreatingSkill = false;
+    const panelEl = $("#panel");
+    if (panelEl) panelEl.dataset.panelView = which;
     const body = $("#panel-body");
     body._memSig = "";
     body._traceSig = "";
     body._timerSig = "";
     $("#panel-name").textContent = meta.name;
     $("#panel-sub").textContent = meta.sub;
-    const tabsBar = $("#panel-tabs-bar"), tabsEl = $("#panel-tabs");
-    if (meta.tabs) {
-      const cur = meta.cur();
-      tabsBar.hidden = false;
-      tabsEl.innerHTML = meta.tabs().map(([k, l]) => `<button type="button" data-tab="${k}" class="${k === cur ? "on" : ""}">${l}</button>`).join("");
-    } else {
-      tabsBar.hidden = true;
-      tabsEl.innerHTML = "";
-    }
+    renderPanelTabs(which);
     clearInterval(autoTimer);
     loadPanel(which);
     if (which === "trace") autoTimer = setInterval(() => loadPanel("trace"), 3500);
-    if (which === "memory") autoTimer = setInterval(() => { if (!memEditing) loadPanel("memory"); }, 5000);
+    if (which === "memory") autoTimer = setInterval(() => {
+      if (!memEditing && !memCreatingNote && !memCreatingSkill && !document.activeElement?.closest?.(".mem-arch-search")) {
+        loadPanel("memory");
+      }
+    }, 5000);
     if (which === "timers") autoTimer = setInterval(() => {
       const f = $("#timer-form");
       if (!document.activeElement?.closest?.("#timer-form") && !f?.text?.value?.trim() && !(pickOpen && f?.contains(pickOpen))) loadPanel("timers");
@@ -2117,14 +2158,16 @@
         }
       } else if (which === "memory") {
         const r = await api("/api/super/memory");
-        if (view !== "memory" || memEditing) return;
-        const sig = memTab + "|" + JSON.stringify(r) + sup.workers.map((w) => w.name + ":" + workerStatus(w)).join();
+        if (view !== "memory" || memEditing || memCreatingNote || memCreatingSkill) return;
+        memLastData = r;
+        renderPanelTabs("memory", r);
+        const sig = [memTab, memArchOpen, memSelNote, memSelSkill, memArchiveFilter, JSON.stringify(r), sup.workers.map((w) => w.name + ":" + workerStatus(w)).join()].join("|");
         if (sig !== body._memSig) {
-          const open = new Set([...body.querySelectorAll("details[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
+          const open = new Set([...body.querySelectorAll("details.mem-fold[open]")].map((d) => d.dataset.path || d.querySelector("summary")?.textContent));
           const first = !body._memSig;
           body._memSig = sig;
           body.innerHTML = memoryHTML(r, memTab);
-          if (!first) body.querySelectorAll("details").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
+          if (!first) body.querySelectorAll("details.mem-fold").forEach((d) => d.open = open.has(d.dataset.path || d.querySelector("summary")?.textContent));
         }
       } else if (which === "timers") {
         const r = await api("/api/super/timers");
@@ -2349,19 +2392,54 @@
   };
   function memoryHTML(r, tab = "active") {
     const files = r.files || [];
+    const skills = r.skills || [];
     const by = (f) => files.filter(f);
-    const upFront = typeof r.up_front === "number" ? r.up_front : r.loaded;
+    const upFront = typeof r.up_front === "number" ? r.up_front : (r.loaded || 0);
     const msgSize = typeof r.messages_size === "number" ? r.messages_size : Math.max(0, (r.loaded || 0) - (upFront || 0));
-    const over = upFront > r.budget;
-    const pct = Math.min(100, Math.max(2, Math.round(((upFront || 0) / Math.max(1, r.budget || 10240)) * 100)));
+    const budget = Math.max(1, r.budget || 10240);
+    const over = upFront > budget;
+    const bd = r.breakdown || {};
+    const insB = bd.instructions ?? (files.find((f) => f.name === "instructions.md")?.size || 0);
+    const idxB = bd.index ?? (files.find((f) => f.name === "notes/index.md")?.size || 0);
+    const tskB = bd.tasks ?? files.filter((f) => /^tasks\/[^/]+\.md$/.test(f.name)).reduce((s, f) => s + (f.size || 0), 0);
+    const segPct = (b) => Math.min(100, Math.max(b > 0 ? 1.5 : 0, (b / budget) * 100)).toFixed(1);
+
+    const ins = by((f) => f.name === "instructions.md");
+    const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
+    const topicNotes = by((f) => f.name.startsWith("notes/") && f.name !== "notes/index.md").sort((a, b) => a.name.localeCompare(b.name));
+    const indexFile = files.find((f) => f.name === "notes/index.md");
+    const done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
+    const msgs = by((f) => f.name === "messages.md");
+    const legacy = by((f) => f.legacy);
+    const sharedSkillsN = skills.filter((s) => s.scope === "shared").length;
+    const routerSkillsN = skills.length - sharedSkillsN;
+
+    const dreamClock = r.dream_at && r.dream_at !== "off" ? `每日 ${r.dream_at}` : "自动计划已关闭";
     const dreamSub = r.dreaming
       ? `<b>正在回顾近期对话并整合记忆…</b> 整理完成后自动恢复，期间发来的消息会安全排队。`
-      : `上次整理：<b>${r.last_dream ? dayTime(r.last_dream) : "尚未执行"}</b> · 下次计划：<b>${r.next_dream ? dayTime(r.next_dream) : "已关闭"}</b>`;
-    const firstLine = (t, dflt) => t.split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
+      : `上次整理：<b>${r.last_dream ? dayTime(r.last_dream) : "尚未执行"}</b> · 下次计划：<b>${r.next_dream ? dayTime(r.next_dream) : dreamClock}</b>`;
+    const firstLine = (t, dflt) => String(t || "").split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/^[>*\-\s]+/, "").replace(/`|\*\*/g, "").trim()).find(Boolean) || dflt;
+    const titleFromMd = (t, fallback) => {
+      const h = String(t || "").split("\n").map((l) => l.trim()).find((l) => /^#+\s+/.test(l));
+      return h ? h.replace(/^#+\s+/, "").trim() : fallback;
+    };
+
+    // Parse notes/index.md lines (`foo.md — summary` or `- foo.md: summary`) for quick descriptions
+    const indexDescMap = new Map();
+    if (indexFile?.text) {
+      for (const raw of indexFile.text.split("\n")) {
+        const m = /^\s*(?:[-*]\s*)?`?([a-zA-Z0-9._/-]+\.md)`?\s*(?:—|–|-|:|：)\s*(.+)$/.exec(raw.trim());
+        if (m) {
+          const k = m[1].startsWith("notes/") ? m[1] : "notes/" + m[1];
+          indexDescMap.set(k, m[2].trim());
+        }
+      }
+    }
+
     const crew = (f) => {
       const latest = new Map();
       for (const w of sup.workers) if (!latest.has(w.name) || new Date(w.created_at) > new Date(latest.get(w.name).created_at)) latest.set(w.name, w);
-      const ws = [...latest.values()].filter((w) => new RegExp(`(^|[^\\w-])${w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(f.text));
+      const ws = [...latest.values()].filter((w) => new RegExp(`(^|[^\\w-])${w.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(f.text || ""));
       if (!ws.length) return "";
       return `<span class="mem-crew">${ws.map((w) => {
         const pane = !w.ended && paneOf(w.name), past = !pane && workerHist(w.name, w.created_at);
@@ -2371,69 +2449,446 @@
       }).join("")}</span>`;
     };
     const emptyIcon = '<svg viewBox="0 0 24 24"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v18H7.5A2.5 2.5 0 0 0 5 22.5z"/><path d="M9 7h6M9 11h6"/></svg>';
+    const skillIcon = '<svg viewBox="0 0 24 24"><path d="M12 2l2.4 5.2L20 9.6l-5.6 2.4L12 17.2 9.6 12 4 9.6l5.6-2.4z"/><path d="M19 15l1.1 2.4L22.5 18.5 20.1 19.6 19 22l-1.1-2.4-2.4-1.1 2.4-1.1z"/></svg>';
+
+    const renderInstructionsMD = (fOrTxt) => {
+      const txt = typeof fOrTxt === "string" ? fOrTxt : fOrTxt?.text;
+      const lines = String(txt || "").split("\n").map((l) => l.trim()).filter((l) => l && !/^#/.test(l));
+      if (!lines.length) return "";
+      const items = lines.map((l) => {
+        const stripped = l.replace(/^[-*]\s+/, "");
+        const inferred = /^\(inferred\)\s*/i.test(stripped) || /（inferred）|\(inferred\)\s*$/i.test(stripped);
+        const clean = stripped.replace(/^\(inferred\)\s*/i, "").replace(/\s*(?:（inferred）|\(inferred\))\s*$/i, "");
+        const badge = inferred ? `<span class="mem-infer-tag" title="做梦会话从多次对话习惯中自动归纳出的隐性偏好">做梦推断</span>` : `<span class="mem-rule-dot"></span>`;
+        // Make `见 notes/xxx.md` clickable without touching HTML attributes!
+        const rendered = md(clean)
+          .replace(/<code>notes\/([a-zA-Z0-9._-]+\.md)<\/code>/g, (_, fn) =>
+            `<button type="button" class="mem-inline-note" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">notes/${esc(fn)} ↗</button>`)
+          .replace(/(^|>|[\s（(，、：:])notes\/([a-zA-Z0-9._-]+\.md)/g, (_, pre, fn) =>
+            `${pre}<button type="button" class="mem-inline-note" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">notes/${esc(fn)} ↗</button>`);
+        return `<li class="mem-rule-li ${inferred ? "is-inferred" : ""}">${badge}<div class="mem-rule-txt">${rendered}</div></li>`;
+      }).join("");
+      return `<ul class="mem-rule-list">${items}</ul>`;
+    };
+
     const card = (f, o = {}) => {
       const edit = !f.legacy && o.edit !== false;
       const seedOnly = isDefaultSeedText(f.name, f.text);
       const summarySub = seedOnly ? (o.seedHint || "尚未写入内容") : (o.sub ?? firstLine(f.text, ""));
+      const customBody = !seedOnly && o.customView ? o.customView(f) : "";
       const viewBody = seedOnly
         ? `<div class="mem-seed-empty"><span>${esc(o.seedDesc || "尚未填写内容。点击右侧按钮即可直接编辑保存。")}</span>${edit ? `<button type="button" class="btn small" data-act="mem-edit">立即填写</button>` : ""}</div>`
-        : md(f.text);
+        : (customBody || md(f.text));
+      const delBtn = o.deletable ? `<button type="button" class="btn small danger-ghost" data-act="mem-del" data-del-path="${esc(f.name)}">删除</button>` : "";
       return `<details class="mem-fold" ${o.open ? "open" : ""} data-path="${esc(f.name)}"><summary>
           <span class="mono mem-name">${esc(o.label || f.name)}</span><span class="grow">${esc(summarySub)}</span><span class="muted mono" style="font-size:11.5px">${kb(f.size)}</span></summary>
         <div class="mem-body msg assistant" data-view>${viewBody}</div>
-        ${edit ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small" data-act="mem-edit">编辑</button></div>
-        <form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
-          <div class="form-actions"><span class="muted grow">保存后在 Collie 下次读取或开启新会话时立即生效。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存修改</button></div></form>` : ""}
+        ${edit || o.deletable ? `<div class="mem-tools">${o.crew ? crew(f) : ""}<span class="muted grow">${esc(dayTime(f.mod))} 更新</span>${delBtn}${edit ? `<button type="button" class="btn small" data-act="mem-edit">编辑</button>` : ""}</div>` : ""}
+        ${edit ? `<form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea>
+          <div class="form-actions"><span class="muted grow">保存至 Hub 主本并自动同步到运行中的 Collie 节点。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存修改</button></div></form>` : ""}
       </details>`;
     };
-    const group = (title, note, list, o = {}) => list.length || o.always ? `<h4 class="mem-h">${title}<span class="muted">${note}</span></h4>
-      <div class="card">${list.length ? list.map((f, i) => card(f, typeof o.card === "function" ? o.card(f, i) : o.card || {})).join("") : `<div class="empty-state"><span class="es-ico">${emptyIcon}</span><b>${esc(o.empty || "暂无记录")}</b>${o.emptySub ? `<span>${esc(o.emptySub)}</span>` : ""}</div>`}</div>` : "";
-    const ins = by((f) => f.name === "instructions.md");
-    const tasks = by((f) => /^tasks\/[^/]+\.md$/.test(f.name));
-    const notes = by((f) => f.name.startsWith("notes/")).sort((a, b) => (a.name === "notes/index.md" ? -1 : b.name === "notes/index.md" ? 1 : a.name.localeCompare(b.name)));
-    const done = by((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
-    const msgs = by((f) => f.name === "messages.md");
-    const legacy = by((f) => f.legacy);
 
-    const statusBento = `<div class="mem-bento">
+    // ── Top Overview Bento + Collapsible Architecture Schematic ──
+    const overviewHTML = `<div class="mem-bento">
+      <div class="mem-stat-card">
+        <div class="mem-stat-top">
+          <span class="mem-stat-label"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 15h4M7 10h10"/></svg>新会话启动预载预算</span>
+          <span class="badge ${over ? "candidate" : "ok"}">${over ? "超出建议值 · 建议做梦精简" : "精简健康"}</span>
+        </div>
+        <div class="mem-meter-row">
+          <span>${kb(upFront)} <small>/ 建议上限 ${kb(budget)}</small></span>
+          <small class="mono" title="所有记忆与自建 Skill 均以 Hub 为权威主本">${esc(tilde(r.dir))}（Hub 主本）</small>
+        </div>
+        <div class="mem-meter seg ${over ? "warn" : ""}">
+          <i class="seg-ins" style="width:${segPct(insB)}%" title="长期指令 ${kb(insB)}"></i>
+          <i class="seg-idx" style="width:${segPct(idxB)}%" title="笔记目录索引 ${kb(idxB)}"></i>
+          <i class="seg-tsk" style="width:${segPct(tskB)}%" title="在途任务 ${kb(tskB)}"></i>
+        </div>
+        <div class="mem-legend">
+          <span><b class="lg-dot ins"></b>指令 ${kb(insB)}</span>
+          <span><b class="lg-dot idx"></b>目录 ${kb(idxB)}</span>
+          <span><b class="lg-dot tsk"></b>在途 ${kb(tskB)}</span>
+          ${msgSize > 0 ? `<span class="lg-sep">·</span><span title="Hub 自动维护最近 10 条回复，独立于 10 KB 预算">另附最近回复 ${kb(msgSize)}</span>` : ""}
+        </div>
+      </div>
       <div class="mem-stat-card">
         <div class="mem-stat-top">
           <span class="mem-stat-label"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>夜间记忆整合（做梦）</span>
           <button type="button" class="btn small" data-act="dream-now" ${r.dreaming ? "disabled" : ""}>${r.dreaming ? "整理中…" : "立即整理记忆"}</button>
         </div>
         <div class="mem-stat-sub">${dreamSub}</div>
-      </div>
-      <div class="mem-stat-card">
-        <div class="mem-stat-top">
-          <span class="mem-stat-label"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 15h4M7 10h10"/></svg>新会话预载上下文预算</span>
-          <span class="badge ${over ? "candidate" : "ok"}">${over ? "超出建议值" : "健康"}</span>
+        <div class="mem-legend">
+          <span>专题笔记 <b>${topicNotes.length}</b> 篇</span>
+          <span class="lg-sep">·</span>
+          <span>Hub 托管 Skill <b>${skills.length}</b> 个${skills.length ? `（共享 ${sharedSkillsN} / 中枢 ${routerSkillsN}）` : ""}</span>
+          <span class="lg-sep">·</span>
+          <span>已归档任务 <b>${done.length}</b> 项</span>
         </div>
-        <div class="mem-meter-row"><span>${kb(upFront)} <small>/ 建议上限 ${kb(r.budget)}${msgSize > 0 ? ` · 另附对话摘录 ${kb(msgSize)}` : ""}</small></span><small class="mono">${esc(tilde(r.dir))}/memory</small></div>
-        <div class="mem-meter ${over ? "warn" : ""}"><i style="width:${pct}%"></i></div>
       </div>
-    </div>`;
+    </div>
 
-    if (tab === "notes") {
-      return `<div class="panel-banner">
-          <span class="pb-ico">${emptyIcon}</span>
-          <div class="pb-body">
-            <div class="pb-title">按需检索的经验知识库</div>
-            <div class="pb-desc">沉淀各台电脑环境差异、常用仓库结构与排障经验。新会话启动仅加载目录索引 <code>index.md</code>，具体笔记按需读取，零多余 Token 开销。</div>
+    <details class="mem-arch-card" ${memArchOpen ? "open" : ""} data-mem-arch>
+      <summary class="mem-arch-head">
+        <span class="mem-arch-title">
+          <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>
+          <b>记忆与 Skill 是怎么产生、存储和加载的？</b>
+          <span class="muted">（并非全靠做梦生成：平时实时记录 + 凌晨做梦精炼 + 三级按需加载）</span>
+        </span>
+        <span class="mem-arch-cue">${memArchOpen ? "收起示意图" : "展开示意图"}</span>
+      </summary>
+      <div class="mem-arch-diagram">
+        <div class="ma-col">
+          <div class="ma-col-hd"><span class="ma-step">1</span>写入与精炼来源（谁在写？）</div>
+          <div class="ma-box">
+            <div class="ma-box-t"><span class="ma-dot live"></span>日常对话与派活 · 实时写入</div>
+            <p>你说的新偏好当场记入 <code>instructions.md</code>；跨轮派活建立 <code>tasks/*.md</code>；子任务跑通的命令与路径沉淀进 <code>notes/*.md</code>；<b>Hub 程序自动实时覆写</b>最近 10 条回复到 <code>messages.md</code>。</p>
           </div>
-          <span class="pb-pill">${notes.length} 篇笔记</span>
+          <div class="ma-box">
+            <div class="ma-box-t"><span class="ma-dot dream"></span>凌晨 ${esc(r.dream_at && r.dream_at !== "off" ? r.dream_at : "手动")} 做梦 · 离线精炼</div>
+            <p>独立启动 <code>collie-dream</code> 回顾近期聊天与推理日志：<b>去重压缩指令</b>（归纳隐性习惯标为 <code>做梦推断</code>）、结项移入 <code>tasks/done/</code>、合并笔记，并将重复 ≥3 次的成熟流程提议固化为 <b>Skill</b>。</p>
+          </div>
         </div>
-        ${group("经验笔记", "index.md 为总索引，其余文件按主题归类", notes, { always: true, empty: "还没有沉淀的经验笔记", emptySub: "Collie 在跨机排障或执行长期任务后，会自动将值得复用的机器与项目经验归纳到这里。", card: (f) => ({ open: f.name === "notes/index.md", label: f.name.replace(/^notes\//, ""), seedHint: "目录索引为空", seedDesc: "当前还没有经验笔记条目。Collie 沉淀新笔记后会自动维护此目录索引，你也可以手动编写。" }) })}`;
+
+        <div class="ma-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+
+        <div class="ma-col">
+          <div class="ma-col-hd"><span class="ma-step">2</span>Hub 权威三层存储（点击可直达）</div>
+          <button type="button" class="ma-tier tier-must ${tab === "active" ? "is-cur" : ""}" data-mem-jump="active">
+            <div class="ma-tier-top"><b>第一层 · 启动必读层</b><span class="mem-load-pill must">每次全量预载 · ≤10 KB</span></div>
+            <div class="ma-tier-files"><code>instructions.md</code> · <code>notes/index.md</code>(仅目录) · <code>tasks/*.md</code> · <code>messages.md</code> · <code>Skill 触发描述</code></div>
+          </button>
+          <div class="ma-tier-pair">
+            <button type="button" class="ma-tier tier-lazy ${tab === "notes" ? "is-cur" : ""}" data-mem-jump="notes">
+              <div class="ma-tier-top"><b>第二层 A · 经验笔记</b><span class="mem-load-pill lazy">按需 Read · 0 闲置开销</span></div>
+              <div class="ma-tier-files"><code>notes/&lt;专题&gt;.md</code> 完整排障与项目路径（${topicNotes.length} 篇）</div>
+            </button>
+            <button type="button" class="ma-tier tier-lazy ${tab === "skills" ? "is-cur" : ""}" data-mem-jump="skills">
+              <div class="ma-tier-top"><b>第二层 B · 自建技能</b><span class="mem-load-pill lazy">命中触发 · 多机同步</span></div>
+              <div class="ma-tier-files"><code>skills/&lt;名&gt;/SKILL.md</code> 操作手册（${skills.length} 个）</div>
+            </button>
+          </div>
+          <button type="button" class="ma-tier tier-cold ${tab === "archive" ? "is-cur" : ""}" data-mem-jump="archive">
+            <div class="ma-tier-top"><b>第三层 · 冷归档留痕</b><span class="mem-load-pill cold">不注入新会话</span></div>
+            <div class="ma-tier-files"><code>dreams/*.md</code> 做梦日记 · <code>tasks/done/*.md</code> 已结项任务（共 ${done.length + (r.dreams?.length || 0)} 条）</div>
+          </button>
+        </div>
+
+        <div class="ma-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+
+        <div class="ma-col">
+          <div class="ma-col-hd"><span class="ma-step">3</span>新会话分级注入（怎么加载？）</div>
+          <div class="ma-box">
+            <div class="ma-box-t"><span class="ma-dot brain"></span>Collie 主脑新会话唤醒</div>
+            <p>开场仅注入 <b>第一层（当前仅 ${kb(upFront)}）</b>，秒级掌握全局偏好与笔记目录；聊到具体项目（如 SFD-Net）时，再顺着 <code>index.md</code> 指针按需 <code>Read</code> 对应专题笔记或展开中枢 Skill。</p>
+          </div>
+          <div class="ma-box">
+            <div class="ma-box-t"><span class="ma-dot sync"></span>Mac / Win 各电脑会话共享</div>
+            <p>存于 Hub 的<b>全节点共享 Skill</b> 会自动下发到所有在线电脑的 <code>~/.agents/skills</code>、<code>~/.codex/skills</code> 与 <code>~/.claude/skills</code>，任何独立会话或 Worker 开箱即用。</p>
+          </div>
+        </div>
+      </div>
+    </details>`;
+
+    // ── TAB 1: 核心预载 (active) ──
+    if (tab === "active") {
+      const indexInteractiveView = (f) => {
+        const rows = String(f.text || "").split("\n").map((l) => l.trim()).filter((l) => l && !/^#/.test(l));
+        if (!rows.length) return md(f.text);
+        return `<div class="mem-idx-list">${rows.map((line) => {
+          const m = /^(?:[-*]\s*)?`?([a-zA-Z0-9._/-]+\.md)`?\s*(?:—|–|-|:|：)\s*(.+)$/.exec(line);
+          if (!m) return `<div class="mem-idx-row"><span class="mem-idx-desc">${esc(line)}</span></div>`;
+          const fn = m[1].replace(/^notes\//, "");
+          return `<div class="mem-idx-row">
+            <button type="button" class="mono mem-idx-link" data-mem-jump="notes" data-mem-note="notes/${esc(fn)}">${esc(fn)} ↗</button>
+            <span class="mem-idx-desc">${esc(m[2])}</span>
+          </div>`;
+        }).join("")}</div>`;
+      };
+
+      return `${overviewHTML}
+        ${legacy.length ? `<div class="mem-sec"><div class="mem-sec-hd"><h4>旧版单文件记忆</h4><span class="mem-load-pill must">待下次做梦自动迁移</span></div><div class="card">${legacy.map((f) => card(f, { open: true })).join("")}</div></div>` : ""}
+
+        <div class="mem-sec">
+          <div class="mem-sec-hd">
+            <h4>长期指令与偏好</h4>
+            <span class="mem-load-pill must">每次新会话必读</span>
+            <span class="mem-src-pill">你/Collie 实时写入 · 做梦逐条压缩去重</span>
+          </div>
+          <div class="card">${ins.length
+            ? ins.map((f) => card(f, {
+                open: true,
+                label: "instructions.md",
+                sub: "全局行为准则、汇报格式与项目默认路由习惯",
+                customView: renderInstructionsMD,
+                seedHint: "尚未配置偏好指令",
+                seedDesc: "尚未写入长期偏好指令。点击右侧可写下你的常用习惯（如默认语言、代码规范、某类事件的处理原则），Collie 每次开启新会话都会自动遵守。",
+              })).join("")
+            : `<div class="mem-compact-empty">尚未写入长期偏好指令</div>`}</div>
+        </div>
+
+        <div class="mem-sec">
+          <div class="mem-sec-hd">
+            <h4>进行中的跨轮任务</h4>
+            <span class="mem-load-pill must">每次新会话必读</span>
+            <span class="mem-src-pill">派活时自动建立 · 完结后归入 tasks/done/</span>
+          </div>
+          ${tasks.length
+            ? `<div class="card">${tasks.map((f) => card(f, { label: f.name.replace(/^tasks\//, ""), open: true, crew: true, deletable: true })).join("")}</div>`
+            : `<div class="mem-compact-empty"><span class="dot idle"></span><span>当前没有未完结的跨轮在途任务 · 新会话此项预载开销 <b>0 B</b></span></div>`}
+        </div>
+
+        <div class="mem-sec">
+          <div class="mem-sec-hd">
+            <h4>经验笔记总目录</h4>
+            <span class="mem-load-pill must">每次新会话仅读此目录（不预载笔记正文）</span>
+            <span class="mem-src-pill">点击文件名可直达专题笔记</span>
+          </div>
+          <div class="card">${indexFile
+            ? card(indexFile, {
+                open: true,
+                label: "notes/index.md",
+                sub: `共索引 ${topicNotes.length} 篇按需读取的专题经验笔记`,
+                customView: indexInteractiveView,
+                seedHint: "目录索引为空",
+                seedDesc: "当前还没有经验笔记条目。Collie 沉淀新笔记后会自动维护此目录索引。",
+              })
+            : `<div class="mem-compact-empty">暂无目录索引</div>`}</div>
+        </div>
+
+        ${msgs.length ? `<div class="mem-sec">
+          <div class="mem-sec-hd">
+            <h4>最近回复快照</h4>
+            <span class="mem-load-pill must">每次新会话必读（独立计费）</span>
+            <span class="mem-src-pill">Hub 自动实时覆写最近 10 条正式回复，防止换会话重复汇报</span>
+          </div>
+          <div class="card">${msgs.map((f) => card(f, { edit: false, open: false, label: "messages.md", sub: "点击展开查看 Hub 最近自动记录的 10 条主对话回复摘录" })).join("")}</div>
+        </div>` : ""}`;
     }
-    if (tab === "archive") {
-      return `${statusBento}
-        ${r.dreams?.length ? `<h4 class="mem-h">做梦整理日记<span class="muted">每晚自动回顾对话、去重合并记忆的记录</span></h4><div class="card">${r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""}><summary><span class="mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span></summary><div class="mem-body msg assistant">${md(d.text)}</div></details>`).join("")}</div>` : `<h4 class="mem-h">做梦整理日记<span class="muted">每晚自动回顾对话、去重合并记忆的记录</span></h4><div class="card"><div class="empty-state"><span class="es-ico"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></span><b>还没有做梦整理记录</b><span>当天有新对话时，Collie 会在凌晨自动回顾对话并精简长期记忆，也可点击上方「立即整理记忆」手动触发。</span></div></div>`}
-        ${group("已结项任务归档", "已完成或中止的历史任务记录", done, { always: true, empty: "暂无已归档任务", emptySub: "跨轮跟进的任务在结项后会自动移入此处留档备查。", card: (f) => ({ label: f.name.replace(/^tasks\/done\//, ""), crew: true }) })}
-        ${group("最近回复摘录", "Hub 自动记录最近 10 条，新会话每次必读，避免重复汇报", msgs, { card: { edit: false, label: "messages.md" } })}`;
+
+    // ── TAB 2: 经验笔记 (notes — 2-column Master-Detail Reader) ──
+    if (tab === "notes") {
+      const allNotes = [...topicNotes, ...(indexFile ? [indexFile] : [])];
+      if (!memSelNote || !allNotes.some((f) => f.name === memSelNote)) {
+        memSelNote = (topicNotes[0] || indexFile || {}).name || "";
+      }
+      const curNote = allNotes.find((f) => f.name === memSelNote) || null;
+      const newNoteCard = memCreatingNote ? `<form class="card mem-create-card" id="mem-new-note-form">
+        <div class="mem-create-hd"><b>新建专题经验笔记</b><span class="muted">保存至 Hub <code>memory/notes/</code> 并自动登记到 <code>index.md</code></span></div>
+        <div class="mem-create-grid">
+          <label><span>文件名标识</span><input type="text" name="slug" placeholder="例如：sfd-deploy 或 gpu-cluster" required pattern="[a-zA-Z0-9._-]+" spellcheck="false"></label>
+          <label><span>一句话目录摘要（写入 index.md）</span><input type="text" name="summary" placeholder="例如：板端 TensorRT 导出命令与常见报错" required></label>
+        </div>
+        <label class="mem-create-full"><span>笔记正文（Markdown）</span><textarea name="text" rows="8" spellcheck="false" placeholder="# 标题\n\n记录可复用的仓库路径、验证命令与踩坑经验…"></textarea></label>
+        <div class="form-actions"><span class="grow"></span><button type="button" class="btn small" data-act="mem-cancel-new-note">取消</button><button class="btn primary small" type="submit">创建笔记</button></div>
+      </form>` : "";
+
+      const splitHTML = allNotes.length ? `<div class="mem-split">
+        <aside class="mem-nav">
+          ${topicNotes.map((f) => {
+            const short = f.name.replace(/^notes\//, "");
+            const desc = indexDescMap.get(f.name) || firstLine(f.text, short);
+            const on = curNote?.name === f.name;
+            return `<button type="button" class="mem-nav-item ${on ? "on" : ""}" data-sel-note="${esc(f.name)}">
+              <div class="mni-top"><span class="mni-title">${esc(titleFromMd(f.text, short.replace(/\.md$/, "")))}</span><span class="mni-size mono">${kb(f.size)}</span></div>
+              <div class="mni-file mono">${esc(short)}</div>
+              <div class="mni-sub">${esc(desc)}</div>
+            </button>`;
+          }).join("")}
+          ${indexFile ? `<button type="button" class="mem-nav-item is-index ${curNote?.name === "notes/index.md" ? "on" : ""}" data-sel-note="notes/index.md">
+            <div class="mni-top"><span class="mni-title">目录总索引</span><span class="mem-load-pill must">启动预载</span></div>
+            <div class="mni-file mono">index.md · ${kb(indexFile.size)}</div>
+          </button>` : ""}
+        </aside>
+        <div class="card mem-reader" ${curNote ? `data-path="${esc(curNote.name)}"` : ""}>
+          ${curNote ? `
+            <div class="mem-reader-hd">
+              <div class="mrh-main">
+                <div class="mrh-title-row">
+                  <h3>${esc(titleFromMd(curNote.text, curNote.name.replace(/^notes\//, "")))}</h3>
+                  <span class="mono mem-name">${esc(curNote.name)}</span>
+                  <span class="mem-load-pill ${curNote.name === "notes/index.md" ? "must" : "lazy"}">${curNote.name === "notes/index.md" ? "每次新会话必读" : "按需读取 · 0 启动开销"}</span>
+                </div>
+                <div class="mrh-meta muted">${esc(dayTime(curNote.mod))} 更新 · ${kb(curNote.size)}${indexDescMap.get(curNote.name) ? ` · 目录摘要：${esc(indexDescMap.get(curNote.name))}` : ""}</div>
+              </div>
+              <div class="mrh-acts">
+                ${curNote.name !== "notes/index.md" ? `<button type="button" class="btn small danger-ghost" data-act="mem-del" data-del-path="${esc(curNote.name)}">删除</button>` : ""}
+                <button type="button" class="btn small" data-act="mem-edit">编辑</button>
+              </div>
+            </div>
+            <div class="mem-body msg assistant" data-view>${isDefaultSeedText(curNote.name, curNote.text) ? `<div class="mem-seed-empty"><span>尚未填写内容。</span><button type="button" class="btn small" data-act="mem-edit">立即填写</button></div>` : md(curNote.text)}</div>
+            <div class="mem-tools">${crew(curNote)}<span class="muted grow">存储于 Hub <code>${esc(tilde(r.dir))}/memory/${esc(curNote.name)}</code></span></div>
+            <form class="mem-edit" hidden>
+              <textarea name="text" spellcheck="false">${esc(curNote.text)}</textarea>
+              <div class="form-actions"><span class="muted grow">保存后同步至 Hub 与运行中的 Collie 节点。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存修改</button></div>
+            </form>
+          ` : ""}
+        </div>
+      </div>` : `<div class="card"><div class="empty-state"><span class="es-ico">${emptyIcon}</span><b>还没有沉淀的专题经验笔记</b><span>Collie 在跨机排障或执行项目任务后，会自动将值得复用的机器与项目经验归纳到这里。</span></div></div>`;
+
+      return `${overviewHTML}
+        <div class="mem-sec">
+          <div class="mem-sec-hd">
+            <h4>按需检索的专题经验笔记</h4>
+            <span class="mem-load-pill lazy">命中话题时才 Read · 不占 10 KB 启动预算</span>
+            <span class="grow"></span>
+            ${!memCreatingNote ? `<button type="button" class="btn small" data-act="mem-new-note">+ 新建笔记</button>` : ""}
+          </div>
+          ${newNoteCard}
+          ${splitHTML}
+        </div>`;
     }
-    return `${statusBento}
-      ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
-      ${group("长期指令", "你的长期习惯、偏好与自动化规则，每次新会话必读", ins, { card: { open: true, label: "instructions.md", sub: "", seedHint: "尚未配置偏好指令", seedDesc: "尚未写入长期偏好指令。点击右侧可写下你的常用习惯（如默认语言、代码规范、某类事件的处理原则），Collie 每次开启新会话都会自动遵守。" }, always: true, empty: "还没有长期指令" })}
-      ${group("进行中的任务", "跨多轮跟进的在途事项，每次新会话必读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "当前没有跨会话跟进中的在途任务", emptySub: "当你向 Collie 交代需要多步跟进或跨电脑协作的复杂事项时，它会自动在此建立任务跟踪卡。" })}`;
+
+    // ── TAB 3: 自建技能 (skills — Hub-backed & Multi-Node Synced Skill Studio) ──
+    if (tab === "skills") {
+      if (!memSelSkill || !skills.some((s) => s.slug === memSelSkill)) {
+        memSelSkill = skills[0]?.slug || "";
+      }
+      const curSkill = skills.find((s) => s.slug === memSelSkill) || null;
+      const onlineNodeNames = (state.machines || []).filter((m) => m.online && !isAgentlessHub(m)).map((m) => m.name || m.id);
+      const syncTargetDesc = onlineNodeNames.length ? onlineNodeNames.join(" · ") : "所有接入的在线电脑";
+
+      const newSkillCard = memCreatingSkill ? `<form class="card mem-create-card" id="mem-new-skill-form">
+        <div class="mem-create-hd"><b>在 Hub 上新建 Skill</b><span class="muted">主本保存在 Hub，支持下发至各台电脑或仅供 Collie 中枢自用</span></div>
+        <div class="mem-create-grid">
+          <label><span>技能目录标识（slug）</span><input type="text" name="slug" placeholder="例如：sfd-router-eval" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*" spellcheck="false"></label>
+          <label><span>生效与分发范围</span>
+            <select name="scope">
+              <option value="shared">全节点共享 — 存 Hub 并自动同步至 ${esc(syncTargetDesc)} 所有 Agent</option>
+              <option value="router">Collie 中枢自用 — 存 Hub，仅供 Collie 主脑调度与核验使用</option>
+            </select>
+          </label>
+        </div>
+        <label class="mem-create-full"><span>当什么场景下触发此 Skill？（description，启动时仅加载这一句）</span><input type="text" name="description" placeholder="例如：当需要在同一测试名单上对照选域准确率与分割 Dice 时使用。" required></label>
+        <label class="mem-create-full"><span>技能执行步骤正文（Markdown，命中后按需加载）</span><textarea name="body" rows="9" spellcheck="false" placeholder="# 技能标题\n\n1. 第一步…\n2. 第二步…"></textarea></label>
+        <div class="form-actions"><span class="grow"></span><button type="button" class="btn small" data-act="skill-cancel-new">取消</button><button class="btn primary small" type="submit">保存并同步 Skill</button></div>
+      </form>` : "";
+
+      const skillsBody = skills.length ? `<div class="mem-split">
+        <aside class="mem-nav">
+          ${skills.map((sk) => {
+            const on = curSkill?.slug === sk.slug;
+            const isShared = sk.scope === "shared";
+            return `<button type="button" class="mem-nav-item ${on ? "on" : ""}" data-sel-skill="${esc(sk.slug)}">
+              <div class="mni-top">
+                <span class="mni-title">${esc(sk.name || sk.slug)}</span>
+                <span class="mem-scope-pill ${isShared ? "shared" : "router"}">${isShared ? "全节点共享" : "中枢自用"}</span>
+              </div>
+              <div class="mni-file mono">${esc(sk.slug)} · ${kb(sk.size)}</div>
+              <div class="mni-sub">${esc(sk.description || firstLine(sk.body, "暂无触发说明"))}</div>
+            </button>`;
+          }).join("")}
+        </aside>
+        <div class="card mem-reader" ${curSkill ? `data-skill-slug="${esc(curSkill.slug)}" data-skill-scope="${esc(curSkill.scope)}"` : ""}>
+          ${curSkill ? (() => {
+            const isShared = curSkill.scope === "shared";
+            const hubRel = isShared ? `skills/${curSkill.slug}/SKILL.md` : `.agents/skills/${curSkill.slug}/SKILL.md`;
+            const distText = isShared
+              ? `Hub 主本 + 自动分发至 ${syncTargetDesc} 的 ~/.agents/skills · ~/.codex/skills · ~/.claude/skills`
+              : `Hub 主本 + 同步至 Collie 主脑目录 (.agents/skills & .claude/skills)，不污染普通项目会话`;
+            return `
+              <div class="mem-reader-hd">
+                <div class="mrh-main">
+                  <div class="mrh-title-row">
+                    <h3>${esc(curSkill.name || curSkill.slug)}</h3>
+                    <span class="mono mem-name">${esc(curSkill.slug)}</span>
+                    <span class="mem-scope-pill ${isShared ? "shared" : "router"}">${isShared ? "全节点共享 Skill" : "Collie 中枢自用 Skill"}</span>
+                  </div>
+                  <div class="mrh-meta muted">${esc(dayTime(curSkill.mod))} 更新 · ${kb(curSkill.size)}${curSkill.extra_files?.length ? ` · 含附属文件 ${curSkill.extra_files.length} 个` : ""}</div>
+                </div>
+                <div class="mrh-acts">
+                  <button type="button" class="btn small" data-act="skill-toggle-scope" data-slug="${esc(curSkill.slug)}" data-cur-scope="${esc(curSkill.scope)}" title="${isShared ? "改为仅供 Collie 主脑自用，并从各电脑全局目录移除" : "改为全节点共享，自动下发到 Mac / Win 各台电脑供所有会话调用"}">${isShared ? "转为中枢自用" : "设为全节点共享"}</button>
+                  <button type="button" class="btn small danger-ghost" data-act="skill-del" data-slug="${esc(curSkill.slug)}">删除</button>
+                  <button type="button" class="btn small" data-act="skill-edit">编辑 SKILL.md</button>
+                </div>
+              </div>
+              <div data-view>
+                <div class="mem-skill-meta-bar">
+                  <div class="msmb-row"><span class="msmb-k">启动预载触发条件</span><span class="msmb-v">${esc(curSkill.description || "（未在 YAML frontmatter 中填写 description）")}</span></div>
+                  <div class="msmb-row"><span class="msmb-k">Hub 存储与同步</span><span class="msmb-v mono">${esc(tilde(r.dir))}/${esc(hubRel)}</span><span class="msmb-note">${esc(distText)}</span></div>
+                  ${curSkill.extra_files?.length ? `<div class="msmb-row"><span class="msmb-k">同目录附属脚本</span><span class="msmb-v mono">${curSkill.extra_files.map((x) => esc(x)).join(" , ")}</span></div>` : ""}
+                </div>
+                <div class="mem-body msg assistant">${md(curSkill.body || curSkill.text)}</div>
+              </div>
+              <form class="mem-edit mem-skill-edit" hidden>
+                <div class="mem-skill-edit-bar">
+                  <label><span>生效范围：</span>
+                    <select name="scope">
+                      <option value="shared" ${isShared ? "selected" : ""}>全节点共享（自动下发至各台在线电脑）</option>
+                      <option value="router" ${!isShared ? "selected" : ""}>Collie 中枢自用（仅 Collie 主脑加载）</option>
+                    </select>
+                  </label>
+                  <span class="muted">保持顶部 <code>---</code> YAML 块中的 <code>name</code> 与 <code>description</code> 简洁明确</span>
+                </div>
+                <textarea name="text" spellcheck="false">${esc(curSkill.text)}</textarea>
+                <div class="form-actions"><span class="muted grow">保存后立即写入 Hub 主本并自动同步对应电脑节点。</span><button type="button" class="btn small" data-act="skill-cancel-edit">取消</button><button class="btn primary small" type="submit">保存并同步</button></div>
+              </form>
+            `;
+          })() : ""}
+        </div>
+      </div>` : `<div class="card"><div class="empty-state">
+        <span class="es-ico">${skillIcon}</span>
+        <b>还没有已创建的 Hub 托管 Skill</b>
+        <span>当做梦整理发现某套操作在 3 次以上任务中反复固定出现时，Collie 会在主对话里向你提议一键生成 Skill；你也可以点击右上方「+ 新建 Skill」直接创建。</span>
+      </div></div>`;
+
+      return `${overviewHTML}
+        <div class="mem-sec">
+          <div class="mem-sec-hd">
+            <h4>Collie 自建与托管的 Skill</h4>
+            <span class="mem-load-pill lazy">Hub 权威存储 · 启动仅读触发条件，命中才读正文</span>
+            <span class="grow"></span>
+            ${!memCreatingSkill ? `<button type="button" class="btn small" data-act="skill-new">+ 新建 Skill</button>` : ""}
+          </div>
+          ${newSkillCard}
+          ${skillsBody}
+        </div>`;
+    }
+
+    // ── TAB 4: 做梦与归档 (archive) ──
+    const q = memArchiveFilter.trim().toLowerCase();
+    const filteredDone = q ? done.filter((f) => f.name.toLowerCase().includes(q) || f.text.toLowerCase().includes(q)) : done;
+
+    const renderDreamBody = (txt) => {
+      const lines = String(txt || "").split("\n");
+      const chips = [];
+      const rest = [];
+      for (const l of lines) {
+        const clean = l.trim().replace(/^[>*\-\s]+/, "");
+        if (clean.startsWith("可做成 skill：")) {
+          chips.push(`<div class="mem-dream-callout suggest"><b>提议新建 Skill：</b><span>${esc(clean.slice("可做成 skill：".length))}</span></div>`);
+        } else if (clean.startsWith("可改进 skill：")) {
+          chips.push(`<div class="mem-dream-callout fix"><b>提议优化 Skill：</b><span>${esc(clean.slice("可改进 skill：".length))}</span></div>`);
+        } else {
+          rest.push(l);
+        }
+      }
+      return chips.join("") + md(rest.join("\n"));
+    };
+
+    return `${overviewHTML}
+      <div class="mem-sec">
+        <div class="mem-sec-hd">
+          <h4>夜间做梦整理日记</h4>
+          <span class="mem-load-pill cold">冷归档 · 不注入新会话</span>
+          <span class="mem-src-pill">每次做梦自动生成，记录精简了哪些规则与发现的模式</span>
+        </div>
+        <div class="card">${r.dreams?.length
+          ? r.dreams.map((d, i) => `<details class="mem-fold" ${i === 0 ? "open" : ""} data-path="dreams/${esc(d.name)}"><summary><span class="mono mem-name">${esc(d.name.replace(/\.md$/, ""))}</span><span class="grow">${esc(firstLine(d.text, d.name))}</span><span class="muted mono" style="font-size:11.5px">${kb(d.size || d.text?.length || 0)}</span></summary><div class="mem-body msg assistant">${renderDreamBody(d.text)}</div></details>`).join("")
+          : `<div class="empty-state"><span class="es-ico"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></span><b>还没有做梦整理记录</b><span>当天有新对话时，Collie 会在凌晨自动回顾对话并精简长期记忆，也可点击上方「立即整理记忆」手动触发。</span></div>`}</div>
+      </div>
+
+      <div class="mem-sec">
+        <div class="mem-sec-hd">
+          <h4>已结项任务归档（${done.length}）</h4>
+          <span class="mem-load-pill cold">冷归档 · 不占任何会话预算</span>
+          <span class="grow"></span>
+          ${done.length > 4 ? `<input type="search" class="mem-arch-search" data-mem-arch-filter placeholder="搜索历史归档任务…" value="${esc(memArchiveFilter)}">` : ""}
+        </div>
+        <div class="card" id="mem-done-list">${filteredDone.length
+          ? filteredDone.map((f) => card(f, { label: f.name.replace(/^tasks\/done\//, ""), crew: true, deletable: true })).join("")
+          : `<div class="mem-compact-empty">${q ? "没有匹配该关键词的归档任务" : "暂无已归档的历史任务"}</div>`}</div>
+      </div>`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -2832,6 +3287,47 @@
         toast(`已添加：${describeSpec(r.spec)}`);
         $("#panel-body")._timerSig = "";
         loadPanel("timers");
+      } else if (f.id === "mem-new-note-form") {
+        let slug = f.slug.value.trim().replace(/\.md$/i, "");
+        if (!slug) { toast("请填写文件名标识", "attn"); return; }
+        const notePath = "notes/" + slug + ".md";
+        const summary = f.summary.value.trim();
+        const text = f.text.value.trim() || `# ${slug}\n`;
+        await api("/api/super/memory", { body: { path: notePath, text } });
+        if (summary && memLastData?.files) {
+          const idxFile = memLastData.files.find((x) => x.name === "notes/index.md");
+          const existingIdx = String(idxFile?.text || "# Notes\n").trimEnd();
+          if (!existingIdx.includes(slug + ".md")) {
+            await api("/api/super/memory", { body: { path: "notes/index.md", text: `${existingIdx}\n${slug}.md — ${summary}\n` } });
+          }
+        }
+        memCreatingNote = false;
+        memSelNote = notePath;
+        $("#panel-body")._memSig = "";
+        toast("已创建笔记并同步目录索引");
+        loadPanel("memory");
+      } else if (f.id === "mem-new-skill-form") {
+        const slug = f.slug.value.trim();
+        const scope = f.scope.value;
+        const desc = f.description.value.trim();
+        const mdBody = f.body.value.trim() || `# ${slug}\n`;
+        const fullText = `---\nname: ${slug}\ndescription: ${desc}\n---\n\n${mdBody}\n`;
+        await api("/api/super/skills", { body: { slug, scope, text: fullText } });
+        memCreatingSkill = false;
+        memSelSkill = slug;
+        $("#panel-body")._memSig = "";
+        toast(scope === "shared" ? "已保存到 Hub 并同步至在线电脑" : "已保存到 Hub（Collie 中枢自用）");
+        loadPanel("memory");
+      } else if (f.classList.contains("mem-skill-edit")) {
+        const box = f.closest("[data-skill-slug]");
+        const slug = box.dataset.skillSlug;
+        const prevScope = box.dataset.skillScope;
+        const scope = f.scope.value;
+        await api("/api/super/skills", { body: { slug, prev_slug: slug, scope, prev_scope: prevScope, text: f.text.value } });
+        memEditing = false;
+        $("#panel-body")._memSig = "";
+        toast(scope === "shared" ? "已更新 Skill 并同步至各电脑节点" : "已更新 Skill（中枢自用）");
+        loadPanel("memory");
       } else if (f.classList.contains("mem-edit")) {
         await api("/api/super/memory", { body: { path: f.closest("[data-path]").dataset.path, text: f.text.value } });
         memEditing = false;
@@ -2864,7 +3360,64 @@
     } catch (err) { toast(err.message, "attn"); }
   });
 
+  $("#panel-body").addEventListener("toggle", (e) => {
+    if (e.target?.matches?.("details[data-mem-arch]")) {
+      memArchOpen = e.target.open;
+      store.set("memArchOpen", memArchOpen);
+      const cue = e.target.querySelector(".mem-arch-cue");
+      if (cue) cue.textContent = memArchOpen ? "收起示意图" : "展开示意图";
+    }
+  }, true);
+
+  $("#panel-body").addEventListener("input", (e) => {
+    if (e.target?.matches?.("[data-mem-arch-filter]")) {
+      memArchiveFilter = e.target.value;
+      if (memLastData && view === "memory" && memTab === "archive") {
+        const q = memArchiveFilter.trim().toLowerCase();
+        const done = (memLastData.files || []).filter((f) => f.name.startsWith("tasks/done/")).sort((a, b) => new Date(b.mod) - new Date(a.mod));
+        const filtered = q ? done.filter((f) => f.name.toLowerCase().includes(q) || f.text.toLowerCase().includes(q)) : done;
+        const listEl = $("#mem-done-list");
+        if (listEl) {
+          listEl.innerHTML = filtered.length
+            ? filtered.map((f) => `<details class="mem-fold" data-path="${esc(f.name)}"><summary><span class="mono mem-name">${esc(f.name.replace(/^tasks\/done\//, ""))}</span><span class="grow">${esc(String(f.text || "").split("\n").filter((l) => !/^\s*#/.test(l)).map((l) => l.trim()).find(Boolean) || "")}</span><span class="muted mono" style="font-size:11.5px">${kb(f.size)}</span></summary><div class="mem-body msg assistant" data-view>${md(f.text)}</div><div class="mem-tools"><span class="muted grow">${esc(dayTime(f.mod))} 更新</span><button type="button" class="btn small danger-ghost" data-act="mem-del" data-del-path="${esc(f.name)}">删除</button><button type="button" class="btn small" data-act="mem-edit">编辑</button></div><form class="mem-edit" hidden><textarea name="text" spellcheck="false">${esc(f.text)}</textarea><div class="form-actions"><span class="muted grow">保存至 Hub 主本。</span><button type="button" class="btn small" data-act="mem-cancel">取消</button><button class="btn primary small">保存修改</button></div></form></details>`).join("")
+            : `<div class="mem-compact-empty">没有匹配该关键词的归档任务</div>`;
+        }
+      }
+    }
+  });
+
   $("#panel-body").addEventListener("click", async (e) => {
+    const jumpEl = e.target.closest("[data-mem-jump]");
+    if (jumpEl) {
+      const targetTab = jumpEl.dataset.memJump;
+      if (jumpEl.dataset.memNote) memSelNote = jumpEl.dataset.memNote;
+      if (jumpEl.dataset.memSkill) memSelSkill = jumpEl.dataset.memSkill;
+      PANEL_META.memory.set(targetTab);
+      renderPanelTabs("memory", memLastData);
+      $("#panel-body")._memSig = "";
+      if (memLastData) {
+        $("#panel-body").innerHTML = memoryHTML(memLastData, memTab);
+      } else {
+        loadPanel("memory");
+      }
+      return;
+    }
+    const selNoteEl = e.target.closest("[data-sel-note]");
+    if (selNoteEl) {
+      memSelNote = selNoteEl.dataset.selNote;
+      memEditing = false;
+      $("#panel-body")._memSig = "";
+      if (memLastData) $("#panel-body").innerHTML = memoryHTML(memLastData, memTab);
+      return;
+    }
+    const selSkillEl = e.target.closest("[data-sel-skill]");
+    if (selSkillEl) {
+      memSelSkill = selSkillEl.dataset.selSkill;
+      memEditing = false;
+      $("#panel-body")._memSig = "";
+      if (memLastData) $("#panel-body").innerHTML = memoryHTML(memLastData, memTab);
+      return;
+    }
     // Execution trajectory filter cards & task text expand/collapse
     const tf = e.target.closest("[data-tf]")?.dataset.tf;
     if (tf) {
@@ -2920,11 +3473,89 @@
     if (t.dataset.act === "mem-edit" || t.dataset.act === "mem-cancel") {
       const box = t.closest("[data-path]");
       memEditing = t.dataset.act === "mem-edit";
-      box.querySelector(".mem-edit").hidden = !memEditing;
-      box.querySelector("[data-view]").hidden = memEditing;
-      box.querySelector(".mem-tools").hidden = memEditing;
-      if (memEditing) box.querySelector("textarea").focus();
+      const formEl = box.querySelector(".mem-edit");
+      const viewEl = box.querySelector("[data-view]");
+      const toolsEl = box.querySelector(".mem-tools");
+      if (formEl) formEl.hidden = !memEditing;
+      if (viewEl) viewEl.hidden = memEditing;
+      if (toolsEl) toolsEl.hidden = memEditing;
+      if (memEditing) formEl?.querySelector("textarea")?.focus();
       else { $("#panel-body")._memSig = ""; loadPanel("memory"); }
+      return;
+    }
+    if (t.dataset.act === "mem-new-note" || t.dataset.act === "mem-cancel-new-note") {
+      memCreatingNote = t.dataset.act === "mem-new-note";
+      $("#panel-body")._memSig = "";
+      if (memLastData) $("#panel-body").innerHTML = memoryHTML(memLastData, memTab);
+      if (memCreatingNote) $("#mem-new-note-form input[name=slug]")?.focus();
+      return;
+    }
+    if (t.dataset.act === "mem-del") {
+      const p = t.dataset.delPath;
+      if (!p || !confirm(`确认删除记忆文件「${p}」？`)) return;
+      try {
+        await api("/api/super/memory/delete", { body: { path: p } });
+        if (p.startsWith("notes/") && memLastData?.files) {
+          const short = p.replace(/^notes\//, "");
+          const idxFile = memLastData.files.find((x) => x.name === "notes/index.md");
+          if (idxFile?.text && idxFile.text.includes(short)) {
+            const nextLines = idxFile.text.split("\n").filter((l) => !l.includes(short)).join("\n");
+            await api("/api/super/memory", { body: { path: "notes/index.md", text: nextLines } });
+          }
+        }
+        if (memSelNote === p) memSelNote = "";
+        $("#panel-body")._memSig = "";
+        toast("已删除");
+        loadPanel("memory");
+      } catch (err) { toast(err.message, "attn"); }
+      return;
+    }
+    if (t.dataset.act === "skill-new" || t.dataset.act === "skill-cancel-new") {
+      memCreatingSkill = t.dataset.act === "skill-new";
+      $("#panel-body")._memSig = "";
+      if (memLastData) $("#panel-body").innerHTML = memoryHTML(memLastData, memTab);
+      if (memCreatingSkill) $("#mem-new-skill-form input[name=slug]")?.focus();
+      return;
+    }
+    if (t.dataset.act === "skill-edit" || t.dataset.act === "skill-cancel-edit") {
+      const box = t.closest("[data-skill-slug]");
+      memEditing = t.dataset.act === "skill-edit";
+      const formEl = box?.querySelector(".mem-skill-edit");
+      const viewEl = box?.querySelector("[data-view]");
+      if (formEl) formEl.hidden = !memEditing;
+      if (viewEl) viewEl.hidden = memEditing;
+      if (memEditing) formEl?.querySelector("textarea")?.focus();
+      else { $("#panel-body")._memSig = ""; loadPanel("memory"); }
+      return;
+    }
+    if (t.dataset.act === "skill-toggle-scope") {
+      const slug = t.dataset.slug;
+      const curScope = t.dataset.curScope;
+      const nextScope = curScope === "shared" ? "router" : "shared";
+      const sk = (memLastData?.skills || []).find((x) => x.slug === slug);
+      if (!sk) return;
+      const tip = nextScope === "shared"
+        ? `将「${sk.name || slug}」切换为【全节点共享】？\n切换后，Hub 会自动把它下发同步到所有在线电脑（Mac / Win）供任意会话直接调用。`
+        : `将「${sk.name || slug}」切换为【Collie 中枢自用】？\n切换后，仅 Collie 主脑自己加载该技能，并从各电脑全局目录移除托管副本。`;
+      if (!confirm(tip)) return;
+      try {
+        await api("/api/super/skills", { body: { slug, prev_slug: slug, scope: nextScope, prev_scope: curScope, text: sk.text } });
+        $("#panel-body")._memSig = "";
+        toast(nextScope === "shared" ? "已切换为全节点共享并下发同步" : "已切换为 Collie 中枢自用");
+        loadPanel("memory");
+      } catch (err) { toast(err.message, "attn"); }
+      return;
+    }
+    if (t.dataset.act === "skill-del") {
+      const slug = t.dataset.slug;
+      if (!slug || !confirm(`确认从 Hub 删除技能「${slug}」（并清理已同步到各节点的托管副本）？`)) return;
+      try {
+        await api("/api/super/skills/delete", { body: { slug } });
+        if (memSelSkill === slug) memSelSkill = "";
+        $("#panel-body")._memSig = "";
+        toast("已删除该 Skill");
+        loadPanel("memory");
+      } catch (err) { toast(err.message, "attn"); }
       return;
     }
     if (t.dataset.act === "test-notify") {

@@ -32,14 +32,43 @@ func readMemFile(path string) *memFile {
 func (s *Server) superMemory(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	dir := sp.routerDir()
+	memDir := sp.memDir()
+	fileSize := func(p string) int64 {
+		if fi, err := os.Stat(p); err == nil {
+			return fi.Size()
+		}
+		return 0
+	}
+	var tasksBytes int64
+	for _, t := range sp.openTasks() {
+		tasksBytes += fileSize(filepath.Join(memDir, "tasks", t))
+	}
+	insBytes := fileSize(filepath.Join(memDir, "instructions.md"))
+	idxBytes := fileSize(filepath.Join(memDir, "notes", "index.md"))
+	legBytes := fileSize(filepath.Join(dir, "memory.md"))
+	msgBytes := sp.messagesSize()
+
+	dreamAt := sp.settings().DreamAt
+	if dreamAt == "" {
+		dreamAt = "04:00"
+	}
 	out := map[string]any{
 		"dir":           s.tilde(dir),
 		"files":         sp.memFiles(),
+		"skills":        sp.listSkills(),
 		"loaded":        sp.loadedSize(),
 		"up_front":      sp.upFrontSize(),
-		"messages_size": sp.messagesSize(),
-		"budget":        memoryBudget,
-		"dreaming":      sp.dreaming(),
+		"messages_size": msgBytes,
+		"breakdown": map[string]int64{
+			"instructions": insBytes,
+			"index":        idxBytes,
+			"tasks":        tasksBytes,
+			"messages":     msgBytes,
+			"legacy":       legBytes,
+		},
+		"budget":     memoryBudget,
+		"dreaming":   sp.dreaming(),
+		"dream_at":   dreamAt,
 		"next_dream": nil,
 		"last_dream": nil,
 	}
@@ -90,6 +119,29 @@ func (s *Server) superSaveMemory(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	s.sup.syncActiveRouterNodeAsync()
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) superDeleteMemory(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	rel := filepath.ToSlash(filepath.Clean(filepath.FromSlash(body.Path)))
+	if !strings.HasSuffix(rel, ".md") || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "..") ||
+		rel == "instructions.md" || rel == "notes/index.md" || rel == "messages.md" {
+		writeJSON(w, 400, map[string]any{"error": "核心预载文件不可删除，仅支持删除普通笔记或任务记录"})
+		return
+	}
+	p := filepath.Join(s.sup.memDir(), filepath.FromSlash(rel))
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		fail(w, err)
+		return
+	}
+	s.sup.syncActiveRouterNodeAsync()
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

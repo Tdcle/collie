@@ -690,8 +690,11 @@ tidies memory/. Its journal is in dreams/.
 - Once a worker's result is passed on and nothing more is coming for it (a one-off job,
   a check, a trial run), ` + "`stop`" + ` it, so the list holds only work in flight. Keep it while
   a next step waits on it: the human's answer, a fix to make, a follow-up.
-- When the human agrees a how-to should become a skill, spawn a worker to write it where
-  they said (their own skills, or a project's repo), then cut the note down to a pointer.
+- When the human agrees a how-to should become a skill:
+  - For a personal / general skill ("做成个人 skill", usable by any agent on any computer): write ` + "`skills/<slug>/SKILL.md`" + ` in this router directory — the hub stores it canonically and automatically distributes it to ` + "`~/.agents/skills`" + `, ` + "`~/.codex/skills`" + `, and ` + "`~/.claude/skills`" + ` across every connected computer.
+  - For a Collie-only orchestration skill (only for your own session dispatching/verification): write ` + "`.agents/skills/<slug>/SKILL.md`" + ` in this router directory (backed up to the hub).
+  - For a project repository skill ("放到项目仓库"): spawn a worker to write it in that repo's ` + "`.agents/skills/<slug>/SKILL.md`" + `.
+  Then cut the note in ` + "`memory/notes/`" + ` down to a pointer to the skill.
 - A report starting "BLOCKED:" is a worker that can't go on: it says what it needs, what
   it tried and what it would pick. Unblock it yourself when you can (` + "`send`" + ` it the
   answer, the path, another approach; or respawn on another agent, model or computer);

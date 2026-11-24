@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import vm from "node:vm";
 
-function runScenario(authed) {
+function runScenario(authed, initHash = "#/collie?quotas=1") {
   const listeners = new Map();
   const makeEl = (id = "") => {
     const el = {
@@ -52,11 +52,11 @@ function runScenario(authed) {
     navigator: { platform: "MacIntel", clipboard: { writeText: async () => {} } },
     localStorage: { getItem: () => null, setItem() {} },
     location: {
-      href: "https://101.200.80.58/#/collie?quotas=1",
+      href: "https://101.200.80.58/" + initHash,
       origin: "https://101.200.80.58",
       pathname: "/",
       search: "",
-      hash: "#/collie?quotas=1",
+      hash: initHash,
       hostname: "101.200.80.58",
       protocol: "https:",
       replace(h) { this.hash = h; },
@@ -91,6 +91,41 @@ function runScenario(authed) {
               id: "mac", name: "Mac", os: "darwin/arm64", online: true,
               agents: [{ kind: "codex", status: "ok", provider: "OpenAI", plan: "Pro Lite", reset_credits: 2, buckets: [{ id: "w", label: "每周额度", remaining_pct: 100 }] }],
             }],
+          }),
+        };
+      }
+      if (String(u).includes("/api/super/memory")) {
+        const now = new Date().toISOString();
+        return {
+          ok: true, status: 200, headers: { get: () => "" },
+          json: async () => ({
+            dir: "~/.collie/router",
+            loaded: 1850,
+            up_front: 1420,
+            messages_size: 430,
+            breakdown: { instructions: 920, index: 500, tasks: 0, messages: 430 },
+            budget: 10240,
+            dream_at: "04:00",
+            dreaming: false,
+            last_dream: now,
+            next_dream: now,
+            dreams: [{ name: "2026-11-24-0530.md", size: 620, text: "精简了常驻指令\n可做成 skill：侧栏原会话续派与核验" }],
+            skills: [{
+              slug: "collie-resume-sidebar",
+              scope: "router",
+              name: "collie-resume-sidebar",
+              description: "当用户明确指定已有侧栏会话继续工作时使用。",
+              text: "---\nname: collie-resume-sidebar\ndescription: 当用户明确指定已有侧栏会话继续工作时使用。\n---\n# 续派到原侧栏会话\n",
+              body: "# 续派到原侧栏会话",
+              size: 512,
+              mod: now,
+            }],
+            files: [
+              { name: "instructions.md", size: 920, mod: now, text: "SFD-Net 返修优先续接原会话。见 notes/sfd-net.md。\n(inferred) 解释方法时先用同一张图讲流程。" },
+              { name: "notes/index.md", size: 500, mod: now, text: "sfd-net.md — Windows 论文返修原会话与实验口径" },
+              { name: "notes/sfd-net.md", size: 2048, mod: now, text: "# SFD-Net 项目笔记\n\n详细数据与入口。" },
+              { name: "messages.md", size: 430, mod: now, text: "- 11-24 17:10 [chat:main] Hub 空间充足" },
+            ],
           }),
         };
       }
@@ -232,4 +267,19 @@ const cssText = fs.readFileSync("web/app.css", "utf8");
 if (/\.item\.active\s*>\s*\.dot[^{]*\{[^}]*opacity:\s*0/.test(cssText)) {
   throw new Error("Regression: active sidebar session item must NOT hide working spinner (.dot)!");
 }
-console.log("Frontend runtime smoke test passed (login + #/collie + CSV is-table + syntax highlight + smart link cards + active dot + pending --opt + quotas).");
+
+// 3. Memory & Skills Studio (#/memory) must render architecture diagram, inferred rule tags, and Hub Skills tab!
+const memView = runScenario(true, "#/memory");
+await new Promise((r) => setTimeout(r, 50));
+const memHTML = memView.getEl("#panel-body").innerHTML;
+if (!memHTML.includes("mem-arch-diagram") || !memHTML.includes("mem-infer-tag") || !memHTML.includes("data-mem-note=\"notes/sfd-net.md\"")) {
+  throw new Error("Expected #/memory active tab to render visual architecture diagram, inferred rule tag, and clickable note links");
+}
+for (const fn of (memView.listeners.get("#panel-body:click") || [])) {
+  await fn({ target: { closest: (s) => s === "[data-mem-jump]" ? { dataset: { memJump: "skills" } } : null } });
+}
+const skillsHTML = memView.getEl("#panel-body").innerHTML;
+if (!skillsHTML.includes("collie-resume-sidebar") || !skillsHTML.includes("Collie 中枢自用 Skill") || !skillsHTML.includes("续派到原侧栏会话")) {
+  throw new Error("Expected #/memory skills tab to render Hub-managed collie-resume-sidebar skill details");
+}
+console.log("Frontend runtime smoke test passed (login + #/collie + #/memory architecture & skills + CSV is-table + syntax highlight + smart link cards + active dot + pending --opt + quotas).");

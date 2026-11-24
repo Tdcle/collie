@@ -30,6 +30,12 @@ const memoryLayout = `memory/
   tasks/done/       finished or abandoned tasks, moved here with a last line on how they ended.
   messages.md       what you recently told the human, kept up to date by the hub. Read
                     every session, to build on what you already said.
+skills/
+  <slug>/SKILL.md   reusable cross-computer skills built by Collie: stored canonically on the
+                    hub and synced automatically to ~/.agents/skills, ~/.codex/skills, and
+                    ~/.claude/skills on every connected computer so any worker can use them.
+.agents/skills/
+  <slug>/SKILL.md   Collie-only orchestration skills (backed up to the hub, loaded only by you).
 Store only what can't be looked up again: pointers (paths, thread ids, URLs), not copies.`
 
 func (sp *Super) memDir() string { return filepath.Join(sp.routerDir(), "memory") }
@@ -39,6 +45,8 @@ func (sp *Super) ensureMemory() {
 	dir := sp.memDir()
 	os.MkdirAll(filepath.Join(dir, "notes"), 0o700)
 	os.MkdirAll(filepath.Join(dir, "tasks", "done"), 0o700)
+	os.MkdirAll(filepath.Join(sp.routerDir(), "skills"), 0o700)
+	os.MkdirAll(filepath.Join(sp.routerDir(), ".agents", "skills"), 0o700)
 	seed := map[string]string{
 		"instructions.md":  "# Instructions from the human\n",
 		"notes/index.md":   "# Notes\n\nOne line per file in this folder.\n",
@@ -176,7 +184,7 @@ func memoryRules(dir string) []string {
 	}
 	abs := "/" + strings.TrimPrefix(slashed, "/") // Claude Code writes absolute paths as //path
 	var r []string
-	for _, p := range []string{"memory/**", "dreams/**", "memory.md", "memory-archive.md"} {
+	for _, p := range []string{"memory/**", "dreams/**", "skills/**", ".agents/skills/**", ".claude/skills/**", "memory.md", "memory-archive.md"} {
 		r = append(r, "Read("+p+")", "Edit("+p+")", "Write("+p+")", "Read(/"+abs+"/"+p+")", "Edit(/"+abs+"/"+p+")", "Write(/"+abs+"/"+p+")")
 	}
 	r = append(r, "Read(dream/**)", "Read(/"+abs+"/dream/**)")

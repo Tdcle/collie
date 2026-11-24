@@ -122,7 +122,8 @@ func routerEditableRel(rel string) bool {
 	if rel == "memory/messages.md" {
 		return false
 	}
-	return strings.HasPrefix(rel, "memory/") || strings.HasPrefix(rel, "dreams/") || rel == "memory.md" || rel == "memory-archive.md"
+	return strings.HasPrefix(rel, "memory/") || strings.HasPrefix(rel, "dreams/") ||
+		rel == "memory.md" || rel == "memory-archive.md" || routerSkillPullRel(rel)
 }
 
 func (s *Server) nodeRouterDir() string {
@@ -162,10 +163,11 @@ func (s *Server) routerSync(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := applyRouterTree(dir, body.Files, []string{"memory", "dreams", "dream"}, nil); err != nil {
+	if err := applyRouterTree(dir, body.Files, []string{"memory", "dreams", "dream", "skills", ".agents/skills", ".claude/skills"}, nil); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
+	normalizeRouterSkills(dir)
 	writeJSON(w, 200, map[string]any{"ok": true, "dir": dir})
 }
 
@@ -188,8 +190,11 @@ func (sp *Super) routerBinOn(m *Machine) string {
 
 func (sp *Super) pushRouterToNode(ctx context.Context, machine string) (string, error) {
 	if machine == "" {
+		normalizeRouterSkills(sp.routerDir())
 		return sp.routerDir(), nil
 	}
+	sp.seedMissingSkillsFromNode(ctx, machine)
+	normalizeRouterSkills(sp.routerDir())
 	client, err := sp.s.herdr.Client(machine)
 	if err != nil {
 		return "", err
@@ -261,8 +266,10 @@ func (sp *Super) pullRouterFromNode(ctx context.Context, machine, kind, session,
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return ctxUsage{}, err
 	}
-	_ = applyRouterTree(sp.routerDir(), out.Files, []string{"memory", "dreams"}, routerEditableRel)
+	_ = applyRouterTree(sp.routerDir(), out.Files, []string{"memory", "dreams", "skills", ".agents/skills"}, routerEditableRel)
+	normalizeRouterSkills(sp.routerDir())
 	sp.writeMessages()
+	go sp.syncSharedSkillsAllNodes()
 	return out.Usage, nil
 }
 

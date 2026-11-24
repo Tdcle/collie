@@ -69,9 +69,10 @@ type Super struct {
 	panePrimed    map[string]bool
 	extWatch      map[string]extWatchSnap
 	extPrimed     map[string]bool
-	extSentAt     map[string]time.Time
-	sessionScanAt time.Time
-	quotaAlertAt  time.Time
+	extSentAt        map[string]time.Time
+	seededSkillNodes map[string]bool
+	sessionScanAt    time.Time
+	quotaAlertAt     time.Time
 }
 
 type extWatchSnap struct {
