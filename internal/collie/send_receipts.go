@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -36,6 +37,19 @@ type sendReceipt struct {
 	Preview string `json:"preview"`
 	Status  string `json:"status"`
 	Detail  string `json:"detail,omitempty"`
+}
+
+// "unrouted" has never been forwarded. "legacy" is a durable one-shot claim:
+// the old node has no way to distinguish a new request from a replay.
+func (v sendReceipt) write(w http.ResponseWriter) {
+	switch v.Status {
+	case "legacy":
+		v.Detail = firstNonEmpty(v.Detail, "older node: one send reserved; receiver receipt unavailable")
+		v.Status = "unconfirmed"
+	case "unrouted":
+		v.Status = "unconfirmed"
+	}
+	writeJSON(w, 200, v)
 }
 
 func sidebarTarget(target string) bool {
@@ -91,13 +105,18 @@ func (s *Server) sidebarReceipt(w http.ResponseWriter, r *http.Request) {
 		body.To = strings.TrimSpace(body.To)
 
 		local, machine := split(body.To)
-		if !sidebarTarget(body.To) || strings.Contains(local, "@") || body.To != join(local, machine) || (s.node && machine != "") || stripLeadingTriggerRef(body.Text) == "" {
-			writeJSON(w, 400, map[string]string{"error": "expected a sidebar session ID and nonempty text"})
+		validTarget := sidebarTarget(body.To) || (!s.node && nameRe.MatchString(body.To))
+		if !validTarget || strings.Contains(local, "@") || body.To != join(local, machine) || (s.node && machine != "") || strings.TrimSpace(body.Text) == "" {
+			writeJSON(w, 400, map[string]string{"error": "expected a worker or session ID and nonempty text"})
 			return
 		}
 		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(body.Text)))
-		res, err := s.receipts.Exec(`INSERT INTO send_receipts(id,target,digest,preview) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`,
-			id, body.To, hash, clip(oneLine(stripLeadingTriggerRef(body.Text)), 120))
+		status := "unconfirmed"
+		if machine != "" {
+			status = "unrouted"
+		}
+		res, err := s.receipts.Exec(`INSERT INTO send_receipts(id,target,digest,preview,status) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+			id, body.To, hash, clip(oneLine(stripLeadingTriggerRef(body.Text)), 120), status)
 		if err != nil {
 			fail(w, err)
 			return
@@ -122,37 +141,74 @@ func (s *Server) sidebarReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	local, machine := split(v.To)
-	if v.Status != "unconfirmed" || (machine == "" && !fresh) {
-		writeJSON(w, 200, v)
+	if (v.Status != "unconfirmed" && v.Status != "unrouted") || (machine == "" && !fresh) {
+		v.write(w)
 		return
 	}
 	if fresh && s.sup != nil {
 		s.sup.noteRouterStep("正在向会话 " + v.To + " 发送指令…")
 	}
 
-	if machine != "" {
-		body.To = local
-		remote, err := s.remoteReceipt(r.Context(), machine, r.Method, id, body)
+	before := v.Status
+	if machine == "" {
+		v.Status, v.Detail = s.submitSidebar(r.Context(), body)
+	} else {
+		if before == "unrouted" && r.Method != "PUT" {
+			v.write(w)
+			return
+		}
+		m, err := s.herdr.machine(machine)
 		if err != nil {
 			v.Detail = err.Error()
-			writeJSON(w, 200, v)
+			v.write(w)
 			return
 		}
-		if remote.ID != id || remote.To != local || remote.Hash != v.Hash {
-			v.Detail = "node receipt does not match this request"
-			writeJSON(w, 200, v)
+		if m.client == nil {
+			v.Detail = "node API unavailable"
+			v.write(w)
 			return
 		}
-		v.Status, v.Detail = remote.Status, remote.Detail
-		if v.Status == "unconfirmed" {
-			writeJSON(w, 200, v)
-			return
+		if before == "unrouted" {
+			route := "unconfirmed" // only the receipt endpoint may ever see this ID
+			if !m.sendReceipts {
+				route = "legacy"
+			}
+			res, err := s.receipts.Exec(`UPDATE send_receipts SET status=? WHERE id=? AND status='unrouted'`, route, id)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			n, _ := res.RowsAffected()
+			if n == 0 { // another caller chose the route and owns the first attempt
+				v.write(w)
+				return
+			}
+			before = route
 		}
-	} else {
-		v.Status, v.Detail = s.submitSidebar(r.Context(), body)
+		body.To = local
+		if before == "legacy" {
+			v.Status, v.Detail = legacyNodeSend(r.Context(), m.client, body)
+		} else {
+			remote, err := remoteReceipt(r.Context(), m.client, r.Method, id, body)
+			if err != nil {
+				v.Detail = err.Error()
+				v.write(w)
+				return
+			}
+			if remote.ID != id || remote.To != local || remote.Hash != v.Hash {
+				v.Detail = "node receipt does not match this request"
+				v.write(w)
+				return
+			}
+			v.Status, v.Detail = remote.Status, remote.Detail
+			if v.Status == "unconfirmed" {
+				v.write(w)
+				return
+			}
+		}
 	}
 
-	res, err := s.receipts.Exec(`UPDATE send_receipts SET status=?,detail=? WHERE id=? AND status='unconfirmed'`, v.Status, v.Detail, id)
+	res, err := s.receipts.Exec(`UPDATE send_receipts SET status=?,detail=? WHERE id=? AND status=?`, v.Status, v.Detail, id, before)
 	if err != nil {
 		fail(w, err)
 		return
@@ -164,13 +220,13 @@ func (s *Server) sidebarReceipt(w http.ResponseWriter, r *http.Request) {
 		}
 		s.sup.recordSidebarDispatch(v.To, v.Preview)
 	}
-	writeJSON(w, 200, v)
+	v.write(w)
 }
 
 // Finish the receiver's attempt even if the CLI or tunnel disconnects.
 func (s *Server) submitSidebar(parent context.Context, body sidebarSend) (string, string) {
 	// Preserve worker-first resolution for a local name that is also a sidebar ID.
-	if s.sup != nil && nameRe.MatchString(body.To) {
+	if s.sup != nil {
 		if trigger := s.sup.queueWorker(body.To, body.Text, body.Thread); trigger != "" {
 			if err := s.sup.flush(); err != nil {
 				return "unconfirmed", err.Error()
@@ -178,9 +234,15 @@ func (s *Server) submitSidebar(parent context.Context, body sidebarSend) (string
 			return "queued", trigger
 		}
 	}
+	if !sidebarTarget(body.To) {
+		return "rejected", "no running worker or session named " + body.To
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
 	defer cancel()
 	text := stripLeadingTriggerRef(body.Text)
+	if text == "" {
+		return "rejected", "empty prompt"
+	}
 	if strings.Contains(body.To, ":") {
 		if err := s.herdr.prompt(ctx, body.To, text, false); err != nil {
 			return "unconfirmed", err.Error()
@@ -198,25 +260,80 @@ func (s *Server) submitSidebar(parent context.Context, body sidebarSend) (string
 	}
 }
 
-func (s *Server) remoteReceipt(ctx context.Context, machine, method, id string, body sidebarSend) (sendReceipt, error) {
-	var v sendReceipt
-	client, err := s.herdr.Client(machine)
-	if err != nil {
-		return v, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+func nodeSendRequest(ctx context.Context, client *http.Client, method, path string, body any) (*http.Response, error) {
 	var payload io.Reader
-	if method == "PUT" {
+	if body != nil {
 		raw, _ := json.Marshal(body)
 		payload = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://node/api/sidebar/sends/"+id, payload)
+	req, err := http.NewRequestWithContext(ctx, method, "http://node"+path, payload)
 	if err != nil {
-		return v, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	return client.Do(req)
+}
+
+func legacyNodeSend(parent context.Context, client *http.Client, body sidebarSend) (string, string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+	defer cancel()
+	path := "/api/external/" + url.PathEscape(body.To) + "/send"
+	if strings.Contains(body.To, ":") {
+		path = "/api/agents/" + url.PathEscape(body.To) + "/prompt"
+	}
+	text := stripLeadingTriggerRef(body.Text)
+	if text == "" {
+		return "rejected", "empty prompt"
+	}
+	resp, err := nodeSendRequest(ctx, client, "POST", path, map[string]string{"text": text})
+	if err != nil {
+		return "legacy", err.Error()
+	}
+	defer resp.Body.Close()
+	_, status, detail := legacySendResult(resp, body.To)
+	if status == "accepted" {
+		return status, detail
+	}
+	return "legacy", detail
+}
+
+// Pre-receipt APIs return a queued worker trigger, a successful submission,
+// or an ambiguous backend result. A successful HTTP exchange alone is insufficient.
+func legacySendResult(resp *http.Response, target string) (raw []byte, status, detail string) {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, "unconfirmed", err.Error()
+	}
+	var result struct {
+		OK             bool
+		Trigger, Error string
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return nil, "unconfirmed", resp.Status
+	}
+	if resp.StatusCode == http.StatusAccepted && result.Trigger != "" {
+		return raw, "queued", result.Trigger
+	}
+	if resp.StatusCode == http.StatusOK && result.OK {
+		// A legacy Claude inbox could return 200 after a write without a transcript ack.
+		local, _ := split(target)
+		if strings.HasPrefix(local, "claude-") || strings.HasPrefix(local, "cl-") || strings.HasPrefix(local, "cd-") {
+			return raw, "unconfirmed", "legacy Claude inbox write; session acceptance unconfirmed"
+		}
+		return raw, "accepted", ""
+	}
+	return raw, "unconfirmed", firstNonEmpty(result.Error, resp.Status)
+}
+
+func remoteReceipt(parent context.Context, client *http.Client, method, id string, body sidebarSend) (sendReceipt, error) {
+	var v sendReceipt
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	var payload any
+	if method == "PUT" {
+		payload = body
+	}
+	resp, err := nodeSendRequest(ctx, client, method, "/api/sidebar/sends/"+id, payload)
 	if err != nil {
 		return v, err
 	}

@@ -29,6 +29,10 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
+	api("OPTIONS /api/super/send", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Collie-Send-Receipts", "1")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	api("PUT /api/super/sends/{id}", s.sidebarReceipt)
 	api("GET /api/super/sends/{id}", s.sidebarReceipt)
 	api("POST /api/super/report", s.superReport)

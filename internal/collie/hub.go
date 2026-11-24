@@ -792,7 +792,8 @@ func (s *Server) nodeConnect(w http.ResponseWriter, r *http.Request) {
 	m := &Machine{
 		ID: d.ID, Name: d.Name, OS: r.Header.Get("X-Collie-OS"), Home: r.Header.Get("X-Collie-Home"),
 		Bin: r.Header.Get("X-Collie-Bin"), Version: r.Header.Get("X-Collie-Version"), Agents: parseAgentsHeader(r.Header.Get("X-Collie-Agents")), Online: true, Since: time.Now(),
-		conn: &herdrConn{dial: streamDialer(open, "herdr")},
+		sendReceipts: r.Header.Get("X-Collie-Send-Receipts") == "1",
+		conn:         &herdrConn{dial: streamDialer(open, "herdr")},
 		client: &http.Client{Transport: &http.Transport{
 			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return httpDial(ctx) },
 			MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second, ResponseHeaderTimeout: 0,

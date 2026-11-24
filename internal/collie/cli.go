@@ -37,7 +37,7 @@ func runCLI(cmd string, args []string) {
 	}
 }
 
-func cliCall(method, path string, body any) ([]byte, error) {
+func cliRequest(method, path string, body any) (*http.Response, error) {
 	base, tok, err := cliTarget()
 	if err != nil {
 		return nil, err
@@ -47,12 +47,23 @@ func cliCall(method, path string, body any) ([]byte, error) {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, base+path, rd)
+	req, err := http.NewRequest(method, base+path, rd)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("collie server unreachable: %w", err)
+	}
+	return resp, nil
+}
+
+func cliCall(method, path string, body any) ([]byte, error) {
+	resp, err := cliRequest(method, path, body)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
@@ -320,31 +331,46 @@ func by() string {
 func cliSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	thread := fs.String("thread", "", "thread (default: the worker's)")
-	id := fs.String("id", "", "reuse this sidebar send receipt")
+	id := fs.String("id", "", "reuse this send receipt")
 	fs.Parse(args)
 	if fs.NArg() < 2 {
 		return fmt.Errorf("usage: collie send [--id ID] <worker-or-session> <text>")
 	}
 	to := fs.Arg(0)
 	text := strings.Join(fs.Args()[1:], " ")
-	if !sidebarTarget(to) {
-		if *id != "" {
-			return fmt.Errorf("--id requires a sidebar session target")
-		}
-		b, err := cliCall("POST", "/api/super/send", map[string]any{"to": to, "text": text, "thread": *thread})
-		if err == nil {
-			printResult(b)
-		}
-		return err
-	}
+	body := sidebarSend{To: to, Text: text, Thread: *thread}
 	if *id == "" {
+		// Negotiate before any mutation. An old hub can still resolve an ordinary
+		// send (worker first), but cannot bind or replay an explicit receipt.
+		probe, err := cliRequest("OPTIONS", "/api/super/send", nil)
+		if err != nil {
+			return err
+		}
+		probe.Body.Close()
+		if probe.StatusCode == http.StatusMethodNotAllowed && strings.Contains(probe.Header.Get("Allow"), "POST") {
+			fmt.Fprintln(os.Stderr, "legacy hub: sending once without a recoverable receipt")
+			resp, err := cliRequest("POST", "/api/super/send", body)
+			if err != nil {
+				return fmt.Errorf("unconfirmed on legacy hub: %w", err)
+			}
+			defer resp.Body.Close()
+			b, status, detail := legacySendResult(resp, to)
+			if status == "unconfirmed" {
+				return fmt.Errorf("unconfirmed on legacy hub: %s", detail)
+			}
+			printResult(b)
+			return nil
+		}
+		if probe.StatusCode != http.StatusNoContent || probe.Header.Get("X-Collie-Send-Receipts") != "1" {
+			return fmt.Errorf("could not determine hub send capabilities (%s)", probe.Status)
+		}
 		*id = uuid4()
 	}
 	if !receiptID.MatchString(*id) {
 		return fmt.Errorf("invalid send receipt ID")
 	}
 	fmt.Fprintln(os.Stderr, "receipt:", *id)
-	b, err := cliCall("PUT", "/api/super/sends/"+*id, sidebarSend{To: to, Text: text, Thread: *thread})
+	b, err := cliCall("PUT", "/api/super/sends/"+*id, body)
 	if err != nil {
 		return fmt.Errorf("unconfirmed; check collie receipt %s before retrying with --id %s: %w", *id, *id, err)
 	}
@@ -631,7 +657,7 @@ tidies memory/. Its journal is in dreams/.
   project directory rather than mixing topics! Note: Windows screen lock NEVER blocks background agent
   dispatch or ` + "`send`" + `; only an active Desktop App window currently holding that exact conversation open
   may return a writer-lock error, which ` + "`send`" + ` reports explicitly.
-  Sidebar sends print a receipt ID before contacting the hub. After a timeout check
+  On a receipt-capable hub, send prints a receipt ID before submitting the message. After a timeout check
   ` + "`{{BIN}} receipt ID`" + ` and retry only with ` + "`{{BIN}} send --id ID SESSION \"same text\"`" + `.
   An unconfirmed receipt may already have reached the session. An accepted receipt confirms submission only.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's

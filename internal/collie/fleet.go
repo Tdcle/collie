@@ -29,11 +29,12 @@ type Machine struct {
 	Online bool      `json:"online"`
 	Since  time.Time `json:"since,omitempty"`
 
-	conn   *herdrConn
-	client *http.Client // remote only: the node's own API, through the tunnel
-	ip     string       // remote only: where it connects from
-	ui     string       // remote only: its local web UI (http://127.0.0.1:port), if any
-	close  func()
+	sendReceipts bool // advertised by the node for this tunnel
+	conn         *herdrConn
+	client       *http.Client // remote only: the node's own API, through the tunnel
+	ip           string       // remote only: where it connects from
+	ui           string       // remote only: its local web UI (http://127.0.0.1:port), if any
+	close        func()
 }
 
 // Herdr is the herdr API across every connected machine. It speaks herdr's

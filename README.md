@@ -113,7 +113,7 @@ Collie 的主脑、Worker 以及你本人都可以通过同一个 `collie` 命�
 ```bash
 collie reply [--re ID] "…"                         # Router 向用户发送正式回复
 collie spawn [-kind codex] [-machine win] [-cwd D:\proj] [-name n] [-thread t] [-subscribe] "任务描述"
-collie send <worker> "追加指令"
+collie send <worker> "追加指令"                     # Hub 优先匹配活跃助手名
 collie send [--id ID] <侧栏会话ID> "续派内容"      # 发送前在 stderr 打印回执号
 collie receipt ID                                 # 查询本次续派
 collie exec [-machine win] [-cwd D:\proj] "命令"    # 在指定电脑直接执行维护命令并返回输出
@@ -133,7 +133,9 @@ collie daemon <start|stop|restart|status> <hub|node> # 后台守护进程生命�
 
 侧栏续派超时后，运行 `collie receipt ID`。需要重试时，使用 `collie send --id ID` 加上原目标和原文。即使正文相同，新号也代表新的派发。
 
-`accepted` 表示目标端已确认提交，执行结果仍看会话回复。`rejected` 表示发送前已被拒绝。`unconfirmed` 表示结果待确认。节点在提交和记录结果之间崩溃时，该状态可能一直保留，按原号重试不会再次向终端输入。回执保存在 Hub 和节点各自的 `herd.db`，去重依赖这些记录。带回执的侧栏发送需要支持回执的 Hub 和节点；旧客户端仍可使用原发送接口。
+`accepted` 表示目标端已确认提交，执行结果仍看会话回复。`rejected` 表示发送前已被拒绝。`unconfirmed` 表示结果待确认。节点在提交和记录结果之间崩溃时，该状态可能一直保留，按原号重试不会再次向终端输入。回执保存在 Hub 和节点各自的 `herd.db`，去重依赖这些记录。
+
+新旧节点可以共用新版 Hub，普通 `send` 命令相同。对于旧节点，Hub 在第一次转发前持久记录回执号。旧节点应答丢失后，查询会显示 `unconfirmed`，重启 Hub 或升级节点后同号重试也只读取记录。新版节点的回执可以在重连后查询。连接旧版 Hub 时，普通 `send` 会在发前提示此次发送无法查询回执。显式指定 `--id` 需要新版 Hub。
 
 ---
 
