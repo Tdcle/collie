@@ -65,6 +65,8 @@ func loadRows[T any](db *sql.DB, q string, into func(*T), args ...any) error {
 	return rows.Err()
 }
 
+const upsertWorkerStarts = `INSERT INTO kv(k,v) VALUES('worker_starts',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`
+
 func loadState(db *sql.DB, home string) (*State, error) {
 	st := defaultState(home)
 	kv := map[string]string{}
@@ -121,17 +123,26 @@ func loadState(db *sql.DB, home string) (*State, error) {
 	st.Triggers = trig
 	loadRows(db, `SELECT data FROM (SELECT data, n FROM entries ORDER BY n DESC LIMIT 600) ORDER BY n`, func(e *Entry) { st.Entries = append(st.Entries, e) })
 	loadRows(db, `SELECT data FROM threads ORDER BY last_at DESC LIMIT 500`, func(t *Thread) { st.Threads[t.ID] = t })
-	loadRows(db, `SELECT data FROM workers`, func(w *Worker) {
+	startsChanged := false
+	err = loadRows(db, `SELECT data FROM workers`, func(w *Worker) {
 		st.Workers[w.Name] = w
-		// Older hubs only kept the worker record. Recover what it proves.
-		if old := st.WorkerStarts[w.Machine][kinds[w.Kind]]; !old.At.IsZero() && !old.At.Before(w.CreatedAt) {
+		// v0.2.61 wrote Note only on failure. stop changed the status to gone
+		// but retained that diagnostic; a normal stop left Note empty.
+		stoppedAfterFailure := w.Ended && w.Status == "gone" && strings.TrimSpace(w.Note) != "" &&
+			w.LastReport == "" && w.ReportAt.IsZero()
+		old, exists := st.WorkerStarts[w.Machine][kinds[w.Kind]]
+		// v0.2.62 inferred "started" from a pane ID even for that stopped
+		// worker. Correct only the matching attempt, preserving later history.
+		repair := stoppedAfterFailure && old.Result == "started" && old.Name != "" && old.Name == w.Name &&
+			!old.At.IsZero() && old.At.Equal(w.CreatedAt)
+		if exists && !old.At.Before(w.CreatedAt) && !repair {
 			return
 		}
 		result, detail := "unknown", ""
 		switch {
 		case w.LastReport != "":
 			result = "replied"
-		case w.Status == "failed":
+		case w.Status == "failed" || stoppedAfterFailure:
 			result, detail = "failed", w.Note
 		case w.Status == "blocked":
 			result = "blocked"
@@ -139,7 +150,20 @@ func loadState(db *sql.DB, home string) (*State, error) {
 			result = "started"
 		}
 		st.recordWorkerStart(w, result, detail)
+		startsChanged = true
 	})
+	if err != nil {
+		return nil, err
+	}
+	if startsChanged {
+		history, err := json.Marshal(st.WorkerStarts)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := db.Exec(upsertWorkerStarts, string(history)); err != nil {
+			return nil, err
+		}
+	}
 	loadRows(db, `SELECT data FROM timers`, func(t *Timer) { st.Timers = append(st.Timers, t) })
 	return st, nil
 }
@@ -160,7 +184,7 @@ func saveState(db *sql.DB, st *State, deletedTimers []string) error {
 
 	put(`INSERT INTO kv(k,v) VALUES('seq',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.Itoa(st.Seq))
 	put(`INSERT INTO kv(k,v) VALUES('settings',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Settings))
-	put(`INSERT INTO kv(k,v) VALUES('worker_starts',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.WorkerStarts))
+	put(upsertWorkerStarts, js(st.WorkerStarts))
 	put(`INSERT INTO kv(k,v) VALUES('policies',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, js(st.Policies))
 	dismissed := make([]string, 0, len(st.Dismissed))
 	for id, on := range st.Dismissed {

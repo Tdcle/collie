@@ -1,5 +1,6 @@
 """Run against a locally built Collie. The Hub, node, CLI, DB and HTTP tunnel are real.
-A Unix socket fixture controls terminal timing. All network listeners are loopback."""
+A Unix socket fixture controls terminal timing. All network listeners are loopback.
+For start-history upgrades: CANDIDATE --upgrade-starts V0.2.61 V0.2.62."""
 import json, os, pathlib, re, socketserver, sqlite3, subprocess, sys, tempfile, threading, time, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -32,8 +33,9 @@ def environment(name):
 local, remote = environment("hub"), environment("node")
 def run(env,*args):
     return subprocess.run([binary,*args],env=env,cwd=env["HOME"],text=True,capture_output=True,timeout=35)
-def start(env,*args):
-    exe = str(pathlib.Path(sys.argv[2]).resolve()) if env == remote and len(sys.argv)>2 else binary
+def start(env,*args,exe=None):
+    if exe is None:
+        exe = str(pathlib.Path(sys.argv[2]).resolve()) if env == remote and len(sys.argv)>2 else binary
     with open(root/(pathlib.Path(env["HOME"]).name+".log"),"a") as f:
         proc = subprocess.Popen([exe,*args],env=env,cwd=env["HOME"],stdout=f,stderr=f)
     processes.append(proc)
@@ -113,8 +115,8 @@ def notices():
 
 def listing(): return run(local,"list").stdout.split("projects (")[0]
 def show(name): return run(local,"show",name).stdout
-def start_hub():
-    proc=start(local,"serve","--addr","127.0.0.1:0")
+def start_hub(exe=binary):
+    proc=start(local,"serve","--addr","127.0.0.1:0",exe=exe)
     wait(lambda:(data/"addr").exists())
     return proc
 def stop(p):
@@ -128,7 +130,86 @@ def spawn(name,machine):
 def machine_line(machine):
     return next((line for line in listing().splitlines() if line.strip().startswith(machine+" ")),"")
 
+def check_start_upgrades(legacy, previous):
+    terminal = Herdr(local)
+    db_path = data / "herd.db"
+    name = "hub-collie-up"
+    error = "Error: account/read failed: account/read failed: workspace routing discovery timed out (code -32603)"
+    note = error + " sh-4.4#"
+
+    def backup(source, target):
+        with sqlite3.connect(source) as src, sqlite3.connect(target) as dst:
+            src.backup(dst)
+
+    def starts():
+        with sqlite3.connect(db_path) as db:
+            row = db.execute("SELECT v FROM kv WHERE k='worker_starts'").fetchone()
+        return json.loads(row[0])[""] if row else {}
+
+    def worker(worker_name):
+        with sqlite3.connect(db_path) as db:
+            raw = db.execute("SELECT data FROM workers WHERE name=?", (worker_name,)).fetchone()
+        return json.loads(raw[0]) if raw else {}
+
+    def dispatch(worker_name, kind):
+        result = run(local, "spawn", "--machine", "hub", "--name", worker_name, "--kind", kind, "fixture")
+        assert result.returncode == 0, result.stderr
+        return wait(lambda: terminal.pane(worker_name))
+
+    hub = start_hub(legacy)
+    settings = dict(api("super/settings")["settings"], paused=True, dream_at="off")
+    api("super/settings", {"settings": settings})
+    dispatch("ordinary-stop", "agy")
+    assert run(local, "stop", "ordinary-stop").returncode == 0
+    pane = dispatch(name, "codex")
+    terminal.screens[pane] = error + "\nsh-4.4#"
+    terminal.agents[pane]["agent"] = ""
+    wait(lambda: worker(name).get("status") == "failed")
+    assert run(local, "stop", name).returncode == 0
+    stop(hub)
+    failed = worker(name)
+    assert failed["status"] == "gone" and failed["ended"] and failed["pane_id"] == pane
+    assert failed["note"] == note and not failed.get("last_report") and not starts(), failed
+    assert worker("ordinary-stop")["status"] == "gone" and not worker("ordinary-stop").get("note")
+    print("v0.2.61 stored worker:", json.dumps(failed), flush=True)
+    backup(db_path, root / "v61.db")
+
+    hub = start_hub(previous)
+    assert "codex:started (" + name in machine_line("hub")
+    api("super/settings", {"settings": settings})  # flush the v0.2.62 migration
+    wrong = wait(lambda: starts().get("codex"))
+    assert wrong == {"name": name, "at": failed["created_at"], "result": "started"}, wrong
+    print("v0.2.62 persisted:", wrong, flush=True)
+    backup(db_path, root / "v62.db")
+    dispatch("newer-success", "codex")
+    assert run(local, "report", "--worker", "newer-success", "verified result").returncode == 0
+    assert run(local, "stop", "newer-success").returncode == 0
+    stop(hub)
+    latest = starts()["codex"]
+    assert latest["name"] == "newer-success" and latest["result"] == "replied"
+    hub = start_hub()
+    assert "codex:replied (newer-success" in machine_line("hub") and starts()["codex"] == latest
+    print("retained newer success:", latest, flush=True)
+    stop(hub)
+
+    for version in ("v61", "v62"):
+        backup(root / (version + ".db"), db_path)
+        for boot in (1, 2):
+            hub = start_hub()
+            row = machine_line("hub")
+            assert "codex:failed (" + name in row and note in row, row
+            history = starts()
+            assert history["codex"] == dict(wrong, result="failed", detail=note), history
+            assert history["agy"]["result"] == "started" and history["agy"]["name"] == "ordinary-stop"
+            assert worker(name) == failed
+            print(f"{version} -> candidate, boot {boot}: {row.strip()}", flush=True)
+            stop(hub)
+    print("PASS", flush=True)
+
 try:
+    if sys.argv[2:3] == ["--upgrade-starts"]:
+        check_start_upgrades(*(str(pathlib.Path(arg).resolve()) for arg in sys.argv[3:]))
+        sys.exit(0)
     hubterm,nodeterm=Herdr(local),Herdr(remote)
     hubterm.add("w0:p1","collie","codex")
     hook=ThreadingHTTPServer(("127.0.0.1",0),Webhook)
