@@ -108,7 +108,7 @@ function runScenario(authed) {
               {
                 id: "e2",
                 role: "collie",
-                text: "**结论：共 3 项核心更新**。\n\n任务｜旧纯原型｜新纯原型｜原编码器\n息肉 357 张｜327｜355（99.44%）｜350\n超声视频 72 段｜70｜72（100%）｜71\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n已生成报告 ~/Desktop/ablation_report.pdf 和 [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
+                text: "**结论：共 3 项核心更新**。\n\n任务｜旧纯原型｜新纯原型｜原编码器\n息肉 357 张｜327｜355（99.44%）｜350\n超声视频 72 段｜70｜72（100%）｜71\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n[5090 完成记录](~/Documents/status_5090.json) · [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n离线汇总表见 C:\\Users\\26422\\Documents\\SFD-Net 2\\summary.csv\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
                 options: ["继续启动", "先不跑"],
                 at: now,
               },
@@ -157,7 +157,16 @@ if (auth.getEl("#app").hidden !== false || auth.getEl("#v-collie").hidden !== fa
 }
 const threadHTML = auth.getEl("#super-thread").innerHTML;
 if (!threadHTML.includes("artifact-cards") || !threadHTML.includes("art-badge is-table")) {
-  throw new Error("Expected artifact-cards with non-colliding 'art-badge is-table' for CSV");
+  throw new Error("Expected artifact-cards with non-colliding 'art-badge is-table' for unlinked spaced CSV");
+}
+if (threadHTML.includes("status_5090.json") && threadHTML.includes('data-art-open="~/Documents/status_5090.json"')) {
+  throw new Error("Regression: inline-linked [5090 完成记录](.../status_5090.json) must NOT render a duplicate artifact card!");
+}
+if (threadHTML.includes('data-art-open="C:/Users/26422/Documents/SFD-Net 2/epochs.csv"')) {
+  throw new Error("Regression: inline-linked [逐轮数据快照](<.../epochs.csv>) must NOT render a duplicate artifact card!");
+}
+if (!fs.readFileSync("web/index.html", "utf8").includes('id="fv-dl"')) {
+  throw new Error("Expected top-right download button #fv-dl in #file-view header");
 }
 if (threadHTML.includes("art-badge sheet")) {
   throw new Error("Regression: 'art-badge sheet' collides with dialog.sheet!");

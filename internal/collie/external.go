@@ -790,14 +790,18 @@ func (s *Server) streamExternal(w http.ResponseWriter, r *http.Request) {
 		if e.Kind == "codex" && e.Session != "" {
 			stxt, sphase := getCodexStreamSnapshot(e.Session)
 			if stxt != "" && tr != nil {
+				wantC := compactNoSpace(stxt)
 				msgs := tr.view()
 				for k := len(msgs) - 1; k >= 0; k-- {
 					if msgs[k].Kind == "user" {
 						break
 					}
-					if msgs[k].Kind == "assistant" && strings.TrimSpace(msgs[k].Text) == strings.TrimSpace(stxt) {
-						stxt = ""
-						break
+					if msgs[k].Kind == "assistant" {
+						gotC := compactNoSpace(msgs[k].Text)
+						if gotC != "" && (gotC == wantC || strings.HasPrefix(gotC, wantC) || strings.HasSuffix(gotC, wantC)) {
+							stxt = ""
+							break
+						}
 					}
 				}
 			}

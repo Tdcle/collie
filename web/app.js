@@ -1190,8 +1190,9 @@
         const at = +new Date(e.at) || 0;
         const isStreamingThis = Boolean(superStream && superStream.id === e.id && superStream.pos < superStream.full.length);
         const shownText = isStreamingThis ? superStream.full.slice(0, superStream.pos) : e.text;
-        const tailExtras = isStreamingThis ? "" : `${imagesIn(e.text)}${artifactsIn(e.text)}${replyOpts(e, ei)}${msgActs(e, at)}`;
-        const resHTML = `<div class="say${cont ? " cont" : ""}${inDrawer ? " in-proc" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant${isStreamingThis ? " streaming" : ""}" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${md(shownText)}${tailExtras}</div></div>`;
+        const rendered = md(shownText);
+        const tailExtras = isStreamingThis ? "" : `${imagesIn(e.text)}${artifactsIn(e.text, rendered)}${replyOpts(e, ei)}${msgActs(e, at)}`;
+        const resHTML = `<div class="say${cont ? " cont" : ""}${inDrawer ? " in-proc" : ""}"><span class="avatar">${cont ? "" : `<img src="/icon.svg" alt="">`}</span><div class="msg assistant${isStreamingThis ? " streaming" : ""}" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${rendered}${tailExtras}</div></div>`;
         sinceUser++; lastEvent = ""; lastCollie = e.id; sinceCollie = 0;
         return resHTML;
       };
@@ -1200,9 +1201,15 @@
         lastEvent = e.ref || "";
         const hid = e.ref?.startsWith("h:") ? e.ref.slice(2)
           : (!e.ref && (e.text?.includes("换了一个新会话") || (e.text?.includes("睡一会儿") && e.text?.includes("做梦"))) ? routerHist(e.at)?.id : "");
-        const past = !hid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
-        const pane = !hid && !past && e.ref ? paneOf(e.ref) : null;
-        const href = hid ? `#/h/${encodeURIComponent(hid)}` : past ? `#/h/${encodeURIComponent(past.id)}` : pane ? `#/p/${encodeURIComponent(pane)}` : "";
+        const xid = !hid && e.ref?.startsWith("x:") ? e.ref.slice(2) : "";
+        const pid = !hid && !xid && e.ref?.startsWith("p:") ? e.ref.slice(2) : "";
+        const past = !hid && !xid && !pid && e.ref && e.ref !== ROUTER ? workerHist(e.ref, e.at) : null;
+        const pane = !hid && !xid && !pid && !past && e.ref ? paneOf(e.ref) : null;
+        const href = hid ? `#/h/${encodeURIComponent(hid)}`
+          : xid ? `#/x/${encodeURIComponent(xid)}`
+          : pid ? `#/p/${encodeURIComponent(pid)}`
+          : past ? `#/h/${encodeURIComponent(past.id)}`
+          : pane ? `#/p/${encodeURIComponent(pane)}` : "";
         const w = e.tone === "spawn" ? sup.workers.find((x) => x.name === e.ref) : null;
         const busy = w && workerBusy(w);
         const stuck = w && !w.ended && w.status === "blocked";
@@ -1305,7 +1312,15 @@
           const interimN = procItems.filter((x) => x.e.role === "collie").length;
           const evList = procItems.filter((x) => x.e.role === "event").map((x) => x.e);
           const errN = evList.filter((e) => e.tone === "error").length;
-          const workerNames = [...new Set(evList.map((e) => e.ref).filter((rName) => rName && rName !== ROUTER && !rName.startsWith("h:")))].slice(0, 3);
+          const workerNames = [...new Set(evList.map((e) => {
+            const rName = e.ref || "";
+            if (!rName || rName === ROUTER || rName.startsWith("h:")) return "";
+            if (rName.startsWith("x:") || rName.startsWith("p:")) {
+              const tm = (e.text || "").match(/「([^」]{1,28})」/);
+              return tm ? tm[1] : "";
+            }
+            return rName;
+          }).filter(Boolean))].slice(0, 3);
           const sumParts = [];
           if (interimN) sumParts.push(`${interimN} 条中间进展`);
           if (evList.length) sumParts.push(`${evList.length} 条调度轨迹${workerNames.length ? "（" + workerNames.join("、") + "）" : ""}`);
@@ -4260,7 +4275,8 @@
       } else {
         const pm = procItems[p].m;
         const rCls = (pm.phase === "reasoning" ? " reasoning" : "") + (pm.streaming ? " streaming" : "");
-        out += `<div class="msg-note${rCls}">${md(pm.text)}${imagesIn(pm.text)}${artifactsIn(pm.text)}</div>`;
+        const pmRendered = md(pm.text);
+        out += `<div class="msg-note${rCls}">${pmRendered}${imagesIn(pm.text)}${artifactsIn(pm.text, pmRendered)}</div>`;
         p++;
       }
     }
@@ -4379,7 +4395,9 @@
           emitAsk(mk, k);
           continue;
         }
-        const isFinal = k === finalIdx || (mk.kind === "assistant" && ((mk.phase === "final_answer" && !mk.streaming) || (mk.streaming && mk.phase !== "commentary" && mk.phase !== "reasoning")));
+        // Keep any actively streaming non-reasoning bubble in the main thread so it never jumps
+        // out of `.msg-note` mid-paragraph when `\n\n` arrives!
+        const isFinal = k === finalIdx || (mk.kind === "assistant" && ((mk.phase === "final_answer" && !mk.streaming) || (mk.streaming && mk.phase !== "reasoning")));
         const isProc = !isFinal && (
           mk.kind === "tool"
           || mk.phase === "commentary"
@@ -4395,7 +4413,7 @@
         procBuf = [];
         const rendered = md(mk.text);
         const extraImgs = imagesIn(mk.text);
-        const extraArts = artifactsIn(mk.text);
+        const extraArts = mk.streaming ? "" : artifactsIn(mk.text, rendered);
         html += `<div class="msg assistant${mk.streaming ? " streaming" : ""}">${rendered}${extraImgs}${extraArts}</div>`;
         cut();
       }
@@ -4708,11 +4726,13 @@
   const HL = window.CollieHighlight || { HL_MAX_BYTES: 200 * 1024, HL_MAX_LINES: 5000, detectCodeLang: () => null, highlightCode: (c) => esc(c) };
   const MATH = window.CollieMath || { renderMath: (s) => esc(s), extractMathSegments: (s) => s };
   let fileRawText = "";
+  let currentOpenFile = null;
   function setFileHead(langLabel = "", rawText = "", copyable = false) {
     fileRawText = rawText || "";
-    const lEl = $("#fv-lang"), cWrap = $("#fv-copy-wrap"), cBtn = $("#fv-copy");
+    const lEl = $("#fv-lang"), cWrap = $("#fv-copy-wrap"), cBtn = $("#fv-copy"), dlBtn = $("#fv-dl");
     if (lEl) { lEl.hidden = !langLabel; lEl.textContent = langLabel; }
     if (cWrap) cWrap.hidden = !copyable;
+    if (dlBtn) dlBtn.hidden = !currentOpenFile;
     if (cBtn) {
       cBtn.removeAttribute("data-copied");
       cBtn.removeAttribute("data-failed");
@@ -4726,6 +4746,7 @@
     }
     const body = $("#fv-body"), seq = ++fileSeq;
     body.classList.remove("is-code", "is-flush");
+    currentOpenFile = null;
     setFileHead("", "", false);
     $("#fv-name").textContent = path.split(/[\\/]/).pop();
     $("#fv-path").textContent = path;
@@ -4738,6 +4759,9 @@
     } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== fileSeq) return;
     if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    currentOpenFile = { path: f.path || path, machine: f.machine };
+    const dlBtn = $("#fv-dl");
+    if (dlBtn) dlBtn.hidden = !(f.size >= 0 && f.size <= (50 << 20));
     if (fileUrl) { URL.revokeObjectURL(fileUrl); fileUrl = ""; }
     if (f.kind === "image") {
       const ext = path.split(".").pop().toLowerCase();
@@ -4793,7 +4817,11 @@
         openFile: (p) => openFile(p), setFileHead,
       })
     : { artifactsIn: () => "", renderRichFilePane: async () => false };
-  const artifactsIn = (t) => artifactUI.artifactsIn(t);
+  const artifactsIn = (t, renderedHTML = "") => artifactUI.artifactsIn(t, renderedHTML);
+  $("#fv-dl")?.addEventListener("click", (ev) => {
+    if (!currentOpenFile || !artifactUI.downloadArtifact) return;
+    artifactUI.downloadArtifact(currentOpenFile.path, currentOpenFile.machine, ev.currentTarget);
+  });
   // Images a message carries ("[image:~/.collie/images/….png]" or any local
   // Windows/Unix image path) show inline; tap to open the full viewer panel.
   const IMG_TOKEN = /\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]\n?/gi;

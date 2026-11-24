@@ -112,17 +112,29 @@ func (s *Server) superState(ctx context.Context) superView {
 		v.Router = routerView{Alive: true, Status: a.Status, PaneID: a.Pane, Kind: a.Kind, Machine: rm}
 		if asked := sp.routerAskedAt; a.Status == "working" && !asked.IsZero() {
 			for i := len(sp.st.Entries) - 1; i >= 0 && !sp.st.Entries[i].At.Before(asked); i-- {
-				if r := sp.st.Entries[i].Role; r == "collie" || r == "user" {
-					v.Router.Replied = r == "collie" // unless the human has said more since
+				e := sp.st.Entries[i]
+				if e.Role == "user" {
+					v.Router.Replied = false
+					break
+				}
+				if e.Role == "collie" {
+					if e.Interim {
+						// Interim progress acks explicitly mean Collie is still mid-turn!
+						continue
+					}
+					// If Collie continued running Router commands (`list`/`show`/`send`/`spawn`)
+					// after an early acknowledgment, it is still actively executing the turn.
+					v.Router.Replied = sp.routerStep == "" || sp.routerStepAt.Before(e.At)
 					break
 				}
 			}
 		}
 		if a.Status == "working" && !v.Router.Replied {
+			// NEVER fall back to `a.Title` (`TerminalTitle`): in Codex CLI, `TerminalTitle`
+			// is permanently set to the session's VERY FIRST turn summary (e.g. "创建侧栏会话 skill"),
+			// NOT the current turn's live action! Only surface genuine current-turn `routerStep`s.
 			if sp.routerStep != "" && (sp.routerAskedAt.IsZero() || !sp.routerStepAt.Before(sp.routerAskedAt)) && time.Since(sp.routerStepAt) < 2*time.Minute {
 				v.Router.Activity = sp.routerStep
-			} else if a.Title != "" && !strings.EqualFold(a.Title, "router") && !strings.EqualFold(a.Title, "codex") {
-				v.Router.Activity = a.Title
 			}
 		}
 	} else if sp.routerLaunching {
@@ -561,12 +573,14 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	text = stripLeadingTriggerRef(text)
-	s.sup.noteRouterStep("正在向会话 " + to + " 发送指令…")
+	targetFriendly := s.sup.friendlyTargetName(to)
+	s.sup.noteRouterStep("正在向会话 " + targetFriendly + " 发送指令…")
 	if strings.Contains(to, ":") {
 		if err := s.herdr.Prompt(ctx, to, text); err != nil {
 			writeJSON(w, 409, map[string]any{"error": err.Error()})
 			return
 		}
+		s.sup.recordSidebarDispatch(to, text)
 		writeJSON(w, 200, map[string]any{"ok": true, "pane_id": to, "note": "delivered directly to existing pane session; run `collie show " + to + "` later to inspect its reply"})
 		return
 	}
@@ -590,6 +604,7 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 			out, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode < 300 && s.sup != nil {
 				s.sup.noteExternalSent(to)
+				s.sup.recordSidebarDispatch(to, text)
 			}
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(resp.StatusCode)
@@ -597,10 +612,14 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Local external session on Hub
+		rec := &statusCaptureWriter{ResponseWriter: w, status: 200}
 		req, _ := http.NewRequestWithContext(ctx, "POST", "/api/external/"+url.PathEscape(local)+"/send", bytes.NewReader(rawBody))
 		req.Header.Set("Content-Type", "application/json")
 		req.SetPathValue("id", local)
-		s.sendExternal(w, req)
+		s.sendExternal(rec, req)
+		if rec.status < 300 && s.sup != nil {
+			s.sup.recordSidebarDispatch(to, text)
+		}
 		return
 	}
 	writeJSON(w, 404, map[string]any{"error": "no running worker or session named " + to + " (run `collie list` to see workers and sidebar sessions)"})
@@ -715,9 +734,21 @@ func (s *Server) superStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+type statusCaptureWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusCaptureWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
 func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s.sup.noteRouterStep("正在读取 " + id + " 的最新内容…")
+	if !strings.HasPrefix(id, "t") {
+		s.sup.noteRouterStep("正在读取 " + s.sup.friendlyTargetName(id) + " 的最新内容…")
+	}
 	if out, ok := s.sup.Show(id); ok {
 		if strings.HasPrefix(out, "thread ") {
 			if older := threadHistory(s.sup.db, id, 1<<62, 40); len(older) > 15 {

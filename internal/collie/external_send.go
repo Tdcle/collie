@@ -542,6 +542,7 @@ type codexStreamBuf struct {
 	phase   string
 	itemID  string
 	updated time.Time
+	doneAt  time.Time
 }
 
 var codexStreamHub = struct {
@@ -558,6 +559,9 @@ func getCodexStreamSnapshot(thread string) (text, phase string) {
 	}
 	buf.mu.Lock()
 	defer buf.mu.Unlock()
+	if !buf.doneAt.IsZero() && time.Since(buf.doneAt) > 3*time.Second {
+		return "", ""
+	}
 	if time.Since(buf.updated) > 2*time.Minute {
 		return "", ""
 	}
@@ -568,6 +572,18 @@ func clearCodexStream(thread string) {
 	codexStreamHub.Lock()
 	delete(codexStreamHub.byThread, thread)
 	codexStreamHub.Unlock()
+}
+
+func settleCodexStream(thread string) {
+	codexStreamHub.Lock()
+	buf := codexStreamHub.byThread[thread]
+	codexStreamHub.Unlock()
+	if buf == nil {
+		return
+	}
+	buf.mu.Lock()
+	buf.doneAt = time.Now()
+	buf.mu.Unlock()
 }
 
 func appendCodexStreamDelta(thread, itemID, delta, phase string) {
@@ -587,6 +603,7 @@ func appendCodexStreamDelta(thread, itemID, delta, phase string) {
 		buf.itemID = itemID
 		buf.text = ""
 	}
+	buf.doneAt = time.Time{}
 	if phase != "" {
 		buf.phase = phase
 	}
@@ -620,6 +637,7 @@ func attachCodexDeltaCapture(c *codexRPC, wantThread string) {
 				buf.itemID = p.Item.ID
 				buf.phase = p.Item.Phase
 				buf.text = ""
+				buf.doneAt = time.Time{}
 				buf.updated = time.Now()
 				buf.mu.Unlock()
 			}
@@ -641,7 +659,7 @@ func attachCodexDeltaCapture(c *codexRPC, wantThread string) {
 			}
 			if json.Unmarshal(params, &p) == nil && (wantThread == "" || p.ThreadID == wantThread) {
 				if method == "turn/completed" || p.Item.Type == "agentMessage" {
-					clearCodexStream(p.ThreadID)
+					settleCodexStream(p.ThreadID)
 				}
 			}
 		}

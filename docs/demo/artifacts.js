@@ -5,9 +5,11 @@
 (() => {
   "use strict";
 
+  // Only surface standalone binary/table deliverables as cards when they are NOT
+  // already linked inline via Markdown `[label](path)` or `<a class="fpath">`!
   const ARTIFACT_EXTS = new Set([
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "tsv",
-    "zip", "tar", "gz", "tgz", "7z", "rar", "tex", "bib", "ipynb", "html", "md", "markdown", "json"
+    "zip", "tar", "gz", "tgz", "7z", "rar"
   ]);
 
   const BADGE_META = {
@@ -35,10 +37,10 @@
     markdown: { badge: "MD", tone: "is-doc", canPreview: true },
   };
 
-  // Matches angle-bracketed links <C:/path with spaces/report.pdf> and standard paths ~/a/b.docx, /tmp/x.pdf, D:\rev\paper.pdf
-  const ANGLE_FILE_RE = /<(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^>#\r\n]+\.([A-Za-z0-9]{1,8}))(?:#[^>\r\n]*)?>/gi;
-  const MD_LINK_FILE_RE = /\[[^\]\n]+\]\((?:<)?(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^)\s"#>]+\.([A-Za-z0-9]{1,8}))(?:#[^)\s">]*)?(?:>)?\)/gi;
-  const BARE_FILE_RE = /(?:^|[\s(（`"'：:])(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\s`"'()（）<>\]#]+\.([A-Za-z0-9]{1,8}))(?=$|[\s)）`"'，。,;；#\]])/gim;
+  // Matches unlinked spaced paths (`C:\Users\26422\Documents\SFD-Net 2\summary.csv` or `<C:/path with spaces/report.pdf>`)
+  // while skipping files already wrapped in clickable Markdown `[label](path)` links!
+  const ANGLE_FILE_RE = /(?<!\]\()<(?:file:\/\/\/?)?((?:~[\\/]|\/|[A-Za-z]:[\\/])[^>#\r\n]+\.([A-Za-z0-9]{1,8}))(?:#[^>\r\n]*)?>/gi;
+  const SPACED_WIN_UNIX_RE = /(?:^|[\s(（"':：])((?:~[\\/]|\/(?:Users|home|root|tmp|var|opt|private)[\\/]|[A-Za-z]:[\\/])[^\r\n`"'<>|*?]+\.(?:pdf|docx?|xlsx?|pptx?|csv|tsv|zip|tar|tgz|gz|7z|rar))(?=$|[\s)）"'，。,;；])/gim;
 
   function extOf(p) {
     const clean = String(p || "").split(/[?#]/)[0];
@@ -46,19 +48,30 @@
     return dot >= 0 ? clean.slice(dot + 1).toLowerCase() : "";
   }
 
-  function extractArtifacts(text) {
+  function extractArtifacts(text, renderedHTML = "") {
     if (!text) return [];
-    const stripped = String(text).replace(/```[\s\S]*?(```|$)/g, " ");
+    // Strip fenced code blocks and all Markdown `[label](path)` links (which already render as Codex-style inline links!).
+    const stripped = String(text)
+      .replace(/```[\s\S]*?(```|$)/g, " ")
+      .replace(/!?\[[^\]\n]*\]\(<[^>\r\n]+>\)/g, " ")
+      .replace(/!?\[[^\]\n]*\]\([^)\n]+\)/g, " ");
+    const linkedPaths = new Set();
+    if (renderedHTML) {
+      for (const m of String(renderedHTML).matchAll(/data-path="([^"]+)"/g)) {
+        const p = m[1].replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+        if (p) linkedPaths.add(p);
+      }
+    }
     const rawHits = [];
     for (const m of stripped.matchAll(ANGLE_FILE_RE)) rawHits.push(m[1]);
-    for (const m of stripped.matchAll(MD_LINK_FILE_RE)) rawHits.push(m[1]);
-    for (const m of stripped.matchAll(BARE_FILE_RE)) rawHits.push(m[1]);
+    for (const m of stripped.matchAll(SPACED_WIN_UNIX_RE)) rawHits.push(m[1]);
 
     const seen = new Set();
     const out = [];
     for (let raw of rawHits) {
       try { raw = decodeURI(raw); } catch {}
       raw = raw.replace(/:\d+(?:[-:]\d+)?$/, "").trim();
+      if (linkedPaths.has(raw)) continue;
       const ext = extOf(raw);
       if (!ARTIFACT_EXTS.has(ext)) continue;
       if (/[\\\/]\.(?:claude|codex|collie|gemini)[\\\/]/i.test(raw)) continue;
@@ -110,8 +123,8 @@
   function initArtifacts(deps) {
     const { $, esc, tilde, fmtSize, toast, routeReq, fileTries, machineName, getMachinesCount, mdRender, setFileHead } = deps;
 
-    function artifactsIn(text) {
-      const list = extractArtifacts(text);
+    function artifactsIn(text, renderedHTML = "") {
+      const list = extractArtifacts(text, renderedHTML);
       if (!list.length) return "";
       const dlIco = `<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>`;
       const eyeIco = `<svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.8"/></svg>`;
@@ -178,11 +191,8 @@
       const makeToolbar = (extra = "") => `<div class="fv-toolbar">
         <span class="fv-kind-pill">${esc((BADGE_META[ext]?.badge) || ext.toUpperCase() || f.kind.toUpperCase())}</span>
         ${extra ? `<span class="fv-dim-meta">${extra}</span>` : `<span class="muted">${fmtSize(f.size)}</span>`}
-        <span class="spacer"></span>
-        <button type="button" class="btn small" id="fv-top-dl-btn">下载到本地</button>
       </div>`;
       const bindDl = () => {
-        $("#fv-top-dl-btn")?.addEventListener("click", (ev) => downloadArtifact(path, f.machine, ev.currentTarget));
         $("#fv-dl-btn")?.addEventListener("click", (ev) => downloadArtifact(path, f.machine, ev.currentTarget));
       };
 

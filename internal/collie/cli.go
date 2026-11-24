@@ -568,7 +568,10 @@ tidies memory/. Its journal is in dreams/.
 - ` + "`{{BIN}} send WORKER_OR_SESSION \"text\"`" + ` — steer a running worker OR send a message directly into
   an existing sidebar session listed under ` + "`sessions:`" + ` in ` + "`{{BIN}} list`" + ` (such as ` + "`w9:p1@wlc`" + ` or
   ` + "`cx-01a2...@wlc`" + `, e.g. when the human asks you to continue work in an existing project session like
-  「论文返修」 instead of spawning a new session). Note: Windows screen lock NEVER blocks background agent
+  「论文返修」 instead of spawning a new session). Before sending into a sidebar session that the human did NOT
+  explicitly name in this turn, run ` + "`{{BIN}} show <session_id>`" + ` to verify its recent context: if its latest
+  messages drifted into an unrelated project/topic (mixed conversation), prefer ` + "`{{BIN}} spawn`" + ` in the target
+  project directory rather than mixing topics! Note: Windows screen lock NEVER blocks background agent
   dispatch or ` + "`send`" + `; only an active Desktop App window currently holding that exact conversation open
   may return a writer-lock error, which ` + "`send`" + ` reports explicitly.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's

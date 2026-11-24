@@ -37,6 +37,41 @@ func TestParseReplyOptionsAndCheck(t *testing.T) {
 	}
 }
 
+func TestRouterActivityNeverLeaksStaleTerminalTitleAndRecordsSidebarDispatch(t *testing.T) {
+	dir := t.TempDir()
+	srv := &Server{home: dir}
+	sp, err := newSuper(srv, dir)
+	if err != nil {
+		t.Fatalf("newSuper: %v", err)
+	}
+	defer sp.db.Close()
+	srv.sup = sp
+
+	// Simulate a user prompt followed by an interim progress ack and a live step:
+	// `Replied` must remain false while Interim is true or routerStep is newer!
+	sp.mu.Lock()
+	sp.routerAskedAt = time.Now().Add(-5 * time.Second)
+	sp.addEntryLocked("user", mainThread, "检查中转站重命名框问题", "", "")
+	sp.mu.Unlock()
+
+	ie, _ := sp.ReplyWithInterim(mainThread, "我去查中转站的重命名框为什么会自动收起。", "", nil, false, true)
+	if !ie.Interim {
+		t.Fatalf("expected Interim=true")
+	}
+	sp.noteRouterStep("正在查看在线电脑与会话状态…")
+	sp.recordSidebarDispatch("cx-01a1fcb4@dv4gh6w2pm", "复现并修复重命名框自动退出问题")
+
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if sp.routerStep != "正在查看在线电脑与会话状态…" {
+		t.Fatalf("unexpected routerStep: %q", sp.routerStep)
+	}
+	last := sp.st.Entries[len(sp.st.Entries)-1]
+	if last.Role != "event" || last.Ref != "x:cx-01a1fcb4@dv4gh6w2pm" || last.Tone != "spawn" {
+		t.Fatalf("expected sidebar dispatch event entry with ref x:..., got %#v", last)
+	}
+}
+
 func TestPendingResolutionDismissAndPersistence(t *testing.T) {
 	dir := t.TempDir()
 	srv := &Server{home: dir}

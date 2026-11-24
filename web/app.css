@@ -1473,8 +1473,10 @@ body.dragging { cursor: col-resize; user-select: none; }
 .fv-lang { flex: none; font: 600 11px/1 var(--mono); color: var(--fg-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; }
 .fv-copy { position: relative; display: inline-flex; align-items: center; flex: none; }
 .fv-copy[hidden] { display: none !important; }
-.fv-copy-btn { min-inline-size: 30px; min-block-size: 30px; width: 30px; height: 30px; }
-.fv-copy-btn svg { width: 15.5px; height: 15.5px; }
+.fv-copy-btn, .fv-dl-btn { min-inline-size: 30px; min-block-size: 30px; width: 30px; height: 30px; flex: none; }
+.fv-copy-btn svg, .fv-dl-btn svg { width: 15.5px; height: 15.5px; }
+.fv-dl-btn[hidden] { display: none !important; }
+.fv-dl-btn.busy { opacity: .5; pointer-events: none; }
 .fv-copy-btn .ic-ok { display: none; color: var(--ok); stroke-width: 2; }
 .fv-copy-btn[data-copied] .ic-copy { display: none; }
 .fv-copy-btn[data-copied] .ic-ok { display: block; }
@@ -1581,18 +1583,19 @@ dialog.img-lightbox::backdrop {
   #ilb-img { max-width: 96vw; max-height: calc(100vh - 82px); }
 }
 a.fpath {
-  display: inline-flex; align-items: baseline; gap: 3px;
-  padding: .05em .42em; margin: 0 1px; border-radius: 6px;
-  background: color-mix(in srgb, var(--signal) 8%, var(--bg-2));
-  border: 1px solid color-mix(in srgb, var(--signal) 22%, var(--line));
-  color: var(--signal); font-size: .93em; font-weight: 500;
-  text-decoration: none; cursor: pointer;
-  transition: background .12s, border-color .12s, color .12s;
+  color: var(--signal);
+  font-weight: 450;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+  word-break: break-word;
+  transition: color .12s, text-decoration-color .12s;
 }
 a.fpath:hover {
-  background: var(--signal-soft);
-  border-color: color-mix(in srgb, var(--signal) 45%, var(--line-2));
   color: var(--signal);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal) 75%, transparent);
 }
 
 .field > label { display: block; font-size: 12px; font-weight: 600; color: var(--fg-2); margin-bottom: 8px; }

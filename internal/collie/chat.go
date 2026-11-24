@@ -1504,13 +1504,13 @@ func activityLine(screen string) (text, meta, streaming, streamPhase string) {
 		}
 		keep = append(keep, l)
 	}
-	if status != "" {
-		return status, statusMeta, streaming, streamPhase
-	}
 	if streaming != "" {
-		return "", "", streaming, streamPhase
+		return "", statusMeta, streaming, streamPhase
 	}
-	return strings.Join(tailSlice(keep, 2), "\n"), "", "", ""
+	if status != "" {
+		return status, statusMeta, "", ""
+	}
+	return "正在思考与执行…", "", "", ""
 }
 
 // splitCounters takes a status line's closing parenthetical apart:
@@ -1622,57 +1622,47 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 
 		// Live card: progress + live streaming assistant bubble while working, the question while blocked.
 		live := map[string]any{"status": status}
-		if status == "working" || status == "blocked" {
+		if status == "blocked" {
 			if res, e := s.herdr.Read(ctx, id, "detection", "text", 0); e == nil {
-				if status == "blocked" {
-					live["approval"] = parseApproval(res.Text)
-				} else {
-					tail, metaStr, streaming, streamPhase := activityLine(res.Text)
-					if tail != "" {
-						live["tail"] = tail
-					}
-					if metaStr != "" {
-						live["meta"] = metaStr
-					}
-					if streaming != "" {
-						// Deduplicate ignoring terminal column-wrapping newlines/spaces, and classify
-						// mid-turn progress notes before `Worked for` as commentary so they never pop
-						// out as temporary chat bubbles and vanish.
-						alreadyFlushed := false
-						turnHasTools := false
-						wantCompact := compactNoSpace(streaming)
-						if tr != nil && wantCompact != "" {
-							msgs := tr.view()
-							for k := len(msgs) - 1; k >= 0; k-- {
-								if msgs[k].Kind == "user" {
-									break
-								}
-								if msgs[k].Kind == "tool" {
-									turnHasTools = true
-								}
-								if msgs[k].Kind == "assistant" {
-									gotCompact := compactNoSpace(msgs[k].Text)
-									if gotCompact != "" && (gotCompact == wantCompact || strings.HasPrefix(gotCompact, wantCompact) || strings.HasSuffix(gotCompact, wantCompact)) {
-										alreadyFlushed = true
-									}
+				live["approval"] = parseApproval(res.Text)
+			}
+		} else if status == "working" {
+			// Read `recent_unwrapped` (140 logical lines) instead of 24-row `detection` so:
+			// 1) Long multi-paragraph answers never push the leading `• ` bullet out of range mid-stream;
+			// 2) Terminal 80-col soft wraps don't split Markdown links, tables, or LaTeX formulas!
+			if res, e := s.herdr.Read(ctx, id, "recent_unwrapped", "text", 140); e == nil {
+				tail, metaStr, streaming, streamPhase := activityLine(res.Text)
+				if streaming != "" {
+					alreadyFlushed := false
+					wantCompact := compactNoSpace(streaming)
+					if tr != nil && wantCompact != "" {
+						msgs := tr.view()
+						for k := len(msgs) - 1; k >= 0; k-- {
+							if msgs[k].Kind == "user" {
+								break
+							}
+							if msgs[k].Kind == "assistant" {
+								gotCompact := compactNoSpace(msgs[k].Text)
+								if gotCompact != "" && (gotCompact == wantCompact || strings.HasPrefix(gotCompact, wantCompact) || strings.HasSuffix(gotCompact, wantCompact)) {
+									alreadyFlushed = true
 								}
 							}
 						}
-						if !alreadyFlushed && wantCompact != "" {
-							phase := streamPhase
-							if phase == "" {
-								if !turnHasTools {
-									phase = "final_answer"
-								} else if strings.Contains(streaming, "\n\n") || strings.Contains(streaming, "```") || strings.HasPrefix(streaming, "#") || strings.HasPrefix(streaming, "- ") || strings.HasPrefix(streaming, "1. ") {
-									phase = "final_answer"
-								} else {
-									phase = "commentary"
-								}
-							}
-							live["streaming"] = streaming
-							live["stream_phase"] = phase
-						}
 					}
+					if !alreadyFlushed && wantCompact != "" {
+						phase := streamPhase
+						if phase == "" {
+							phase = "final_answer"
+						}
+						live["streaming"] = streaming
+						live["stream_phase"] = phase
+					}
+				}
+				if live["streaming"] == nil && tail != "" {
+					live["tail"] = tail
+				}
+				if metaStr != "" {
+					live["meta"] = metaStr
 				}
 			}
 		}

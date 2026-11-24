@@ -303,6 +303,14 @@ func TestExtractStreamingBubble(t *testing.T) {
 	if meta2 != "1m 10s" {
 		t.Fatalf("expected meta 1m 10s, got %q", meta2)
 	}
+
+	// Regression: When a long streaming answer has no bottom spinner line, raw prose lines
+	// must NEVER fall through into `tail` (which previously flashed prose line-by-line in #live).
+	noSpinnerProse := "Plain line without bullet 1\nPlain line without bullet 2\n› Ask Codex to do anything"
+	tail3, _, streaming3, _ := activityLine(noSpinnerProse)
+	if streaming3 != "" || strings.Contains(tail3, "Plain line") {
+		t.Fatalf("expected raw prose NOT to flash in status tail, got tail=%q streaming=%q", tail3, streaming3)
+	}
 }
 
 func TestUnwrapCodexJsReplToolAndLinkMeta(t *testing.T) {

@@ -146,7 +146,145 @@ func (sp *Super) noteRouterStep(step string) {
 		sp.routerStep = step
 		sp.routerStepAt = time.Now()
 		sp.wakeSubscribersLocked()
+	} else {
+		sp.routerStepAt = time.Now()
 	}
+	sp.mu.Unlock()
+}
+
+// describeSessionTarget resolves a human-friendly title, agent kind, computer
+// display name, and UI link ref ("x:..." / "p:..." / worker name) for a worker,
+// thread, pane session (`w9:p1@wlc`), or external session (`cx-...@dv4gh6w2pm`).
+func (sp *Super) describeSessionTarget(id string) (title, kind, machineName, refKey string) {
+	if sp == nil || id == "" {
+		return "", "", "", ""
+	}
+	if id == mainThread || strings.HasPrefix(id, "chat:") {
+		return "主对话记录", "", "", ""
+	}
+	machineDisplay := func(mid string) string {
+		if sp.s == nil || sp.s.herdr == nil {
+			return mid
+		}
+		for _, m := range sp.s.allMachines() {
+			if m.ID == mid || (mid == "" && m.Local) {
+				if m.Name != "" {
+					return m.Name
+				}
+				if m.Local {
+					return "Hub"
+				}
+			}
+		}
+		return mid
+	}
+	sp.mu.Lock()
+	if w := sp.st.Workers[id]; w != nil {
+		t, k, mn := w.Name, w.Kind, machineDisplay(w.Machine)
+		sp.mu.Unlock()
+		return t, k, mn, w.Name
+	}
+	sp.mu.Unlock()
+	if sp.s == nil {
+		return "", "", "", ""
+	}
+	metaSnap := sp.s.sessionMetaSnapshot()
+	findMeta := func(k, m, sess, fb string) *SessionMeta {
+		if ck := canonicalSessionKey(k, m, sess); ck != "" {
+			if sm := metaSnap[ck]; sm != nil {
+				return sm
+			}
+		}
+		if fb != "" {
+			return metaSnap[fb]
+		}
+		return nil
+	}
+	if strings.HasPrefix(id, "cx-") || strings.HasPrefix(id, "cl-") || strings.HasPrefix(id, "ag-") || strings.HasPrefix(id, "gm-") {
+		_, mid := split(id)
+		mName := machineDisplay(mid)
+		if sp.s.herdr != nil {
+			for _, e := range sp.s.collectAllExternal(false) {
+				if e.ID == id {
+					lbl := strings.TrimSpace(e.Title)
+					if sm := findMeta(e.Kind, e.Machine, e.Session, "x:"+e.ID); sm != nil && strings.TrimSpace(sm.Title) != "" {
+						lbl = strings.TrimSpace(sm.Title)
+					}
+					return clip(lbl, 42), e.Kind, machineDisplay(e.Machine), "x:" + id
+				}
+			}
+		}
+		if sm := metaSnap["x:"+id]; sm != nil && strings.TrimSpace(sm.Title) != "" {
+			return clip(strings.TrimSpace(sm.Title), 42), "", mName, "x:" + id
+		}
+		return "", "", mName, "x:" + id
+	}
+	if strings.Contains(id, ":") {
+		_, mid := split(id)
+		mName := machineDisplay(mid)
+		if sm := metaSnap["p:"+id]; sm != nil && strings.TrimSpace(sm.Title) != "" {
+			return clip(strings.TrimSpace(sm.Title), 42), "", mName, "p:" + id
+		}
+		if sp.s.herdr != nil {
+			lctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			st := sp.s.state(lctx)
+			cancel()
+			for _, a := range st.Agents {
+				if a.PaneID == id {
+					lbl := strings.TrimSpace(a.Topic)
+					if sm := findMeta(a.Kind, a.Machine, a.Session, "p:"+a.PaneID); sm != nil && strings.TrimSpace(sm.Title) != "" {
+						lbl = strings.TrimSpace(sm.Title)
+					}
+					if lbl == "" {
+						lbl = firstNonEmpty(a.WorkspaceLabel, a.Name)
+					}
+					return clip(lbl, 42), a.Kind, machineDisplay(a.Machine), "p:" + id
+				}
+			}
+		}
+		return "", "", mName, "p:" + id
+	}
+	return "", "", "", ""
+}
+
+func (sp *Super) friendlyTargetName(id string) string {
+	title, _, mName, _ := sp.describeSessionTarget(id)
+	if title == "主对话记录" {
+		return title
+	}
+	if title != "" {
+		if mName != "" {
+			return "「" + title + "」（" + mName + "）"
+		}
+		return "「" + title + "」"
+	}
+	return id
+}
+
+func (sp *Super) recordSidebarDispatch(id, text string) {
+	if sp == nil {
+		return
+	}
+	title, kind, mName, refKey := sp.describeSessionTarget(id)
+	targetDisp := id
+	if title != "" {
+		targetDisp = "「" + title + "」"
+	}
+	meta := ""
+	if kind != "" && mName != "" {
+		meta = "（" + kind + " @ " + mName + "）"
+	} else if mName != "" {
+		meta = "（@ " + mName + "）"
+	}
+	if refKey == "" {
+		if strings.Contains(id, ":") {
+			refKey = "p:" + id
+		} else {
+			refKey = "x:" + id
+		}
+	}
+	sp.mu.Lock()
+	sp.addEntryLocked("event", mainThread, fmt.Sprintf("续派至 %s%s：%s", targetDisp, meta, clip(oneLine(text), 120)), refKey, "spawn")
 	sp.mu.Unlock()
 }
 
