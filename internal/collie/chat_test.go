@@ -313,6 +313,57 @@ func TestExtractStreamingBubble(t *testing.T) {
 	}
 }
 
+func TestANSIStreamingMarkdownReconstructionAndWebToolUnwrap(t *testing.T) {
+	// 1. ANSI screen with bold (`\x1b[1m`), inline code (`166;227;161`), underlined link (`\x1b[4m`),
+	//    soft-wrapped 110-col CJK prose (`...登录，选择\n  同一个网络`), shell code blocks, and TUI box table:
+	ansiScreen := strings.Join([]string{
+		"› 怎么在 Linux 上安装登录 Tailscale",
+		"\x1b[0m\x1b[2m•\x1b[0m 在\x1b[0m\x1b[1m\x1b[38;2;243;139;168m新 Linux 主机\x1b[0m上打开终端，用 \x1b[0m\x1b[38;2;166;227;161magy models\x1b[0m 之外的命令安装。\x1b[0m\x1b[4m\x1b[38;2;137;180;250mTailscale 官方 Linux 安装说明\x1b[0m",
+		"  (\x1b[0m\x1b[4m\x1b[38;2;137;180;250mhttps://tailscale.com/docs/install/linux\x1b[0m)",
+		"",
+		"  curl -fsSL https://tailscale.com/install.sh | sh",
+		"  sudo tailscale up",
+		"",
+		"  第二条会输出一个登录链接。可以复制到你自己的电脑或手机上打开，用现在连接 5090、4090 的同一个 Tailscale 账号登录，选择",
+		"  同一个网络，确认添加设备。",
+		"",
+		"   时间     任务                状态",
+		"  ━━━━━━━  ━━━━━━━━━━━━━━━━━━  ━━━━━━━━",
+		"   09:49    制作侧栏 skill      已完成",
+		"  ───────  ──────────────────  ────────",
+		"   10:22    修复重命名框        已验证",
+		"",
+		"› Ask Codex to do anything",
+	}, "\n")
+
+	_, _, md, _ := activityLine(ansiScreen)
+	if !strings.Contains(md, "**新 Linux 主机**") {
+		t.Fatalf("expected ANSI bold to reconstruct as **bold**, got:\n%s", md)
+	}
+	if !strings.Contains(md, "`agy models`") {
+		t.Fatalf("expected ANSI green inline code to reconstruct as `code`, got:\n%s", md)
+	}
+	if !strings.Contains(md, "[Tailscale 官方 Linux 安装说明](https://tailscale.com/docs/install/linux)") {
+		t.Fatalf("expected underlined link + URL to reconstruct as [label](url), got:\n%s", md)
+	}
+	if !strings.Contains(md, "```bash\ncurl -fsSL https://tailscale.com/install.sh | sh\nsudo tailscale up\n```") {
+		t.Fatalf("expected shell commands to reconstruct as fenced ```bash block, got:\n%s", md)
+	}
+	if !strings.Contains(md, "账号登录，选择同一个网络，确认添加设备。") {
+		t.Fatalf("expected soft-wrapped CJK line (`选择\\n同一个网络`) to join cleanly, got:\n%s", md)
+	}
+	if !strings.Contains(md, "| 时间 | 任务 | 状态 |\n| --- | --- | --- |\n| 09:49 | 制作侧栏 skill | 已完成 |") {
+		t.Fatalf("expected TUI box table to reconstruct as GFM Markdown table, got:\n%s", md)
+	}
+
+	// 2. `tools.web__run` unwrapping into clean `web` tool call:
+	webRaw := []byte(`"text((await tools.web__run({open:[{ref_id:\"https://tailscale.com/download/linux\"}]})))"`)
+	wName, wIn := unwrapCodexTool("exec", webRaw)
+	if wName != "web" || !strings.Contains(wIn, "https://tailscale.com/download/linux") {
+		t.Fatalf("expected tools.web__run to unwrap as web tool, got name=%q in=%q", wName, wIn)
+	}
+}
+
 func TestUnwrapCodexJsReplToolAndLinkMeta(t *testing.T) {
 	rawExec := []byte("\"text(await tools.exec_command({cmd: `python revision/make_splits.py --verify`}))\"")
 	name1, in1 := unwrapCodexTool("js_repl", rawExec)

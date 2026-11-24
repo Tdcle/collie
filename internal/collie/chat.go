@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -318,6 +319,7 @@ func noise(s string) bool {
 var (
 	jsReplExecRe  = regexp.MustCompile(`(?s)tools\.exec_command\(\s*\{.*?\bcmd\s*:\s*(?:` + "`" + `([^` + "`" + `]+)` + "`" + `|"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')`)
 	jsReplPatchRe = regexp.MustCompile(`(?m)\*\*\*\s*(?:Add|Update|Delete|Move to:)\s+File:\s*([^\r\n` + "`" + `'"]+)`)
+	jsReplWebRe   = regexp.MustCompile(`(?:ref_id|url|q)\s*:\s*["'` + "`" + `]([^"'` + "`" + `\r\n]+)["'` + "`" + `]`)
 )
 
 func unwrapCodexTool(name string, raw json.RawMessage) (string, string) {
@@ -346,6 +348,22 @@ func unwrapCodexTool(name string, raw json.RawMessage) (string, string) {
 			if cmd != "" {
 				return "bash", clip(cmd, maxInput)
 			}
+		}
+		if strings.Contains(s, "tools.web") {
+			matches := jsReplWebRe.FindAllStringSubmatch(s, 3)
+			if len(matches) > 0 {
+				var targets []string
+				for _, m := range matches {
+					v := strings.TrimSpace(m[1])
+					if v != "" && !slices.Contains(targets, v) {
+						targets = append(targets, v)
+					}
+				}
+				if len(targets) > 0 {
+					return "web", clip(strings.Join(targets, " · "), maxInput)
+				}
+			}
+			return "web", "检索网页资料"
 		}
 	}
 	if name == "apply_patch" {
@@ -1386,106 +1404,16 @@ func compactNoSpace(s string) string {
 }
 
 // extractStreamingBubble extracts ONLY an actively streaming assistant message
-// at the very bottom of the terminal transcript (never walking backwards into
-// completed tool cells like `• Ran ... \n └ ...` or `• Edited ...`).
+// at the very bottom of the terminal transcript and reconstructs rich Markdown.
 func extractStreamingBubble(screen string) (text, screenPhase string) {
-	rawLines := strings.Split(screen, "\n")
-	// 1. Cut off the bottom input box & status footer (last `› ...` / `❯ ...` line near bottom).
-	bottomCut := len(rawLines)
-	for i := len(rawLines) - 1; i >= max(0, len(rawLines)-8); i-- {
-		t := strings.TrimSpace(rawLines[i])
-		if livePromptTop.MatchString(t) && (strings.Contains(t, "Ask Codex") || strings.Contains(t, "Try ") || i >= len(rawLines)-5) {
-			bottomCut = i
-			break
-		}
-	}
-	rawLines = rawLines[:bottomCut]
-	// 2. Cut off any trailing active status spinner (`• Working (... esc to interrupt)`)
-	//    and its indented sub-lines (`  └ Tip: ...`).
-	for i := len(rawLines) - 1; i >= max(0, len(rawLines)-6); i-- {
-		t := strings.TrimSpace(rawLines[i])
-		if t == "" {
-			continue
-		}
-		if liveHint.MatchString(t) || liveSpinner.MatchString(t) {
-			rawLines = rawLines[:i]
-			break
-		}
-		if strings.HasPrefix(t, "└") || strings.HasPrefix(t, "⎿") || strings.HasPrefix(t, "↳") {
-			continue
-		}
-		break
-	}
-	// 3. Locate the latest user prompt (`› ...` / `❯ ...`) above that.
-	userIdx := -1
-	for i := len(rawLines) - 1; i >= 0; i-- {
-		if livePromptTop.MatchString(rawLines[i]) {
-			userIdx = i
-			break
-		}
-	}
-	// 4. Inspect ONLY the very last `• ` / `⏺ ` bullet block after userIdx!
-	//    Never scan backwards past a tool block into older history cells.
-	replyIdx := -1
-	for i := len(rawLines) - 1; i > userIdx; i-- {
-		if liveReplyLead.MatchString(rawLines[i]) {
-			replyIdx = i
-			break
-		}
-	}
-	if replyIdx < 0 {
-		return "", ""
-	}
-	headTrim := strings.TrimSpace(rawLines[replyIdx])
-	rest := strings.TrimSpace(liveReplyLead.ReplaceAllString(headTrim, ""))
-	if liveHint.MatchString(headTrim) || liveKey.MatchString(headTrim) || liveToolLead.MatchString(rest) || liveFnCallLead.MatchString(rest) {
-		return "", ""
-	}
-	// Check if Codex TUI printed `FinalMessageSeparator` (`Worked for ...`) above replyIdx.
-	for i := replyIdx - 1; i > userIdx; i-- {
-		t := strings.TrimSpace(strings.Trim(rawLines[i], "─━═ "))
-		if liveWorkedEnd.MatchString(t) {
-			screenPhase = "final_answer"
-			break
-		}
-	}
-	var out []string
-	for i := replyIdx; i < len(rawLines); i++ {
-		raw := strings.TrimRight(rawLines[i], " \t\r")
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			if len(out) > 0 && out[len(out)-1] != "" {
-				out = append(out, "")
-			}
-			continue
-		}
-		// Any tool tree connector (`└ 4309`), fold hint (`+ 5 lines`, `+ Show details`),
-		// or numbered diff line (`  5 +...`) means this cell is a tool execution block, NOT prose!
-		if liveTreeOrDiff.MatchString(raw) || liveKey.MatchString(trimmed) {
-			return "", ""
-		}
-		if liveHint.MatchString(trimmed) || liveSpinner.MatchString(trimmed) || liveChrome.MatchString(trimmed) || liveWorkedEnd.MatchString(trimmed) || strings.Trim(trimmed, "─━═╭╮╰╯ ") == "" {
-			break
-		}
-		if i == replyIdx {
-			out = append(out, strings.TrimSpace(liveReplyLead.ReplaceAllString(raw, "")))
-		} else if strings.HasPrefix(raw, "  ") {
-			out = append(out, raw[2:])
-		} else {
-			out = append(out, trimmed)
-		}
-	}
-	for len(out) > 0 && out[len(out)-1] == "" {
-		out = out[:len(out)-1]
-	}
-	return strings.TrimSpace(strings.Join(out, "\n")), screenPhase
+	return extractStreamingBubbleANSI(screen)
 }
 
 func activityLine(screen string) (text, meta, streaming, streamPhase string) {
-	streaming, streamPhase = extractStreamingBubble(screen)
-	var keep []string
+	streaming, streamPhase = extractStreamingBubbleANSI(screen)
+	plain := stripANSICodes(screen)
 	status, statusMeta := "", ""
-	for _, l := range strings.Split(screen, "\n") {
+	for _, l := range strings.Split(plain, "\n") {
 		l = strings.TrimSpace(strings.Trim(strings.TrimSpace(l), "│┃|"))
 		hinted := liveHint.MatchString(l)
 		m := ""
@@ -1502,7 +1430,6 @@ func activityLine(screen string) (text, meta, streaming, streamPhase string) {
 		if hinted || spun {
 			status, statusMeta = l, m // the agent's own status line wins
 		}
-		keep = append(keep, l)
 	}
 	if streaming != "" {
 		return "", statusMeta, streaming, streamPhase
@@ -1627,14 +1554,15 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 				live["approval"] = parseApproval(res.Text)
 			}
 		} else if status == "working" {
-			// Read `recent_unwrapped` (140 logical lines) instead of 24-row `detection` so:
-			// 1) Long multi-paragraph answers never push the leading `• ` bullet out of range mid-stream;
-			// 2) Terminal 80-col soft wraps don't split Markdown links, tables, or LaTeX formulas!
-			if res, e := s.herdr.Read(ctx, id, "recent_unwrapped", "text", 140); e == nil {
+			// Read `recent_unwrapped` in `ansi` mode (140 logical lines) so:
+			// 1) SGR bold/code/underline styling, shell/code blocks, and TUI box tables reconstruct into live Markdown;
+			// 2) Long multi-paragraph answers never push the leading `• ` bullet out of range mid-stream;
+			// 3) Terminal 88-col soft wraps reflow cleanly without mid-word breaks!
+			if res, e := s.herdr.Read(ctx, id, "recent_unwrapped", "ansi", 140); e == nil {
 				tail, metaStr, streaming, streamPhase := activityLine(res.Text)
 				if streaming != "" {
 					alreadyFlushed := false
-					wantCompact := compactNoSpace(streaming)
+					wantCompact := compactComparable(streaming)
 					if tr != nil && wantCompact != "" {
 						msgs := tr.view()
 						for k := len(msgs) - 1; k >= 0; k-- {
@@ -1642,7 +1570,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request) {
 								break
 							}
 							if msgs[k].Kind == "assistant" {
-								gotCompact := compactNoSpace(msgs[k].Text)
+								gotCompact := compactComparable(msgs[k].Text)
 								if gotCompact != "" && (gotCompact == wantCompact || strings.HasPrefix(gotCompact, wantCompact) || strings.HasSuffix(gotCompact, wantCompact)) {
 									alreadyFlushed = true
 								}

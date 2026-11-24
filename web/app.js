@@ -4133,7 +4133,10 @@
     el._redraw ? el._redraw() : drawThread(threadMsgs(el), el);
   }
   // A thread's messages: the older ones loaded on request, then the live view, plus optimistic pending sends and live streaming bubble.
-  const compactMsgText = (s) => String(s || "").replace(/[\s…]+/g, "");
+  const compactMsgText = (s) => String(s || "")
+    .replace(/^```[A-Za-z0-9_+-]*\s*$/gm, "")
+    .replace(/\[([^\]\n]+)\]\((?:<[^>\n]+>|[^)\s]+)\)/g, "$1")
+    .replace(/[\s…*`|｜━─_\[\]<>]+/g, "");
   const threadMsgs = (el) => {
     reconcilePendingThreadMsgs(el);
     const base = (el._older || []).concat(el._msgs || []).concat(el._pending || []);
