@@ -17,7 +17,7 @@ import (
 // `collie reply|spawn|send|report|show|list|timer|…` talk to the local server.
 
 var cliCommands = map[string]func([]string) error{
-	"reply": cliReply, "spawn": cliSpawn, "send": cliSend, "report": cliReport,
+	"reply": cliReply, "spawn": cliSpawn, "send": cliSend, "receipt": cliReceipt, "report": cliReport,
 	"subscribe": cliSubscribe, "stop": cliStop, "answer": cliAnswer, "show": cliShow, "list": cliList,
 	"timer": cliTimer, "say": cliSay, "hook": cliHook, "pair": cliPair, "exec": cliExec,
 }
@@ -320,16 +320,73 @@ func by() string {
 func cliSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	thread := fs.String("thread", "", "thread (default: the worker's)")
+	id := fs.String("id", "", "reuse this sidebar send receipt")
 	fs.Parse(args)
 	if fs.NArg() < 2 {
-		return fmt.Errorf("usage: collie send <worker> <text>")
+		return fmt.Errorf("usage: collie send [--id ID] <worker-or-session> <text>")
 	}
 	to := fs.Arg(0)
-	b, err := cliCall("POST", "/api/super/send", map[string]any{"to": to, "text": strings.Join(fs.Args()[1:], " "), "thread": *thread})
-	if err == nil {
-		printResult(b)
+	text := strings.Join(fs.Args()[1:], " ")
+	if !sidebarTarget(to) {
+		if *id != "" {
+			return fmt.Errorf("--id requires a sidebar session target")
+		}
+		b, err := cliCall("POST", "/api/super/send", map[string]any{"to": to, "text": text, "thread": *thread})
+		if err == nil {
+			printResult(b)
+		}
+		return err
 	}
-	return err
+	if *id == "" {
+		*id = uuid4()
+	}
+	if !receiptID.MatchString(*id) {
+		return fmt.Errorf("invalid send receipt ID")
+	}
+	fmt.Fprintln(os.Stderr, "receipt:", *id)
+	b, err := cliCall("PUT", "/api/super/sends/"+*id, sidebarSend{To: to, Text: text, Thread: *thread})
+	if err != nil {
+		return fmt.Errorf("unconfirmed; check collie receipt %s before retrying with --id %s: %w", *id, *id, err)
+	}
+	var v sendReceipt
+	if err := json.Unmarshal(b, &v); err != nil || v.ID != *id {
+		return fmt.Errorf("unconfirmed: no matching receipt from hub")
+	}
+	if v.Status == "queued" {
+		out, _ := json.Marshal(map[string]string{"trigger": v.Detail, "note": "queued; delivered when the worker is free"})
+		printResult(out)
+		return nil
+	}
+	if v.Status != "accepted" {
+		printResult(b)
+		return fmt.Errorf("%s %s (collie receipt %s)", v.Status, v.Detail, v.ID)
+	}
+	// Keep the successful send fields consumed by existing CLI callers.
+	pane := ""
+	if strings.Contains(to, ":") {
+		pane = to
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		sendReceipt
+		OK   bool   `json:"ok"`
+		Pane string `json:"pane_id,omitempty"`
+	}{v, true, pane})
+}
+
+func cliReceipt(args []string) error {
+	if len(args) != 1 || !receiptID.MatchString(args[0]) {
+		return fmt.Errorf("usage: collie receipt ID")
+	}
+	b, err := cliCall("GET", "/api/super/sends/"+args[0], nil)
+	if err != nil {
+		return fmt.Errorf("receipt %s unconfirmed: %w", args[0], err)
+	}
+	var v sendReceipt
+	if json.Unmarshal(b, &v) != nil || v.ID != args[0] {
+		return fmt.Errorf("unconfirmed: no matching receipt from hub")
+	}
+	printResult(b)
+	return nil
 }
 
 func cliReport(args []string) error {
@@ -574,6 +631,9 @@ tidies memory/. Its journal is in dreams/.
   project directory rather than mixing topics! Note: Windows screen lock NEVER blocks background agent
   dispatch or ` + "`send`" + `; only an active Desktop App window currently holding that exact conversation open
   may return a writer-lock error, which ` + "`send`" + ` reports explicitly.
+  Sidebar sends print a receipt ID before contacting the hub. After a timeout check
+  ` + "`{{BIN}} receipt ID`" + ` and retry only with ` + "`{{BIN}} send --id ID SESSION \"same text\"`" + `.
+  An unconfirmed receipt may already have reached the session. An accepted receipt confirms submission only.
 - ` + "`{{BIN}} answer WORKER CHOICE`" + ` — answer the dialog a worker is stuck on: the choice's
   number (as listed in the BLOCKED event), words of its label, or ` + "`esc`" + `.
 - ` + "`{{BIN}} subscribe WORKER THREAD`" + ` — route a thread's future events straight to that worker

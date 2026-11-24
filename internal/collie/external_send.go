@@ -213,10 +213,7 @@ func (r *claudeReg) send(ctx context.Context, text string) error {
 // peerTaken watches the transcript past offset for the session taking the
 // message: a queue-operation or a peer line carrying its words.
 func peerTaken(path string, offset int64, text string, wait time.Duration) bool {
-	needle := strings.TrimSpace(text)
-	if r := []rune(needle); len(r) > 40 {
-		needle = string(r[:40])
-	}
+	needle := peerEnvelope(text)
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		if f, err := os.Open(path); err == nil {
@@ -232,7 +229,7 @@ func peerTaken(path string, offset int64, text string, wait time.Duration) bool 
 						} `json:"message"`
 					}
 					json.Unmarshal(l, &e)
-					if strings.Contains(e.Content, needle) || strings.Contains(string(e.Message.Content), jsonInner(needle)) {
+					if strings.Contains(e.Content, needle) || strings.Contains(promptText(e.Message.Content), needle) {
 						f.Close()
 						return true
 					}
@@ -246,12 +243,6 @@ func peerTaken(path string, offset int64, text string, wait time.Duration) bool 
 		time.Sleep(300 * time.Millisecond)
 	}
 	return false
-}
-
-// jsonInner is s as it appears inside a JSON string.
-func jsonInner(s string) string {
-	b := jsonNoEscape(s)
-	return string(b[1 : len(b)-1])
 }
 
 // ---------------------------------------------------------------- Codex
@@ -993,76 +984,78 @@ func (s *Server) sendExternal(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if !modelNameRe.MatchString(body.Model) || !modelNameRe.MatchString(body.Effort) {
-		writeJSON(w, 400, map[string]any{"error": "invalid model or effort"})
+	code, detail := s.sendExternalText(r.Context(), r.PathValue("id"), body.Text, body.Model, body.Effort)
+	if code >= 400 {
+		writeJSON(w, code, map[string]any{"error": detail})
 		return
 	}
-	text := strings.TrimSpace(body.Text)
+	result := map[string]any{"ok": true}
+	if detail != "" {
+		result["note"] = detail
+	}
+	writeJSON(w, code, result)
+}
+
+func (s *Server) sendExternalText(ctx context.Context, id, text, model, effort string) (int, string) {
+	if !modelNameRe.MatchString(model) || !modelNameRe.MatchString(effort) {
+		return 400, "invalid model or effort"
+	}
+	text = strings.TrimSpace(text)
 	if text == "" {
-		writeJSON(w, 400, map[string]any{"error": "空消息"})
-		return
+		return 400, "空消息"
 	}
 	if strings.HasPrefix(text, "/") {
-		writeJSON(w, 400, map[string]any{"error": "斜杠命令只能在那台电脑上输入"})
-		return
+		return 400, "斜杠命令只能在那台电脑上输入"
 	}
-	e := s.externalByID(r.PathValue("id"))
+	e := s.externalByID(id)
 	if e == nil {
-		writeJSON(w, 404, map[string]any{"error": "这个会话已经结束了"})
-		return
+		return 404, "这个会话已经结束了"
 	}
 	if !e.CanSend {
-		writeJSON(w, 409, map[string]any{"error": e.ReadOnly})
-		return
+		return 409, e.ReadOnly
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	switch e.Kind {
 	case "claude":
 		reg := e.reg
-		var offset int64
+		offset := int64(-1)
 		if fi, err := os.Stat(e.path); err == nil {
 			offset = fi.Size()
 		}
 		if err := reg.send(ctx, text); err != nil {
-			fail(w, err)
-			return
+			return 502, err.Error()
 		}
-		if e.path != "" && !peerTaken(e.path, offset, text, 6*time.Second) {
-			writeJSON(w, 202, map[string]any{"ok": true, "note": "已送到，但被这个会话扣住了：它开着跳过权限（bypass）模式，Claude 会先扣下外来消息，过一阵作废。要让它照做，在电脑上直接对它说"})
-			return
+		if offset < 0 || !peerTaken(e.path, offset, text, 6*time.Second) {
+			return 202, "已写入 Claude 收件箱，会话是否接收尚未确认"
 		}
 	case "codex":
 		var err error
 		switch e.via {
 		case "app":
 			err = s.codexAppSend(ctx, e.Session, text)
-			if err != nil && (errors.Is(err, errCodexNotLoaded) || strings.Contains(err.Error(), "没有打开")) && s.codexDaemonSock() != "" {
-				err = s.codexBgSend(ctx, e.Session, text, body.Model, body.Effort)
+			if (errors.Is(err, errCodexNotLoaded) || errors.Is(err, errCodexAppOffline)) && s.codexDaemonSock() != "" {
+				err = s.codexBgSend(ctx, e.Session, text, model, effort)
 			}
 		case "bg":
-			err = s.codexBgSend(ctx, e.Session, text, body.Model, body.Effort)
+			err = s.codexBgSend(ctx, e.Session, text, model, effort)
 		default:
-			err = s.codexSend(ctx, e.Session, text, body.Model, body.Effort)
+			err = s.codexSend(ctx, e.Session, text, model, effort)
 		}
 		if err != nil {
-			fail(w, err)
-			return
+			return 502, err.Error()
 		}
 	case "agy":
 		if e.via != "app" {
-			writeJSON(w, 409, map[string]any{"error": "这个 Antigravity 会话还不能从这里发消息"})
-			return
+			return 409, "这个 Antigravity 会话还不能从这里发消息"
 		}
 		if err := s.agyAppSend(ctx, e.Session, text); err != nil {
-			fail(w, err)
-			return
+			return 502, err.Error()
 		}
 	default:
-		writeJSON(w, 409, map[string]any{"error": "这种 agent 还不能从这里发消息"})
-		return
+		return 409, "这种 agent 还不能从这里发消息"
 	}
-	writeJSON(w, 200, map[string]any{"ok": true})
+	return 200, ""
 }
 
 // interruptExternal: POST /api/external/{id}/interrupt stops the currently

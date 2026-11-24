@@ -114,6 +114,8 @@ Collie 的主脑、Worker 以及你本人都可以通过同一个 `collie` 命�
 collie reply [--re ID] "…"                         # Router 向用户发送正式回复
 collie spawn [-kind codex] [-machine win] [-cwd D:\proj] [-name n] [-thread t] [-subscribe] "任务描述"
 collie send <worker> "追加指令"
+collie send [--id ID] <侧栏会话ID> "续派内容"      # 发送前在 stderr 打印回执号
+collie receipt ID                                 # 查询本次续派
 collie exec [-machine win] [-cwd D:\proj] "命令"    # 在指定电脑直接执行维护命令并返回输出
 collie report "完成总结或 BLOCKED: 待决策问题"       # Worker 向 Router 汇报结果
 collie answer <worker> <choice>                    # 回答 Worker 终端里的确认选项
@@ -128,6 +130,10 @@ collie pair [--computer]                           # 生成手机扫码二维码
 collie node [--hub URL --code CODE] [--name pc]    # 将当前电脑作为节点连入 Hub
 collie daemon <start|stop|restart|status> <hub|node> # 后台守护进程生命周期管理
 ```
+
+侧栏续派超时后，运行 `collie receipt ID`。需要重试时，使用 `collie send --id ID` 加上原目标和原文。即使正文相同，新号也代表新的派发。
+
+`accepted` 表示目标端已确认提交，执行结果仍看会话回复。`rejected` 表示发送前已被拒绝。`unconfirmed` 表示结果待确认。节点在提交和记录结果之间崩溃时，该状态可能一直保留，按原号重试不会再次向终端输入。回执保存在 Hub 和节点各自的 `herd.db`，去重依赖这些记录。带回执的侧栏发送需要支持回执的 Hub 和节点；旧客户端仍可使用原发送接口。
 
 ---
 

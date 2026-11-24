@@ -798,7 +798,7 @@ func (c *codexApp) request(method string, params any, target string) (codexAppFr
 	for {
 		f, err := c.read()
 		if err != nil {
-			return f, err
+			return codexAppFrame{}, err
 		}
 		switch f.Type {
 		case "client-discovery-request":
@@ -817,6 +817,7 @@ func (c *codexApp) request(method string, params any, target string) (codexAppFr
 	}
 }
 
+var errCodexAppOffline = errors.New("连不上电脑上的 Codex App：它可能没有打开")
 var errCodexNotLoaded = errors.New("Codex App 没能打开这个对话：在电脑上的 Codex App 里点开它一次再发")
 
 func (c *codexApp) owner(thread string) (string, error) {
@@ -832,7 +833,7 @@ func (c *codexApp) owner(thread string) (string, error) {
 func (s *Server) codexAppSend(ctx context.Context, thread, text string) error {
 	conn, err := dialLocalSocket(ctx, s.codexAppSock())
 	if err != nil {
-		return errors.New("连不上电脑上的 Codex App：它可能没有打开")
+		return errCodexAppOffline
 	}
 	defer conn.Close()
 	if dl, ok := ctx.Deadline(); ok {
@@ -860,8 +861,9 @@ func (s *Server) codexAppSend(ctx context.Context, thread, text string) error {
 			"context": map[string]any{},
 		},
 	}
-	_, err = c.request("thread-follower-start-turn", turn, owner)
-	if err != nil {
+	reply, err := c.request("thread-follower-start-turn", turn, owner)
+	// A lost reply may hide a successful start. Only steer after an explicit rejection.
+	if err != nil && reply.Type == "response" && reply.ResultType != "success" {
 		steer := map[string]any{
 			"conversationId": thread,
 			"turnSteer": map[string]any{

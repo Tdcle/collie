@@ -122,6 +122,7 @@ func runNode(args []string) {
 	}
 	bin = stableBin(bin, collieDir())
 	srv := &Server{herdr: newHerdr(*sock, host, home), home: home, node: true}
+	srv.initReceipts(collieDir())
 	api := srv.NodeRoutes()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
