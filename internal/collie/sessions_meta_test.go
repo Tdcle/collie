@@ -82,11 +82,18 @@ func TestDeviceRenameAndSessionLifecycle(t *testing.T) {
 		t.Fatalf("unexpected session meta after rename: %+v", snap[ck])
 	}
 
+	rPin := httptest.NewRequest("POST", "/api/sessions/pin", bytes.NewBufferString(`{"kind":"codex","machine":"wlc","session":"sess-1","ext_id":"cx-sess-1@wlc","pinned":true}`))
+	wPin := httptest.NewRecorder()
+	srv.pinSession(wPin, rPin)
+	if wPin.Code != 200 || !srv.sessionMetaSnapshot()[ck].Pinned || srv.sessionMetaSnapshot()[ck].PinnedAt <= 0 {
+		t.Fatalf("expected session to be pinned: code=%d meta=%+v", wPin.Code, srv.sessionMetaSnapshot()[ck])
+	}
+
 	rArch := httptest.NewRequest("POST", "/api/sessions/archive", bytes.NewBufferString(`{"kind":"codex","machine":"wlc","session":"sess-1","archived":true}`))
 	wArch := httptest.NewRecorder()
 	srv.archiveSession(wArch, rArch)
-	if wArch.Code != 200 || !srv.sessionMetaSnapshot()[ck].Archived {
-		t.Fatalf("expected session to be archived")
+	if wArch.Code != 200 || !srv.sessionMetaSnapshot()[ck].Archived || srv.sessionMetaSnapshot()[ck].Pinned {
+		t.Fatalf("expected session to be archived and unpinned")
 	}
 
 	rDel := httptest.NewRequest("POST", "/api/sessions/delete", bytes.NewBufferString(`{"kind":"codex","machine":"wlc","session":"sess-1"}`))

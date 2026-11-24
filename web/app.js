@@ -584,16 +584,25 @@
   function sideDotHTML(st, labelMap = STATUS_LABEL) {
     return SHOW_SIDE_DOT.has(st) ? `<span class="dot ${esc(st)}" title="${esc(labelMap[st] || st)}"></span>` : "";
   }
-  function itemHTML(v) {
+  const PIN_ICO = `<svg viewBox="0 0 24 24"><path d="M15 4.5l4.5 4.5-3.2 3.2.7 4.3-4.8-4.8-5.2 5.2M12.2 11.7L7.5 7l4.3.7L15 4.5z"/></svg>`;
+  function pinMarkHTML(smenuKey, pinned) {
+    return pinned ? `<span class="pin-mark" data-spin="${esc(smenuKey)}" role="button" tabindex="0" title="已置顶（点击取消置顶）">${PIN_ICO}</span>` : "";
+  }
+  function itemHTML(v, pinned = false) {
     const where = (state.machines || []).length > 1 ? machineName(v.machine) + " · " : "";
     const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
     const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
-    const more = v.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="p:${esc(v.pane_id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button>` : "";
+    const smenuKey = "p:" + v.pane_id;
+    const more = v.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button>` : "";
     const quiet = !SHOW_SIDE_DOT.has(v.status);
-    return `<li class="s-li"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
+    const rawTitle = v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
+    const nameInner = isCollieOwned(v) && v.name !== ROUTER
+      ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>${pinMarkHTML(smenuKey, pinned)}`
+      : `${esc(rawTitle)}${pinMarkHTML(smenuKey, pinned)}`;
+    return `<li class="s-li${pinned ? " is-pinned" : ""}"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
       <span class="glyph">${glyph(v)}</span>
-      <span class="body"><div class="name">${isCollieOwned(v) && v.name !== ROUTER ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>` : esc(v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd)))}</div><div class="sub">${esc(sub)}</div></span>
+      <span class="body"><div class="name">${nameInner}</div><div class="sub">${esc(sub)}</div></span>
       ${sideDotHTML(v.status)}</a>${more}</li>`;
   }
 
@@ -1255,7 +1264,7 @@
           html += maybeTimeSep(e);
           const at = +new Date(e.at) || 0;
           prev = prevRole = "user";
-          html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text)}</div>${mineActs(e, at)}</div>`;
+          html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text, "s:" + (e.id || vi))}</div>${mineActs(e, at)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++; lastQuoted = "";
           turnId = e.id || turnId;
           vi++;
@@ -3078,29 +3087,32 @@
 
   function renderSessions() {
     const many = (state.machines || []).length > 1;
-    const extRow = (e, inProj = false) => {
+    const extRow = (e, inProj = false, pinned = false) => {
       const open = e.live && e.status === "idle";
       const where = [KIND_LABEL[e.kind] || e.kind, !inProj && many && e.machine ? machineName(e.machine) : "", e.live && !open ? "" : ago(e.updated || e.started)].filter(Boolean).join(" · ");
       const showDot = e.live && SHOW_SIDE_DOT.has(e.status);
       const dot = showDot ? sideDotHTML(e.status, EXT_STATE) : "";
       const attnCls = e.live && e.status === "blocked" ? "attn-row" : "";
-      return `<li class="s-li ${attnCls}"><a class="item ${showDot ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
+      const smenuKey = "x:" + e.id;
+      return `<li class="s-li ${attnCls}${!inProj && pinned ? " is-pinned" : ""}"><a class="item ${showDot ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${esc(extName(e))}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
-        <button type="button" class="item-more" data-smenu="x:${esc(e.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
+        <span class="body"><div class="name">${esc(extName(e))}${!inProj ? pinMarkHTML(smenuKey, pinned) : ""}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
+        <button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
-    const histRow = (h, inProj = false) => {
+    const histRow = (h, inProj = false, pinned = false) => {
       const wPast = sup.workers.find((w) => w.name === h.name || (w.session && w.session === h.session));
       const sub = [KIND_LABEL[h.kind] || h.kind, !inProj && many ? machineName(h.machine) : "", ago(h.ended)].filter(Boolean).join(" · ");
-      return `<li class="s-li"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
+      const smenuKey = "h:" + h.id;
+      const pMark = !inProj ? pinMarkHTML(smenuKey, pinned) : "";
+      return `<li class="s-li${!inProj && pinned ? " is-pinned" : ""}"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${wPast ? `<span class="nm">${esc(histName(h))}</span><span class="by-collie">Collie 派出</span>` : esc(histName(h))}</div><div class="sub">${esc(sub)}</div></span></a>
-        <button type="button" class="item-more" data-smenu="h:${esc(h.id)}" title="重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
+        <span class="body"><div class="name">${wPast ? `<span class="nm">${esc(histName(h))}</span><span class="by-collie">Collie 派出</span>${pMark}` : `${esc(histName(h))}${pMark}`}</div><div class="sub">${esc(sub)}</div></span></a>
+        <button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
-    const paneRow = (a, inProj = false, lastT = 0) => {
+    const paneRow = (a, inProj = false, lastT = 0, pinned = false) => {
       if (!inProj) {
-        const html = itemHTML(a);
-        return a.status === "blocked" ? html.replace('<li class="s-li">', '<li class="s-li attn-row">') : html;
+        const html = itemHTML(a, pinned);
+        return a.status === "blocked" ? html.replace('<li class="s-li', '<li class="s-li attn-row') : html;
       }
       const named = a.is_agent && a.name !== ROUTER && !isWorker(a.name) && a.name && !autoName(a.name) && a.topic && a.topic !== a.name ? a.name + " · " : "";
       const quiet = !SHOW_SIDE_DOT.has(a.status);
@@ -3138,13 +3150,16 @@
       const wLive = sup.workers.find((w) => w.name === a.name && !w.ended);
       const t = (ck && extTimeMap.get(ck)) || +new Date(wLive?.created_at || 0) || +new Date(meta?.updated_at || 0) || 0;
       const proj = projectOfSession(a.kind, a.machine, a.session, a.cwd, "p:" + a.pane_id);
+      const pinned = !proj && !!meta?.pinned;
       pool.push({
         key: "p:" + a.pane_id,
         proj,
+        pinned,
+        pinnedAt: meta?.pinned_at || 0,
         archived: !!meta?.archived && !isBlocked && !isRunning,
         isRunning, isBlocked, groupRank, t,
         active: view === "pane" && current === a.pane_id,
-        html: paneRow(a, !!proj, t),
+        html: paneRow(a, !!proj, t, pinned),
       });
     }
 
@@ -3179,14 +3194,17 @@
       const isRunning = !!(e.live && isActivelyRunning(e.status));
       const groupRank = isBlocked ? 0 : isRunning ? 1 : 3;
       const proj = projectOfSession(e.kind, e.machine, e.session, e.cwd, "x:" + e.id);
+      const pinned = !proj && !!meta?.pinned;
       pool.push({
         key: e.id,
         proj,
+        pinned,
+        pinnedAt: meta?.pinned_at || 0,
         archived: !!meta?.archived && !isBlocked && !isRunning,
         isRunning, isBlocked, groupRank,
         t: +new Date(e.updated || e.started) || 0,
         active: view === "ext" && extCur === e.id,
-        html: extRow(e, !!proj),
+        html: extRow(e, !!proj, pinned),
       });
     }
 
@@ -3198,14 +3216,17 @@
       if (ck && seenKeys.has(ck)) continue;
       if (ck) seenKeys.add(ck);
       const proj = projectOfSession(h.kind, h.machine, h.session, h.cwd, "h:" + h.id);
+      const pinned = !proj && !!meta?.pinned;
       pool.push({
         key: "h:" + h.id,
         proj,
+        pinned,
+        pinnedAt: meta?.pinned_at || 0,
         archived: !!meta?.archived,
         isRunning: false, isBlocked: false, groupRank: 3,
         t: +new Date(h.ended) || 0,
         active: view === "ext" && extCur === "h:" + h.id,
-        html: histRow(h, !!proj),
+        html: histRow(h, !!proj, pinned),
       });
     }
 
@@ -3282,20 +3303,25 @@
       }
     }
 
-    // 2. Standalone Sessions Section (Below Projects)
-    const loose = unarchived.filter((x) => !x.proj && matchStatus(x));
+    // 2. Standalone Sessions Section (Below Projects — Pinned Sessions Fixed at Top)
+    const loose = unarchived.filter((x) => !x.proj && matchStatus(x)).sort((x, y) =>
+      ((y.pinned ? 1 : 0) - (x.pinned ? 1 : 0))
+      || (x.pinned && y.pinned ? ((x.groupRank - y.groupRank) || (y.pinnedAt - x.pinnedAt) || (y.t - x.t)) : ((x.groupRank - y.groupRank) || (y.t - x.t)))
+    );
     const sessTitleEl = $("#session-group-title"), sessCntEl = $("#session-count");
     if (sessTitleEl) sessTitleEl.textContent = (state.projects || []).length ? "独立会话" : "会话";
     if (sessCntEl) sessCntEl.textContent = loose.length || "";
 
-    let shown = extAll ? loose : loose.slice(0, RECENT_N);
+    const pinnedLooseN = loose.filter((x) => x.pinned).length;
+    const baseCap = pinnedLooseN + RECENT_N;
+    let shown = extAll ? loose : loose.slice(0, baseCap);
     const cur = !shown.some((x) => x.active) && loose.find((x) => x.active);
     if (cur) shown = [...shown, cur];
 
-    const moreBtn = loose.length > RECENT_N
+    const moreBtn = loose.length > baseCap
       ? `<li><button type="button" class="more-row ${extAll ? "open" : ""}" data-act="ext-more">
           <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-          <span>${extAll ? "收起" : `展开其余 ${loose.length - RECENT_N} 个`}</span>
+          <span>${extAll ? "收起" : `展开其余 ${loose.length - baseCap} 个`}</span>
         </button></li>`
       : "";
 
@@ -4327,7 +4353,8 @@
     while (i < msgs.length) {
       if (msgs[i].kind === "user") {
         const m = msgs[i];
-        html += `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text)}</div>`;
+        const uKey = `t:${i}:${(m.text || "").length}:${String(m.text || "").slice(0, 20)}`;
+        html += `<div class="msg user${m.pending ? " pending" : ""}">${userText(m.text, uKey)}</div>`;
         cut();
         i++;
         continue;
@@ -5526,7 +5553,30 @@
     processed = withImages(esc(processed));
     return processed.replace(/\u0002(\d+)\u0002/g, (_, idx) => tokens[+idx] || "");
   }
-  function userText(t) {
+  const expandedUserMsgs = new Set();
+  document.addEventListener("click", (ev) => {
+    const fb = ev.target.closest("[data-u-fold]");
+    if (!fb) return;
+    ev.preventDefault();
+    const key = fb.dataset.uFold || "";
+    const wrap = fb.closest(".u-fold");
+    if (!wrap) return;
+    const nextOpen = !wrap.classList.contains("expanded");
+    if (key) {
+      if (nextOpen) expandedUserMsgs.add(key);
+      else expandedUserMsgs.delete(key);
+    }
+    wrap.classList.toggle("expanded", nextOpen);
+    const lines = +fb.dataset.lines || 0;
+    const sp = fb.querySelector("span");
+    if (sp) sp.textContent = nextOpen ? "收起" : `展开全文${lines > 6 ? `（共 ${lines} 行）` : ""}`;
+    if (!nextOpen) {
+      const rect = wrap.getBoundingClientRect();
+      if (rect.top < 70) wrap.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  });
+
+  function userText(t, foldKey = "") {
     let body = String(t || "");
     let attPaths = [];
     const attIdx = body.lastIndexOf("附件：\n");
@@ -5559,9 +5609,17 @@
       }
     }
     const proseHTML = formatUserProseWithLinks(body, cardLinks);
+    const lineCount = body ? body.split("\n").length : 0;
+    const isLongUser = Boolean(proseHTML && (body.length > 260 || lineCount > 6));
+    const effKey = foldKey || `h:${body.length}:${body.slice(0, 24)}`;
+    const isOpen = expandedUserMsgs.has(effKey);
+    const proseBlock = !proseHTML ? ""
+      : isLongUser
+        ? `<div class="u-fold${isOpen ? " expanded" : ""}"><div class="u-fold-body u-prose">${proseHTML}</div><button type="button" class="u-fold-btn" data-u-fold="${esc(effKey)}" data-lines="${lineCount}"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg><span>${isOpen ? "收起" : `展开全文${lineCount > 6 ? `（共 ${lineCount} 行）` : ""}`}</span></button></div>`
+        : `<div class="u-prose">${proseHTML}</div>`;
     const imgs = attPaths.filter((p) => IMG_EXT.test(p)), rest = attPaths.filter((p) => !IMG_EXT.test(p));
     const name = (p) => p.split(/[\\/]/).pop().replace(/^[0-9a-f]{6}-/, "");
-    return proseHTML
+    return proseBlock
       + (cardLinks.length ? `<div class="user-links${proseHTML ? " has-text" : ""}">${cardLinks.map(renderUserLinkCardHTML).join("")}</div>` : "")
       + (imgs.length ? `<span class="thumbs">${imgs.map((p) => thumbBtn(p)).join("")}</span>` : "")
       + (rest.length ? `<span class="att">${rest.map((p) => `<span>📎 ${esc(name(p))}</span>`).join("")}</span>` : "");
@@ -5774,10 +5832,11 @@
     if (token.startsWith("p:")) {
       const pid = token.slice(2), v = find(pid);
       if (!v) return null;
+      const meta = getSessMeta(v.kind, v.machine, v.session, "p:" + v.pane_id);
       return {
         token, type: "pane", pane_id: v.pane_id, workspace_id: v.workspace_id,
         kind: v.kind, machine: v.machine || "", session: v.session || "", cwd: v.cwd || "",
-        title: title(v), name: v.name || "", archived: false, activeNow: view === "pane" && current === v.pane_id,
+        title: title(v), name: v.name || "", pinned: !!meta?.pinned, archived: false, activeNow: view === "pane" && current === v.pane_id,
       };
     }
     if (token.startsWith("x:")) {
@@ -5787,7 +5846,7 @@
       return {
         token, type: "ext", ext_id: e.id,
         kind: e.kind, machine: e.machine || "", session: e.session || "", cwd: e.cwd || "",
-        title: extName(e), name: "", archived: !!meta?.archived, live: !!e.live, activeNow: view === "ext" && extCur === e.id,
+        title: extName(e), name: "", pinned: !!meta?.pinned, archived: !!meta?.archived, live: !!e.live, activeNow: view === "ext" && extCur === e.id,
       };
     }
     if (token.startsWith("h:")) {
@@ -5797,7 +5856,7 @@
       return {
         token, type: "hist", hist_id: h.id,
         kind: h.kind, machine: h.machine || "", session: h.session || "", cwd: h.cwd || "",
-        title: histName(h), name: h.name || "", archived: !!meta?.archived, activeNow: view === "ext" && extCur === "h:" + h.id,
+        title: histName(h), name: h.name || "", pinned: !!meta?.pinned, archived: !!meta?.archived, activeNow: view === "ext" && extCur === "h:" + h.id,
       };
     }
     return null;
@@ -5828,6 +5887,19 @@
         toast("已重命名");
       },
     });
+  }
+
+  async function togglePinSession(target) {
+    if (!target) return;
+    const nextPin = !target.pinned;
+    await api("/api/sessions/pin", { body: {
+      key: target.token || "",
+      pane_id: target.pane_id || "", ext_id: target.ext_id || "", hist_id: target.hist_id || "",
+      kind: target.kind || "", machine: target.machine || "", session: target.session || "",
+      pinned: nextPin,
+    } });
+    await refreshSessionMeta();
+    toast(nextPin ? "已置顶到独立会话顶部" : "已取消置顶");
   }
 
   async function toggleArchiveSession(target) {
@@ -5992,6 +6064,13 @@
       renderSessions();
       return;
     }
+    const spBtn = e.target.closest("[data-spin]");
+    if (spBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const target = resolveSessionTarget(spBtn.dataset.spin);
+      if (target) togglePinSession(target).catch((err) => toast(err.message, "attn"));
+      return;
+    }
     const mb = e.target.closest("[data-smenu]");
     if (mb) {
       e.preventDefault(); e.stopPropagation();
@@ -6004,15 +6083,20 @@
       sessPopToken = mb.dataset.smenu;
       sessPopBtn = mb; mb.classList.add("open");
       $("#spm-archive").textContent = target.archived ? "移出归档" : "归档会话";
+      const curP = projectOfSession(target.kind, target.machine, target.session, target.cwd, target.token);
+      const spmPin = $("#spm-pin");
+      if (spmPin) {
+        spmPin.hidden = Boolean(curP || target.archived);
+        spmPin.textContent = target.pinned ? "取消置顶" : "置顶会话";
+      }
       const spmProj = $("#spm-project");
       if (spmProj) {
-        const curP = projectOfSession(target.kind, target.machine, target.session, target.cwd, target.token);
         spmProj.textContent = curP ? "更改 / 移出项目…" : "归属到项目…";
       }
       sessPopMenu.hidden = false;
       const r = mb.getBoundingClientRect();
       const left = Math.min(innerWidth - 176, Math.max(8, r.right - 148));
-      const top = r.bottom + 165 > innerHeight ? Math.max(8, r.top - 152) : r.bottom + 4;
+      const top = r.bottom + 195 > innerHeight ? Math.max(8, r.top - 180) : r.bottom + 4;
       sessPopMenu.style.left = left + "px";
       sessPopMenu.style.top = top + "px";
       return;
@@ -6021,6 +6105,7 @@
     if (sact) {
       const target = resolveSessionTarget(sessPopToken);
       closeSessPop();
+      if (sact === "pin") togglePinSession(target).catch((err) => toast(err.message, "attn"));
       if (sact === "rename") promptRenameSession(target);
       if (sact === "project") openAssignSessionProject(target);
       if (sact === "archive") toggleArchiveSession(target).catch((err) => toast(err.message, "attn"));

@@ -101,7 +101,7 @@ function runScenario(authed) {
           json: async () => ({
             router: { alive: true, status: "idle", kind: "codex", machine: "mac" },
             entries: [
-              { id: "e1", role: "user", text: "看看上游新更新了什么，还有 https://arxiv.org/abs/2405.06803 这篇\n\n参考链接：\n- [Comparing main...lihuanyu0w0:collie:main · Tdcle/collie](https://github.com/Tdcle/collie/compare/main...lihuanyu0w0%3Acollie%3Amain)", at: now },
+              { id: "e1", role: "user", text: "看看上游新更新了什么，还有 https://arxiv.org/abs/2405.06803 这篇：\n第1行\n第2行\n第3行\n第4行\n第5行\n第6行\n第7行\n\n参考链接：\n- [Comparing main...lihuanyu0w0:collie:main · Tdcle/collie](https://github.com/Tdcle/collie/compare/main...lihuanyu0w0%3Acollie%3Amain)", at: now },
               { id: "e1a", role: "collie", interim: true, text: "已派 **sfd-eval** 去拉取对比，跑完向你汇总。", at: now },
               { id: "e1b", role: "event", tone: "spawn", ref: "sfd-eval", text: "sfd-eval 启动：检查上游更新", at: now },
               { id: "e1c", role: "event", tone: "done", ref: "sfd-eval", text: "sfd-eval 回报：已完成对比", at: now },
@@ -120,12 +120,22 @@ function runScenario(authed) {
           }),
         };
       }
+      if (String(u).includes("/api/external")) {
+        return {
+          ok: true, status: 200, headers: { get: () => "" },
+          json: async () => ({ sessions: [
+            { id: "cx-newer@mac", kind: "codex", machine: "mac", session: "s-newer", title: "普通较新会话", cwd: "/tmp/a", updated: "2026-11-24T10:00:00Z" },
+            { id: "cx-older-pinned@mac", kind: "codex", machine: "mac", session: "s-pinned", title: "置顶核心会话", cwd: "/tmp/b", updated: "2026-11-20T08:00:00Z" },
+          ] }),
+        };
+      }
       return {
         ok: true, status: 200, headers: { get: () => "" },
         json: async () => ({
           ok: true,
           machines: [{ id: "mac", name: "Mac", os: "darwin/arm64", online: true, agents: ["codex"] }],
           agents: [], shells: [], projects: [], sessions: [], hubs: [], results: [],
+          session_meta: { "s:codex:mac:s-pinned": { pinned: true, pinned_at: 1795488000000 } },
         }),
       };
     },
@@ -165,8 +175,15 @@ if (threadHTML.includes("status_5090.json") && threadHTML.includes('data-art-ope
 if (threadHTML.includes('data-art-open="C:/Users/26422/Documents/SFD-Net 2/epochs.csv"')) {
   throw new Error("Regression: inline-linked [逐轮数据快照](<.../epochs.csv>) must NOT render a duplicate artifact card!");
 }
-if (!fs.readFileSync("web/index.html", "utf8").includes('id="fv-dl"')) {
-  throw new Error("Expected top-right download button #fv-dl in #file-view header");
+if (!fs.readFileSync("web/index.html", "utf8").includes('id="fv-dl"') || !fs.readFileSync("web/index.html", "utf8").includes('id="spm-pin"')) {
+  throw new Error("Expected top-right download button #fv-dl and standalone pin menu item #spm-pin");
+}
+if (!threadHTML.includes('class="u-fold"') || !threadHTML.includes("展开全文（共 8 行）")) {
+  throw new Error("Expected long user message (>6 lines / >260 chars) to render collapsible .u-fold with line count");
+}
+const sideListHTML = auth.getEl("#session-list").innerHTML;
+if (!sideListHTML.includes("is-pinned") || !sideListHTML.includes("pin-mark") || sideListHTML.indexOf("置顶核心会话") > sideListHTML.indexOf("普通较新会话")) {
+  throw new Error("Expected pinned standalone session to render with .pin-mark and sort above newer unpinned sessions");
 }
 if (threadHTML.includes("art-badge sheet")) {
   throw new Error("Regression: 'art-badge sheet' collides with dialog.sheet!");

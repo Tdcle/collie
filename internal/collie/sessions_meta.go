@@ -17,6 +17,8 @@ import (
 type SessionMeta struct {
 	Title     string    `json:"title,omitempty"`
 	ProjectID string    `json:"project_id,omitempty"`
+	Pinned    bool      `json:"pinned,omitempty"`
+	PinnedAt  int64     `json:"pinned_at,omitempty"`
 	Archived  bool      `json:"archived,omitempty"`
 	Deleted   bool      `json:"deleted,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -84,7 +86,7 @@ func (s *Server) sessionMetaSnapshot() map[string]*SessionMeta {
 	}
 	out := make(map[string]*SessionMeta, len(sessionMetaStore.byKey))
 	for k, v := range sessionMetaStore.byKey {
-		if v == nil || (v.Title == "" && v.ProjectID == "" && !v.Archived && !v.Deleted) {
+		if v == nil || (v.Title == "" && v.ProjectID == "" && !v.Pinned && !v.Archived && !v.Deleted) {
 			continue
 		}
 		cp := *v
@@ -141,9 +143,48 @@ func upsertMetaKey(key string, fn func(m *SessionMeta)) {
 	}
 	fn(m)
 	m.UpdatedAt = time.Now()
-	if m.Title == "" && m.ProjectID == "" && !m.Archived && !m.Deleted {
+	if m.Title == "" && m.ProjectID == "" && !m.Pinned && !m.Archived && !m.Deleted {
 		delete(sessionMetaStore.byKey, key)
 	}
+}
+
+// pinSession pins or unpins a standalone session at the top of the sidebar.
+func (s *Server) pinSession(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key     string `json:"key"`
+		PaneID  string `json:"pane_id"`
+		ExtID   string `json:"ext_id"`
+		HistID  string `json:"hist_id"`
+		Kind    string `json:"kind"`
+		Machine string `json:"machine"`
+		Session string `json:"session"`
+		Pinned  bool   `json:"pinned"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	nowMS := time.Now().UnixMilli()
+	ckey := canonicalSessionKey(body.Kind, body.Machine, body.Session)
+	sessionMetaStore.Lock()
+	s.loadSessionMetaLocked()
+	for _, k := range []string{body.Key, ckey, prefixKey("p:", body.PaneID), prefixKey("x:", body.ExtID), prefixKey("h:", body.HistID)} {
+		upsertMetaKey(k, func(m *SessionMeta) {
+			m.Pinned = body.Pinned
+			if body.Pinned {
+				m.PinnedAt = nowMS
+				m.Archived = false
+				m.Deleted = false
+			} else {
+				m.PinnedAt = 0
+			}
+		})
+	}
+	s.saveSessionMetaLocked()
+	sessionMetaStore.Unlock()
+	if s.sup != nil {
+		s.sup.changed()
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "pinned": body.Pinned, "pinned_at": nowMS})
 }
 
 // renameSession sets or clears a custom display title for any session.
@@ -227,6 +268,8 @@ func (s *Server) archiveSession(w http.ResponseWriter, r *http.Request) {
 			m.Archived = body.Archived
 			if body.Archived {
 				m.Deleted = false
+				m.Pinned = false
+				m.PinnedAt = 0
 			}
 			if body.Title != "" && m.Title == "" {
 				m.Title = strings.TrimSpace(body.Title)
