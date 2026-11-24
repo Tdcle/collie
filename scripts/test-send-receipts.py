@@ -54,7 +54,7 @@ def run(root, stack, binary, old):
                 text = data["params"]["text"]
                 assert data["params"]["target"] == "w1:p1"
                 counts[text] += 1
-                if text in ("lost-pane", "crash-window"):
+                if text in ("lost-pane", "crash-window", "old-uncertain"):
                     release.wait(15)
             result = {"workspace.list": {"workspaces": []}, "agent.list": {"agents": []},
                       "pane.list": {"panes": []}}.get(method, {})
@@ -94,7 +94,7 @@ def run(root, stack, binary, old):
                     turn = params.get("turnStart") or params["turnSteer"]
                     text = turn["request"]["input"][0]["text"]
                     counts[text] += 1
-                    if text == "codex-backend-lost":
+                    if text in ("codex-backend-lost", "old-hub-backend-lost"):
                         return
                 raw = json.dumps(reply).encode()
                 self.wfile.write(struct.pack("<I", len(raw)) + raw)
@@ -113,6 +113,11 @@ def run(root, stack, binary, old):
     reg.write_text(json.dumps({"pid": os.getpid(), "sessionId": "e2e", "cwd": str(root),
                                "entrypoint": "claude-desktop", "peerProtocol": 1,
                                "messagingSocketPath": str(root / "peer.sock")}))
+
+    # Make the same isolated external backend visible on the hub and both nodes.
+    for role in ("hub", "oldnode"):
+        (root / role).mkdir()
+        (root / role / ".codex").symlink_to(codex_home, target_is_directory=True)
 
     def env(role):
         home = root / role
@@ -154,8 +159,9 @@ def run(root, stack, binary, old):
     node_args = ("node", "--socket", str(root / "node.sock"), "--ui", "off")
     code = api("/api/pair/new", {"kind": "machine"})["code"]
     node = start("node", *node_args, "--hub", addr, "--code", code, "--name", "sandbox")
-    def online():
-        return next((d["id"] for d in api("/api/devices")["devices"] if d["online"]), "")
+    def online(name="sandbox"):
+        return next((d["id"] for d in api("/api/devices")["devices"]
+                     if d["online"] and d["name"] == name), "")
     machine = until(online)
     pane = "w1:p1@" + machine
     external = f"claude-{os.getpid()}@{machine}"
@@ -166,7 +172,7 @@ def run(root, stack, binary, old):
 
     codex = "cx-e2e-codex@" + machine
     for to, text in [("w1:p1", "local-pane"), (pane, "normal-pane"),
-                     (external, "normal-external"), (codex, "normal-codex")]:
+                     (external, "normal-external"), ("cx-e2e-codex", "local-external"), (codex, "normal-codex")]:
         receipt = cli("send", to, text)
         assert receipt["status"] == "accepted" and receipt["to"] == to
         assert cli("receipt", receipt["id"])["status"] == "accepted"
@@ -221,13 +227,25 @@ def run(root, stack, binary, old):
     addrfile.unlink()
     # A worker can have the same spelling as a local sidebar ID.
     with sqlite3.connect(addrfile.parent / "herd.db") as db:
-        wk = {"name": "cl-fixture", "thread": "fixture", "status": "starting"}
-        db.execute("INSERT INTO workers(name,created_at,data) VALUES(?, ?, ?)",
-                   (wk["name"], int(time.time()), json.dumps(wk)))
+        for name in ("codex-update", "codex-12345", "cx-e2e-codex"):
+            wk = {"name": name, "thread": "fixture", "status": "starting"}
+            db.execute("INSERT INTO workers(name,created_at,data) VALUES(?, ?, ?)",
+                       (name, int(time.time()), json.dumps(wk)))
     hub = start_hub(addr)
-    queued = cli("send", "--id", "worker-name", "cl-fixture", "queued-work")
-    assert queued["trigger"] and cli("receipt", "worker-name")["status"] == "queued"
-    assert cli("send", "--id", "worker-name", "cl-fixture", "queued-work") == queued
+    for name in ("codex-update", "codex-12345", "cx-e2e-codex"):
+        text = f"worker-only-{name}"
+        proc = start("hub", "send", "--thread", "fixture-thread", name, text)
+        out, err = proc.communicate(timeout=10)
+        assert proc.returncode == 0 and err.startswith("receipt: "), (out, err)
+        worker_id = err.split()[1]
+        queued = json.loads(out)
+        assert queued["trigger"] and cli("receipt", worker_id)["status"] == "queued"
+        assert cli("send", "--id", worker_id, "--thread", "fixture-thread", name, text) == queued
+        with sqlite3.connect(addrfile.parent / "herd.db") as db:
+            rows = [json.loads(row[0]) for row in db.execute("SELECT data FROM triggers WHERE thread='fixture-thread'")]
+        assert [t["targets"] for t in rows if t["text"] == text] == [[name]]
+        assert counts[text] == 0
+        print(f"{name}: one worker trigger; sidebar sends = 0", flush=True)
     assert cli("receipt", rid)["status"] == "unconfirmed"  # offline
     node = start("node", *node_args)
     until(online)
@@ -261,33 +279,69 @@ def run(root, stack, binary, old):
     count("no-transcript-ack")
 
     if old:
+        code = api("/api/pair/new", {"kind": "machine"})["code"]
+        legacy = start("oldnode", *node_args, "--hub", addr, "--code", code, "--name", "older", exe=old)
+        old_machine = until(lambda: online("older"))
+        assert online() and old_machine != machine
+        old_pane = "w1:p1@" + old_machine
+        for to, text in [(old_pane, "old-pane"), ("cx-e2e-codex@" + old_machine, "old-external"),
+                         (pane, "new-pane-mixed")]:
+            result = cli("send", to, text)
+            assert result["status"] == "accepted" and cli("receipt", result["id"])["status"] == "accepted"
+            assert cli("send", "--id", result["id"], to, text) == result
+            count(text)
+
+        # The legacy receiver cannot deduplicate. Its hub claim must survive a
+        # lost tunnel response, a hub restart, and upgrading the node in place.
+        release.clear()
+        pending = start("hub", "send", old_pane, "old-uncertain")
+        old_id = pending.stderr.readline().split()[1]
+        until(lambda: counts["old-uncertain"])
+        assert cli("send", "--id", old_id, old_pane, "old-uncertain", ok=False)["status"] == "unconfirmed"
+        legacy.kill()
+        legacy.wait()
+        release.set()
+        out, _ = pending.communicate(timeout=35)
+        assert pending.returncode != 0 and json.loads(out)["status"] == "unconfirmed"
+        hub.kill()
+        hub.wait()
+        addrfile.unlink()
+        hub = start_hub(addr)
+        start("oldnode", *node_args)
+        until(lambda: online("older"))
+        assert cli("receipt", old_id)["status"] == "unconfirmed"
+        assert cli("send", "--id", old_id, old_pane, "old-uncertain", ok=False)["status"] == "unconfirmed"
+        count("old-uncertain")
+
+        # Downgrade a node after a keyed attempt. Its legacy endpoint must
+        # never receive an operation already pinned to the receipt protocol.
         node.kill()
         node.wait()
         until(lambda: not online())
-        legacy = start("node", *node_args, exe=old)
+        start("node", *node_args, exe=old)
         until(online)
-        v = cli("send", "--id", "mixed", pane, "old-node", ok=False)
-        assert v["status"] == "unconfirmed" and "updated node" in v["detail"], v
-        assert counts["old-node"] == 0
-        old_send = start("hub", "send", pane, "legacy-pane", exe=old)
-        out, err = old_send.communicate(timeout=35)
-        assert old_send.returncode == 0 and json.loads(out)["ok"], (out, err)
-        count("legacy-pane")
-        legacy.kill()
-        legacy.wait()
-        until(lambda: not online())
-        node = start("node", *node_args)
-        until(online)
-        assert cli("send", "--id", "mixed", pane, "old-node")["status"] == "accepted"
-        count("old-node")
+        assert cli("send", "--id", "crash", pane, "crash-window", ok=False)["status"] == "unconfirmed"
+        count("crash-window")
+        legacy_cli = start("hub", "send", pane, "legacy-cli", exe=old)
+        out, err = legacy_cli.communicate(timeout=35)
+        assert legacy_cli.returncode == 0 and json.loads(out)["ok"], (out, err)
+        count("legacy-cli")
+
         hub.kill()
         hub.wait()
         addrfile.unlink()
         start_hub(addr, exe=old)
         until(online)
-        err = cli("send", "--id", "old-hub", pane, "old-hub", ok=False)
-        assert "unconfirmed" in err and counts["old-hub"] == 0, err
-        print("unsupported hub: actual sends = 0")
+        proc = start("hub", "send", pane, "old-hub-normal")
+        out, err = proc.communicate(timeout=35)
+        assert proc.returncode == 0 and json.loads(out)["ok"] and "without a recoverable receipt" in err
+        count("old-hub-normal")
+        err = cli("send", "cx-e2e-codex@" + old_machine, "old-hub-backend-lost", ok=False)
+        assert "unconfirmed on legacy hub" in err
+        count("old-hub-backend-lost")
+        err = cli("send", "--id", old_id, old_pane, "old-uncertain", ok=False)
+        assert "unconfirmed" in err, err
+        count("old-uncertain")
     print("PASS", flush=True)
 
 
