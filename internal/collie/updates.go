@@ -27,6 +27,8 @@ import (
 
 var repo = "Tdcle/collie"
 
+var selfUpdateMu sync.Mutex
+
 func releaseRepo() string { return envOr("COLLIE_REPO", repo) }
 
 var latestRel struct {
@@ -199,6 +201,16 @@ func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
 // restarts it in place (same process id, so launchd, systemd or nohup keep
 // tracking it). herdr and the agents in it keep running meanwhile.
 func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
+	if !selfUpdateMu.TryLock() {
+		writeJSON(w, 409, map[string]any{"error": "升级已在进行中，请稍候"})
+		return
+	}
+	restarting := false
+	defer func() {
+		if !restarting {
+			selfUpdateMu.Unlock()
+		}
+	}()
 	if parseVersion(version) == nil {
 		writeJSON(w, 400, map[string]any{"error": "这台的 collie 是从源码编译的（" + version + "），在源码里 git pull 后重新编译来更新"})
 		return
@@ -225,6 +237,7 @@ func (s *Server) selfUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("updated %s → %s; restarting", version, latest)
+	restarting = true
 	writeJSON(w, 200, map[string]any{"ok": true, "from": version, "version": latest})
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()

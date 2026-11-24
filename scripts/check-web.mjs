@@ -108,7 +108,7 @@ function runScenario(authed) {
               {
                 id: "e2",
                 role: "collie",
-                text: "**结论：共 3 项核心更新**。\n\n任务｜旧纯原型｜新纯原型｜原编码器\n息肉 357 张｜327｜355（99.44%）｜350\n超声视频 72 段｜70｜72（100%）｜71\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n[5090 完成记录](~/Documents/status_5090.json) · [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n离线汇总表见 C:\\Users\\26422\\Documents\\SFD-Net 2\\summary.csv\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
+                text: "**结论：共 3 项核心更新**。\n\n任务｜旧纯原型｜新纯原型｜原编码器\n息肉 357 张｜327｜355（99.44%）｜350\n超声视频 72 段｜70｜72（100%）｜71\n\n推理时，若第 \\(d\\) 个域的距离为 \\(r_{d1},r_{d2},r_{d3}\\)，则按下式选域：\n\n\\[\na_d=\\frac{1}{3}\\sum_{j=1}^{3}\\frac{1}{r_{dj}+10^{-6}},\\qquad p_d=\\frac{a_d}{\\sum_b a_b},\\qquad \\hat d=\\arg\\max_d p_d.\n\\]\n\n[5090 完成记录](~/Documents/status_5090.json) · [逐轮数据快照](<C:/Users/26422/Documents/SFD-Net 2/epochs.csv>)\n行内代码路径 `~/reports/eval.html` 与 `C:\\Users\\26422\\SFD-Net 2\\fig1.png` 以及网址 `https://tailscale.com/download`\n离线汇总表见 C:\\Users\\26422\\Documents\\SFD-Net 2\\summary.csv\n```go\nfunc main() { return }\n```\n是否继续启动评估？",
                 options: ["继续启动", "先不跑"],
                 at: now,
               },
@@ -208,6 +208,12 @@ if (!threadHTML.includes('class="math-block"') || !threadHTML.includes('class="m
 }
 if (!threadHTML.includes("collie-proc") || !threadHTML.includes("1 条中间进展 · 2 条调度轨迹") || !threadHTML.includes("md-table")) {
   throw new Error("Expected settled Collie turn to fold interim replies & events into .collie-proc and render GFM md-table in final summary");
+}
+if (!threadHTML.includes('class="fpath code-fpath"') || !threadHTML.includes('data-path="~/reports/eval.html"') || !threadHTML.includes('data-path="C:\\Users\\26422\\SFD-Net 2\\fig1.png"') || !threadHTML.includes('class="url code-url"')) {
+  throw new Error("Expected inline-code Unix & Windows paths (`~/reports/eval.html`, `C:\\Users\\26422\\SFD-Net 2\\fig1.png`) and URLs to render as clickable .code-fpath / .code-url links");
+}
+if (!auth.getEl("#v-file") || !auth.getEl("#fv-wide") || !auth.getEl("#super-jump") || !auth.getEl("#ilb-prev") || !auth.getEl("#ilb-next")) {
+  throw new Error("Expected #v-file wide reader, #fv-wide button, #super-jump button, and #ilb-prev/#ilb-next lightbox gallery controls in DOM");
 }
 const cssText = fs.readFileSync("web/app.css", "utf8");
 if (/\.item\.active\s*>\s*\.dot[^{]*\{[^}]*opacity:\s*0/.test(cssText)) {

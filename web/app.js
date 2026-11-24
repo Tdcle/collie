@@ -11,6 +11,7 @@
   const narrow = () => matchMedia("(max-width: 760px)").matches;
   const AGENT_LABEL = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", gemini: "Gemini CLI" };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const unesc = (s) => String(s ?? "").replace(/&(amp|lt|gt|quot|#39);/g, (_, k) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" }[k] || _));
   const cleanPath = (p) => String(p || "").replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/, "");
   const tilde = (p, home) => {
     const s = cleanPath(p);
@@ -742,28 +743,111 @@
     $("#nav-settings")?.classList.remove("active");
   });
 
-  // ───────────────────────────── routing
+  // ───────────────────────────── routing & scroll restoration
   const PANEL_VIEWS = new Set(["trace", "memory", "timers", "hooks", "settings"]);
+  let navCur = typeof history.state?.collieIdx === "number" ? history.state.collieIdx : 0;
+  let booted = false;
+  const scrollByRoute = new Map(); // routeKey -> { top, atBottom }
+  let pendingScrollRestore = null;
+
+  function syncHistoryIndex() {
+    if (typeof history.state?.collieIdx === "number") {
+      navCur = history.state.collieIdx;
+    } else {
+      navCur = booted ? navCur + 1 : 0;
+      try { history.replaceState({ ...(history.state || {}), collieIdx: navCur }, ""); } catch {}
+    }
+  }
+  function replaceHash(hash) {
+    try { history.replaceState({ ...(history.state || {}), collieIdx: navCur }, "", hash); }
+    catch { location.replace(hash); }
+  }
+  function fallbackHash() {
+    if (!narrow()) return "#/collie";
+    if (view === "pane") {
+      const v = find(current);
+      if (v && (v.name === ROUTER || isWorker(v.name))) return "#/collie";
+    } else if (view === "ext" && extCur?.startsWith("h:")) {
+      const h = hist.find((x) => x.id === extCur.slice(2));
+      if (h && (h.name === ROUTER || sup.workers.some((w) => w.name === h.name))) return "#/collie";
+    }
+    return "#/";
+  }
+  function goBack(replaceAtRoot = false) {
+    if (navCur > 0) {
+      history.back();
+      return;
+    }
+    const dest = fallbackHash();
+    if (location.hash === dest || (!location.hash && dest === "#/")) return;
+    if (replaceAtRoot) { replaceHash(dest); route(); }
+    else location.hash = dest;
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.closest(".back")) { e.preventDefault(); goBack(); return; }
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest('a[href^="#/"]');
+    if (a && a.getAttribute("href") === location.hash) e.preventDefault();
+  });
+
+  function routeKeyFor(v, id) {
+    if (v === "collie") return "collie";
+    if (PANEL_VIEWS.has(v)) return "panel:" + v;
+    if (v === "devices") return "devices";
+    if (v === "file") return "file:" + (id || "");
+    if (v === "ext") return "ext:" + (id || "");
+    if (v === "pane") return "pane:" + (id || "");
+    return "";
+  }
+  function viewScroller(v = view) {
+    if (v === "collie") return $("#super-thread")?.parentElement || null;
+    if (PANEL_VIEWS.has(v)) return $("#panel-body");
+    if (v === "devices") return $("#devices-body");
+    if (v === "file") return $("#rv-scroller");
+    if (v === "ext") return $("#x-thread")?.parentElement || null;
+    if (v === "pane") return $("#thread");
+    return null;
+  }
+  function saveCurrentScroll() {
+    if (!view) return;
+    const key = routeKeyFor(view, view === "ext" ? extCur : current);
+    const sc = viewScroller(view);
+    if (!key || !sc || sc.clientHeight <= 0) return;
+    const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
+    scrollByRoute.set(key, { top: sc.scrollTop, atBottom });
+  }
+  function syncJumpBtn(sc, btn) {
+    if (!sc || !btn) return;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    btn.hidden = !(sc.clientHeight > 0 && dist > 160);
+  }
+  function syncAllJumpBtns() {
+    syncJumpBtn($("#super-thread")?.parentElement, $("#super-jump"));
+    syncJumpBtn($("#x-thread")?.parentElement, $("#x-jump"));
+    syncJumpBtn($("#thread"), $("#d-jump"));
+  }
+
   function route() {
-    const h = location.hash;
+    syncHistoryIndex();
+    let h = location.hash;
     if (h === "#/auto") {
       const legacyMap = { inbox: "#/trace", threads: "#/trace", memory: "#/memory", timers: "#/timers", hooks: "#/hooks", settings: "#/settings" };
-      location.replace(legacyMap[store.get("autoTab", "inbox")] || "#/trace");
-      return;
+      replaceHash(legacyMap[store.get("autoTab", "inbox")] || "#/trace");
+      h = location.hash;
     }
     if (h === "#/prefs") {
       settingsTab = "local"; store.set("settingsTab", "local");
-      location.replace("#/settings");
-      return;
+      replaceHash("#/settings");
+      h = location.hash;
     }
     let next = null, id = null, subTab = null;
-    const hRaw = h;
     const qIdx = h.indexOf("?");
     const hPath = qIdx >= 0 ? h.slice(0, qIdx) : h;
     const hQuery = qIdx >= 0 ? new URLSearchParams(h.slice(qIdx + 1)) : null;
     if (hPath.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(hPath.slice(4)); }
     else if (hPath.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(hPath.slice(4)); }
     else if (hPath.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(hPath.slice(4)); }
+    else if (hPath === "#/file") { next = "file"; id = (hQuery?.get("path") || "") + "@" + (hQuery?.get("machine") || ""); }
     else if (hPath === "#/collie") next = "collie";
     else if (hPath === "#/trace" || hPath.startsWith("#/trace/")) { next = "trace"; }
     else if (hPath === "#/memory" || hPath.startsWith("#/memory/")) { next = "memory"; subTab = hPath.slice(9); if (["active", "notes", "archive"].includes(subTab)) { memTab = subTab; store.set("memTab", subTab); } }
@@ -772,21 +856,28 @@
     else if (hPath === "#/settings" || hPath.startsWith("#/settings/")) { next = "settings"; subTab = hPath.slice(11); if (subTab === "collie" || subTab === "local") { settingsTab = subTab; store.set("settingsTab", subTab); } }
     else if (hPath === "#/devices") next = "devices";
     else if (!narrow()) {
-      // Desktop has no empty home: reopen where you were, else Collie.
-      const last = store.get("last", "#/collie");
-      const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|trace|memory|timers|hooks|settings|devices)(\/[a-z]+)?$/.test(last);
-      location.replace(ok ? last : "#/collie");
-      return;
+      let dest = "#/collie";
+      if (!booted && !h) {
+        const last = store.get("last", "#/collie");
+        const ok = last.startsWith("#/p/") ? !!find(decodeURIComponent(last.slice(4))) : /^#\/(collie|trace|memory|timers|hooks|settings|devices)(\/[a-z]+)?$/.test(last);
+        if (ok) dest = last;
+      }
+      replaceHash(dest);
+      h = dest;
+      if (h.startsWith("#/p/")) { next = "pane"; id = decodeURIComponent(h.slice(4)); }
+      else next = h.slice(2).split("/")[0];
     }
-    if (next) store.set("last", hPath);
+    if (next && next !== "file") store.set("last", hPath);
     if (hQuery?.get("quotas") === "1") {
-      history.replaceState(null, "", location.pathname + location.search + hPath);
+      replaceHash(hPath);
       setTimeout(() => { toggleQuotaPop(true); loadQuotas(true); }, 80);
     }
     if (next === view && id === (next === "ext" ? extCur : current)) {
       if (subTab && PANEL_VIEWS.has(next)) openPanel(next);
       return;
     }
+    saveCurrentScroll();
+    if ($("#app")?.classList.contains("has-file") && (next === "file" || matchMedia("(max-width: 1000px)").matches)) closeFilePane();
     if (view === "ext" && (next !== "ext" || id !== extCur)) { closeExt(); }
     if (view === "pane" && (next !== "pane" || id !== current)) closeStream();
     if (PANEL_VIEWS.has(view) && next !== view) clearInterval(autoTimer);
@@ -796,19 +887,24 @@
     current = next === "ext" ? null : id;
     extCur = next === "ext" ? id : null;
     document.body.classList.toggle("show-main", !!next);
+    document.body.classList.toggle("reader-mode", next === "file");
     $("#v-collie").hidden = next !== "collie";
     $("#v-panel").hidden = !PANEL_VIEWS.has(next);
     $("#v-devices").hidden = next !== "devices";
     $("#v-ext").hidden = next !== "ext";
     $("#detail").hidden = next !== "pane";
-    const activeViewEl = next === "collie" ? $("#v-collie") : PANEL_VIEWS.has(next) ? $("#v-panel") : next === "devices" ? $("#v-devices") : next === "ext" ? $("#v-ext") : next === "pane" ? $("#detail") : null;
+    if ($("#v-file")) $("#v-file").hidden = next !== "file";
+    const activeViewEl = next === "collie" ? $("#v-collie") : PANEL_VIEWS.has(next) ? $("#v-panel") : next === "devices" ? $("#v-devices") : next === "ext" ? $("#v-ext") : next === "pane" ? $("#detail") : next === "file" ? $("#v-file") : null;
     const slot = activeViewEl?.querySelector("[data-head-slot]"), topTools = $("#top-tools");
     if (slot && topTools && topTools.parentNode !== slot) slot.append(topTools);
     renderSide();
+    const saved = scrollByRoute.get(routeKeyFor(next, id));
+    pendingScrollRestore = saved && !saved.atBottom ? { key: routeKeyFor(next, id), top: saved.top, until: Date.now() + 1200 } : null;
     if (next === "collie") { renderSuper(true); renderTarget(true); if (!narrow()) $("#super-input").focus(); }
     if (PANEL_VIEWS.has(next)) openPanel(next);
     if (next === "devices") openDevices();
     if (next === "ext") openExt(id);
+    if (next === "file") openWideFile(hQuery?.get("path") || "", hQuery?.get("machine") || "");
     if (next === "pane") {
       $("#gone").hidden = true;
       resetChat();
@@ -816,8 +912,18 @@
       openStream();
       if (!narrow()) $("#input").focus();
     }
+    booted = true;
+    requestAnimationFrame(() => {
+      if (pendingScrollRestore && pendingScrollRestore.key === routeKeyFor(view, view === "ext" ? extCur : current)) {
+        const sc = viewScroller(view);
+        if (sc) sc.scrollTop = pendingScrollRestore.top;
+      }
+      syncAllJumpBtns();
+    });
   }
+  addEventListener("popstate", route);
   addEventListener("hashchange", route);
+  addEventListener("resize", () => { if (booted && !view && !narrow()) route(); });
 
   // ───────────────────────────── Collie (super-agent) view
   let superSig = "";
@@ -1389,7 +1495,11 @@
       return;
     }
     const jumping = flashEntry.until > Date.now();
-    if ((atBottom && !jumping) || force) {
+    const restoring = pendingScrollRestore && pendingScrollRestore.key === "collie" && pendingScrollRestore.until > Date.now();
+    if (restoring) {
+      scroller.scrollTop = pendingScrollRestore.top;
+      pendingScrollRestore = null;
+    } else if ((atBottom && !jumping) || force) {
       scroller.scrollTop = scroller.scrollHeight;
       const set = scroller.scrollTop;
       if (typeof requestAnimationFrame === "function") {
@@ -1398,9 +1508,11 @@
           if (scroller.scrollTop === set && scroller.scrollHeight > scroller.clientHeight) {
             scroller.scrollTop = scroller.scrollHeight;
           }
+          syncJumpBtn(scroller, $("#super-jump"));
         });
       }
     }
+    syncJumpBtn(scroller, $("#super-jump"));
   }
   $("#super-thread")._loadMore = () => canLoadOlder() && loadOlder();
 
@@ -2201,8 +2313,10 @@
   function memoryHTML(r, tab = "active") {
     const files = r.files || [];
     const by = (f) => files.filter(f);
-    const over = r.loaded > r.budget;
-    const pct = Math.min(100, Math.max(2, Math.round(((r.loaded || 0) / Math.max(1, r.budget || 6144)) * 100)));
+    const upFront = typeof r.up_front === "number" ? r.up_front : r.loaded;
+    const msgSize = typeof r.messages_size === "number" ? r.messages_size : Math.max(0, (r.loaded || 0) - (upFront || 0));
+    const over = upFront > r.budget;
+    const pct = Math.min(100, Math.max(2, Math.round(((upFront || 0) / Math.max(1, r.budget || 10240)) * 100)));
     const dreamSub = r.dreaming
       ? `<b>正在回顾近期对话并整合记忆…</b> 整理完成后自动恢复，期间发来的消息会安全排队。`
       : `上次整理：<b>${r.last_dream ? dayTime(r.last_dream) : "尚未执行"}</b> · 下次计划：<b>${r.next_dream ? dayTime(r.next_dream) : "已关闭"}</b>`;
@@ -2257,7 +2371,7 @@
           <span class="mem-stat-label"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 15h4M7 10h10"/></svg>新会话预载上下文预算</span>
           <span class="badge ${over ? "candidate" : "ok"}">${over ? "超出建议值" : "健康"}</span>
         </div>
-        <div class="mem-meter-row"><span>${kb(r.loaded)} <small>/ 建议上限 ${kb(r.budget)}</small></span><small class="mono">${esc(tilde(r.dir))}/memory</small></div>
+        <div class="mem-meter-row"><span>${kb(upFront)} <small>/ 建议上限 ${kb(r.budget)}${msgSize > 0 ? ` · 另附对话摘录 ${kb(msgSize)}` : ""}</small></span><small class="mono">${esc(tilde(r.dir))}/memory</small></div>
         <div class="mem-meter ${over ? "warn" : ""}"><i style="width:${pct}%"></i></div>
       </div>
     </div>`;
@@ -4089,11 +4203,35 @@
   const scroller = (el) => el.closest(".viewer.chatbg") || el;
   const nearBottom = (el) => { const s = scroller(el); return s.scrollHeight - s.scrollTop - s.clientHeight < 80; };
   const stick = (el, was) => {
-    if (!was) return;
     const s = scroller(el);
+    const curKey = routeKeyFor(view, view === "ext" ? extCur : current);
+    if (pendingScrollRestore && pendingScrollRestore.key === curKey && pendingScrollRestore.until > Date.now()) {
+      s.scrollTop = pendingScrollRestore.top;
+      pendingScrollRestore = null;
+      syncAllJumpBtns();
+      return;
+    }
+    if (!was) { syncAllJumpBtns(); return; }
     s.scrollTop = s.scrollHeight;
-    requestAnimationFrame(() => { s.scrollTop = s.scrollHeight; }); // after images and code lay out
+    requestAnimationFrame(() => { s.scrollTop = s.scrollHeight; syncAllJumpBtns(); }); // after images and code lay out
   };
+
+  // Scroll-to-bottom buttons & scroll tracking across all conversation scrollers.
+  const bindJumpScroller = (sc, btn) => {
+    if (!sc || !btn) return;
+    sc.addEventListener("scroll", () => {
+      syncJumpBtn(sc, btn);
+      saveCurrentScroll();
+    }, { passive: true });
+    btn.addEventListener("click", () => {
+      pendingScrollRestore = null;
+      sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
+      setTimeout(() => syncJumpBtn(sc, btn), 260);
+    });
+  };
+  bindJumpScroller($("#super-thread")?.parentElement, $("#super-jump"));
+  bindJumpScroller($("#x-thread")?.parentElement, $("#x-jump"));
+  bindJumpScroller($("#thread"), $("#d-jump"));
 
   // A stream sends {base, from, msgs}: the first (and every reconnect) has
   // from === base and carries the whole view; later ones replace the
@@ -4609,14 +4747,21 @@
 
   // A file path in a message: ~/…, /…, or C:\… / C:/…, ending in a name with an extension.
   // It runs on escaped text, so it never meets a raw quote or tag.
-  const FILE_RE = /(^|[\s(（：，、；>;])((?:(?:~|\/)[\w.\-+@%~\/\\]*|[A-Za-z]:[\\/][\w.\-+@%~\/\\]*)[\\/][\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/\\])/g;
+  const FILE_RE = /(^|[\s`(（：，、；>;])((?:(?:~|\/)[\w.\-+@%~\/\\]*|[A-Za-z]:[\\/][\w.\-+@%~\/\\]*)[\\/][\w.\-+@%~]+\.[A-Za-z0-9]{1,8})(?![\w\/\\])/g;
 
-  // ───────────────────────────── file viewer
+  // ───────────────────────────── file viewer & lightbox
   // A file an agent mentions opens here, read-only, from the computer it is on.
   const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
   const MD_EXT = /\.(md|markdown|mdx)$/i;
+  const FILE_DL_MAX = 100 * (1 << 20);
   const IMG_TYPE = { svg: "image/svg+xml", jpg: "image/jpeg", jpeg: "image/jpeg", ico: "image/x-icon" };
+  const wideFileHash = (path, machine = "") => {
+    const q = new URLSearchParams({ path });
+    if (machine) q.set("machine", machine);
+    return "#/file?" + q.toString();
+  };
   function fileContextMachine() {
+    if (view === "file") return wideOpenFile?.machine;
     if (view === "pane") return find(current)?.machine;
     if (view === "ext") {
       const id = extCur || "";
@@ -4643,8 +4788,36 @@
     for (const m of tries) { const f = await fetchFile(path, m); if (f) return f; }
     return null;
   }
-  let fileUrl = "", fileSeq = 0;
-  let lbUrl = "", lbSeq = 0;
+  let fileUrl = "", wideFileUrl = "", fileSeq = 0, wideSeq = 0;
+  let lbUrl = "", lbSeq = 0, lbItems = [], lbIdx = 0;
+
+  function collectImageGallery(triggerEl, fallbackPath) {
+    const scope = triggerEl?.closest(".rv-md") || triggerEl?.closest(".fv-md") || triggerEl?.closest(".mem-body") || triggerEl?.closest(".thread") || triggerEl?.closest(".msg") || triggerEl?.closest(".thumbs");
+    if (!scope) return { items: [fallbackPath], index: 0 };
+    const seen = new Set(), items = [];
+    const push = (p) => { if (p && !seen.has(p)) { seen.add(p); items.push(p); } };
+    for (const el of scope.querySelectorAll(".thumb[data-img], a.fpath[data-path]")) {
+      const p = el.dataset.img || el.dataset.path || "";
+      if (el.dataset.img || IMG_EXT.test(p.split(/[?#]/)[0])) push(p);
+    }
+    if (!seen.has(fallbackPath)) push(fallbackPath);
+    const idx = Math.max(0, items.indexOf(fallbackPath));
+    return { items, index: idx };
+  }
+  function syncLbZoomUI(zoomed) {
+    const btn = $("#ilb-zoom");
+    if (btn) btn.textContent = zoomed ? "2x" : "1x";
+  }
+  function syncLbGalleryUI() {
+    const cnt = $("#ilb-count"), prev = $("#ilb-prev"), next = $("#ilb-next");
+    const many = lbItems.length > 1;
+    if (cnt) {
+      cnt.hidden = !many;
+      cnt.textContent = many ? `${lbIdx + 1} / ${lbItems.length}` : "";
+    }
+    if (prev) prev.hidden = !many;
+    if (next) next.hidden = !many;
+  }
   function closeImageModal() {
     const dlg = $("#img-lightbox");
     if (!dlg) return;
@@ -4652,10 +4825,14 @@
     if (dlg.open) dlg.close();
     const img = $("#ilb-img");
     if (img) { img.removeAttribute("src"); img.hidden = true; img.classList.remove("zoomed"); }
+    syncLbZoomUI(false);
     if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = ""; }
   }
-  async function openImageModal(path) {
-    const dlg = $("#img-lightbox"), img = $("#ilb-img"), note = $("#ilb-note"), dl = $("#ilb-dl");
+  async function showLbAt(index) {
+    if (!lbItems.length) return;
+    lbIdx = ((index % lbItems.length) + lbItems.length) % lbItems.length;
+    const path = lbItems[lbIdx];
+    const dlg = $("#img-lightbox"), img = $("#ilb-img"), note = $("#ilb-note"), dl = $("#ilb-dl"), openBtn = $("#ilb-open");
     if (!dlg || !img) return;
     const seq = ++lbSeq;
     const isHttp = /^https?:\/\//i.test(path);
@@ -4663,28 +4840,31 @@
     $("#ilb-name").textContent = fname;
     $("#ilb-info").textContent = isHttp ? path : tilde(path);
     img.classList.remove("zoomed");
+    syncLbZoomUI(false);
+    syncLbGalleryUI();
     dl.hidden = true;
+    if (openBtn) openBtn.hidden = true;
     if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = ""; }
 
-    if (isHttp) {
+    const bindReady = (srcUrl) => {
       note.hidden = true;
-      img.src = path;
+      img.src = srcUrl;
       img.hidden = false;
-      dl.href = path;
+      dl.href = srcUrl;
       dl.download = fname;
       dl.hidden = false;
+      if (openBtn) { openBtn.href = srcUrl; openBtn.hidden = false; }
+    };
+
+    if (isHttp) {
+      bindReady(path);
       if (!dlg.open) dlg.showModal();
       return;
     }
 
     const cached = thumbs.get(path);
     if (cached) {
-      note.hidden = true;
-      img.src = cached;
-      img.hidden = false;
-      dl.href = cached;
-      dl.download = fname;
-      dl.hidden = false;
+      bindReady(cached);
     } else {
       img.removeAttribute("src");
       img.hidden = true;
@@ -4708,22 +4888,37 @@
       $("#ilb-info").textContent = where + f.path + (f.size ? " · " + fmtSize(f.size) : "");
       const ext = fname.split(".").pop().toLowerCase();
       lbUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
-      note.hidden = true;
-      img.src = lbUrl;
-      img.hidden = false;
-      dl.href = lbUrl;
-      dl.download = fname;
-      dl.hidden = false;
+      bindReady(lbUrl);
     } catch (err) {
       if (seq !== lbSeq || cached) return;
       note.textContent = err.message || "原图读取失败";
       note.hidden = false;
     }
   }
+  async function openImageModal(path, triggerEl = null) {
+    const g = collectImageGallery(triggerEl, path);
+    lbItems = g.items;
+    return showLbAt(g.index);
+  }
   $("#img-lightbox")?.addEventListener("click", (ev) => {
     if (ev.target.closest("[data-ilb-close]")) { closeImageModal(); return; }
-    if (ev.target.id === "ilb-img") { ev.target.classList.toggle("zoomed"); return; }
+    if (ev.target.closest("#ilb-prev")) { ev.preventDefault(); showLbAt(lbIdx - 1); return; }
+    if (ev.target.closest("#ilb-next")) { ev.preventDefault(); showLbAt(lbIdx + 1); return; }
+    if (ev.target.closest("#ilb-zoom") || ev.target.id === "ilb-img") {
+      const img = $("#ilb-img");
+      if (img && !img.hidden) {
+        const z = img.classList.toggle("zoomed");
+        syncLbZoomUI(z);
+      }
+      return;
+    }
     if (ev.target === $("#img-lightbox") || ev.target.hasAttribute("data-ilb-backdrop")) closeImageModal();
+  });
+  document.addEventListener("keydown", (ev) => {
+    const dlg = $("#img-lightbox");
+    if (!dlg?.open) return;
+    if (ev.key === "ArrowLeft" && lbItems.length > 1) { ev.preventDefault(); showLbAt(lbIdx - 1); }
+    else if (ev.key === "ArrowRight" && lbItems.length > 1) { ev.preventDefault(); showLbAt(lbIdx + 1); }
   });
   $("#img-lightbox")?.addEventListener("close", () => {
     lbSeq++;
@@ -4732,14 +4927,30 @@
 
   const HL = window.CollieHighlight || { HL_MAX_BYTES: 200 * 1024, HL_MAX_LINES: 5000, detectCodeLang: () => null, highlightCode: (c) => esc(c) };
   const MATH = window.CollieMath || { renderMath: (s) => esc(s), extractMathSegments: (s) => s };
-  let fileRawText = "";
-  let currentOpenFile = null;
+  let fileRawText = "", wideRawText = "";
+  let currentOpenFile = null, wideOpenFile = null;
   function setFileHead(langLabel = "", rawText = "", copyable = false) {
     fileRawText = rawText || "";
-    const lEl = $("#fv-lang"), cWrap = $("#fv-copy-wrap"), cBtn = $("#fv-copy"), dlBtn = $("#fv-dl");
+    const lEl = $("#fv-lang"), cWrap = $("#fv-copy-wrap"), cBtn = $("#fv-copy"), dlBtn = $("#fv-dl"), wideBtn = $("#fv-wide");
     if (lEl) { lEl.hidden = !langLabel; lEl.textContent = langLabel; }
     if (cWrap) cWrap.hidden = !copyable;
     if (dlBtn) dlBtn.hidden = !currentOpenFile;
+    if (wideBtn) {
+      wideBtn.hidden = !currentOpenFile;
+      if (currentOpenFile) wideBtn.href = wideFileHash(currentOpenFile.path, currentOpenFile.machine || "");
+    }
+    if (cBtn) {
+      cBtn.removeAttribute("data-copied");
+      cBtn.removeAttribute("data-failed");
+      if (cBtn.nextElementSibling) cBtn.nextElementSibling.textContent = "";
+    }
+  }
+  function setWideHead(langLabel = "", rawText = "", copyable = false) {
+    wideRawText = rawText || "";
+    const lEl = $("#rv-lang"), cWrap = $("#rv-copy-wrap"), cBtn = $("#rv-copy"), dlBtn = $("#rv-dl");
+    if (lEl) { lEl.hidden = !langLabel; lEl.textContent = langLabel; }
+    if (cWrap) cWrap.hidden = !copyable;
+    if (dlBtn) dlBtn.hidden = !wideOpenFile;
     if (cBtn) {
       cBtn.removeAttribute("data-copied");
       cBtn.removeAttribute("data-failed");
@@ -4747,9 +4958,34 @@
     }
   }
 
-  async function openFile(path) {
+  async function renderCodeOrTextInto(body, path, f, headSetter, codeId) {
+    const text = await f.blob.text();
+    const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
+    if (MD_EXT.test(path)) {
+      headSetter("Markdown", text, true);
+      body.innerHTML = `<div class="msg assistant fv-md" id="${codeId}">${mdRender(text)}</div>${cut}`;
+      return;
+    }
+    const lang = HL.detectCodeLang(path, true);
+    headSetter(lang ? lang.label : "", text, true);
+    const norm = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
+    let lines = 1;
+    for (let i = 0; i < norm.length && lines <= HL.HL_MAX_LINES + 1; i++) if (norm.charCodeAt(i) === 10) lines++;
+    if (lang && norm.length <= HL.HL_MAX_BYTES && lines <= HL.HL_MAX_LINES) {
+      const nums = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+      body.classList.add("is-code");
+      body.innerHTML = `<div class="fv-code"><div class="fv-ln" aria-hidden="true">${nums}</div><pre class="fv-pre"><code id="${codeId}">${HL.highlightCode(norm, lang.id)}</code></pre></div>${cut}`;
+    } else if (lang) {
+      body.classList.add("is-code");
+      body.innerHTML = `<pre class="fv-pre fv-large" id="${codeId}">${esc(norm)}</pre>${cut}`;
+    } else {
+      body.innerHTML = `<pre class="fv-pre" id="${codeId}">${esc(text)}</pre>${cut}`;
+    }
+  }
+
+  async function openFile(path, triggerEl = null) {
     if (IMG_EXT.test((path || "").split(/[?#]/)[0])) {
-      return openImageModal(path);
+      return openImageModal(path, triggerEl);
     }
     const body = $("#fv-body"), seq = ++fileSeq;
     body.classList.remove("is-code", "is-flush");
@@ -4766,9 +5002,10 @@
     } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
     if (seq !== fileSeq) return;
     if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
-    currentOpenFile = { path: f.path || path, machine: f.machine };
-    const dlBtn = $("#fv-dl");
-    if (dlBtn) dlBtn.hidden = !(f.size >= 0 && f.size <= (50 << 20));
+    currentOpenFile = { path: path, displayPath: f.path || path, machine: f.machine };
+    const dlBtn = $("#fv-dl"), wideBtn = $("#fv-wide");
+    if (dlBtn) dlBtn.hidden = !(f.size >= 0 && f.size <= FILE_DL_MAX);
+    if (wideBtn) { wideBtn.hidden = false; wideBtn.href = wideFileHash(path, f.machine || ""); }
     if (fileUrl) { URL.revokeObjectURL(fileUrl); fileUrl = ""; }
     if (f.kind === "image") {
       const ext = path.split(".").pop().toLowerCase();
@@ -4790,44 +5027,79 @@
     if (seq !== fileSeq) return;
     const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
     $("#fv-path").textContent = where + f.path + " · " + fmtSize(f.size);
-    const text = await f.blob.text();
-    if (seq !== fileSeq) return;
-    const cut = f.size > f.blob.size ? `<p class="fv-note muted">文件有 ${fmtSize(f.size)}，这里只显示前 1 MB。</p>` : "";
-    if (MD_EXT.test(path)) {
-      setFileHead("Markdown", text, true);
-      body.innerHTML = `<div class="msg assistant fv-md" id="fv-code-src">${mdRender(text)}</div>${cut}`;
-      body.scrollTop = body.scrollLeft = 0;
-      return;
-    }
-    const lang = HL.detectCodeLang(path, true);
-    setFileHead(lang ? lang.label : "", text, true);
-    const norm = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
-    let lines = 1;
-    for (let i = 0; i < norm.length && lines <= HL.HL_MAX_LINES + 1; i++) if (norm.charCodeAt(i) === 10) lines++;
-    if (lang && norm.length <= HL.HL_MAX_BYTES && lines <= HL.HL_MAX_LINES) {
-      const nums = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
-      body.classList.add("is-code");
-      body.innerHTML = `<div class="fv-code"><div class="fv-ln" aria-hidden="true">${nums}</div><pre class="fv-pre"><code id="fv-code-src">${HL.highlightCode(norm, lang.id)}</code></pre></div>${cut}`;
-    } else if (lang) {
-      body.classList.add("is-code");
-      body.innerHTML = `<pre class="fv-pre fv-large" id="fv-code-src">${esc(norm)}</pre>${cut}`;
-    } else {
-      body.innerHTML = `<pre class="fv-pre" id="fv-code-src">${esc(text)}</pre>${cut}`;
-    }
+    await renderCodeOrTextInto(body, path, f, setFileHead, "fv-code-src");
     body.scrollTop = body.scrollLeft = 0;
   }
+
+  async function openWideFile(path, machineHint = "") {
+    const body = $("#rv-body"), sc = $("#rv-scroller"), seq = ++wideSeq;
+    if (!body) return;
+    body.classList.remove("is-code", "is-flush");
+    wideOpenFile = null;
+    setWideHead("", "", false);
+    if (!path) {
+      $("#rv-name").textContent = "未指定文件";
+      $("#rv-path").textContent = "";
+      body.innerHTML = `<p class="fv-note muted">缺少文件路径参数。</p>`;
+      return;
+    }
+    const fname = path.split(/[\\/]/).pop() || path;
+    $("#rv-name").textContent = fname;
+    $("#rv-path").textContent = path;
+    document.title = `${fname} · Collie`;
+    body.innerHTML = `<p class="fv-note muted">读取中…</p>`;
+    const tries = machineHint ? [machineHint, ...fileTries().filter((m) => m !== machineHint)] : fileTries();
+    let f = null;
+    try {
+      f = await findFile(path, tries);
+    } catch (e) { body.innerHTML = `<p class="fv-note">${esc(e.message)}</p>`; return; }
+    if (seq !== wideSeq) return;
+    if (!f) { body.innerHTML = `<p class="fv-note">在${tries.length > 1 ? "各台电脑" : "这台电脑"}上都没找到这个文件。</p>`; return; }
+    wideOpenFile = { path, machine: f.machine };
+    const dlBtn = $("#rv-dl");
+    if (dlBtn) dlBtn.hidden = !(f.size >= 0 && f.size <= FILE_DL_MAX);
+    if (wideFileUrl) { URL.revokeObjectURL(wideFileUrl); wideFileUrl = ""; }
+    if (f.kind === "image") {
+      const ext = path.split(".").pop().toLowerCase();
+      wideFileUrl = URL.createObjectURL(new Blob([f.blob], { type: IMG_TYPE[ext] || "image/" + ext }));
+      const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+      $("#rv-path").textContent = where + f.path + " · " + fmtSize(f.size);
+      body.innerHTML = `<div class="fv-img rv-img"><img src="${wideFileUrl}" data-wide-img="${esc(path)}" alt="${esc(fname)}"></div>`;
+      return;
+    }
+    const setObjectURL = (blob) => {
+      if (wideFileUrl) URL.revokeObjectURL(wideFileUrl);
+      wideFileUrl = URL.createObjectURL(blob);
+      return wideFileUrl;
+    };
+    const wideDone = await artifactUI.renderRichFilePane(path, f, setObjectURL, {
+      body, pathEl: $("#rv-path"), setHead: setWideHead, codeId: "rv-code-src", wide: true,
+    });
+    if (seq !== wideSeq) return;
+    if (!wideDone) {
+      const where = (state.machines || []).length > 1 ? machineName(f.machine) + " · " : "";
+      $("#rv-path").textContent = where + f.path + " · " + fmtSize(f.size);
+      await renderCodeOrTextInto(body, path, f, setWideHead, "rv-code-src");
+    }
+    if (sc) sc.scrollTop = sc.scrollLeft = 0;
+  }
+
   const artifactUI = window.CollieArtifacts
     ? window.CollieArtifacts.initArtifacts({
         $, esc, tilde, fmtSize, toast, routeReq, fileTries, findFile,
         machineName, getMachinesCount: () => (state.machines || []).length,
         mdRender: (s) => mdRender(s), showFilePane: () => showFilePane(),
-        openFile: (p) => openFile(p), setFileHead,
+        openFile: (p) => openFile(p), setFileHead, HL,
       })
     : { artifactsIn: () => "", renderRichFilePane: async () => false };
   const artifactsIn = (t, renderedHTML = "") => artifactUI.artifactsIn(t, renderedHTML);
   $("#fv-dl")?.addEventListener("click", (ev) => {
     if (!currentOpenFile || !artifactUI.downloadArtifact) return;
     artifactUI.downloadArtifact(currentOpenFile.path, currentOpenFile.machine, ev.currentTarget);
+  });
+  $("#rv-dl")?.addEventListener("click", (ev) => {
+    if (!wideOpenFile || !artifactUI.downloadArtifact) return;
+    artifactUI.downloadArtifact(wideOpenFile.path, wideOpenFile.machine, ev.currentTarget);
   });
   // Images a message carries ("[image:~/.collie/images/….png]" or any local
   // Windows/Unix image path) show inline; tap to open the full viewer panel.
@@ -4895,6 +5167,12 @@
     if (!text) return;
     reportCopy(btn, await copyText(text));
   });
+  $("#rv-copy")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const text = wideRawText || $("#rv-code-src")?.textContent || "";
+    if (!text) return;
+    reportCopy(btn, await copyText(text));
+  });
 
   document.addEventListener("click", async (ev) => {
     const cm = ev.target.closest("[data-copy-tex]");
@@ -4946,11 +5224,18 @@
 
   document.addEventListener("click", (e) => {
     const t = e.target.closest(".thumb[data-img]");
-    if (t) { e.preventDefault(); openImageModal(t.dataset.img); return; }
+    if (t) { e.preventDefault(); openImageModal(t.dataset.img, t); return; }
+    const wideImg = e.target.closest(".rv-img img[data-wide-img]");
+    if (wideImg) { e.preventDefault(); openImageModal(wideImg.dataset.wideImg, wideImg); return; }
     const a = e.target.closest("a.fpath");
     if (!a) return;
     e.preventDefault();
-    openFile(a.dataset.path);
+    const p = a.dataset.path;
+    if (view === "file" && !IMG_EXT.test((p || "").split(/[?#]/)[0])) {
+      location.hash = wideFileHash(p, wideOpenFile?.machine || "");
+      return;
+    }
+    openFile(p, a);
   });
   // Wide screens: a panel to the right of the conversation, which stays
   // usable; its width is dragged and remembered. Narrow ones: full screen.
@@ -5041,11 +5326,47 @@
       const raw = u.replace(/&amp;/g, "&").replace(/^https?:\/\//, "").replace(/\/$/, "");
       return esc(raw.length > 42 ? raw.slice(0, 40) + "…" : raw);
     };
+    const parseInlineCodePath = (raw) => {
+      if (!raw || raw.includes("://") || raw.startsWith("//") || /[<>"'`*?;$&|()]/.test(raw)) return "";
+      const base = raw.replace(/(?:#L\d+(?:-L?\d+)?|:\d+(?:[-:]\d+)?)$/i, "").trim();
+      const isUnix = /^(?:~[\\/](?:[^\\/:\r\n]+[\\/])*|\/(?:[\w.\-+@%~\u4e00-\u9fff]+[\\/])+)[\w.\-+@%~\u4e00-\u9fff ]*[A-Za-z0-9_\u4e00-\u9fff]\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(base);
+      const isWin = /^[A-Za-z]:[\\/](?:[^<>:"|?*\r\n]+[\\/])*[^<>:"|?*\\/\r\n]+\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(base);
+      if (!isUnix && !isWin) return "";
+      if (!isWin && /\s/.test(base) && !base.startsWith("~/") && !base.startsWith("/Users/") && !base.startsWith("/home/") && !base.startsWith("/tmp/")) return "";
+      const stripped = base.replace(/^(?:~[\\/]|[A-Za-z]:[\\/]|\/)/, "");
+      const segs = stripped.split(/[\\/]/);
+      if (segs.some((seg) => !seg || seg === "." || /^\.{2,}$/.test(seg))) return "";
+      return base;
+    };
+    const isPureHttpUrl = (raw) => {
+      if (!/^https?:\/\/[^\x00-\x20<>"'`]+$/i.test(raw)) return false;
+      try {
+        const u = new URL(raw);
+        if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+        const h = u.hostname;
+        if (!h || h.startsWith(".") || h.endsWith(".")) return false;
+        return h === "localhost" || h.includes(".") || h.startsWith("[") || Boolean(u.port);
+      } catch {
+        return false;
+      }
+    };
     const inline = (s) => {
       const spans = [];
       const hold = (h) => `\u0001${spans.push(h) - 1}\u0001`;
       return s
-        .replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`))
+        .replace(/`([^`\n]+)`/g, (_, c) => {
+          const raw = unesc(c).trim();
+          const cleanP = parseInlineCodePath(raw);
+          if (cleanP) {
+            const ep = esc(cleanP);
+            return hold(`<a class="fpath code-fpath" href="#" data-path="${ep}" title="打开 ${ep}"><code class="code-link">${c}</code></a>`);
+          }
+          if (isPureHttpUrl(raw)) {
+            const eu = esc(raw);
+            return hold(`<a class="url code-url" href="${eu}" target="_blank" rel="noopener noreferrer" title="${eu}"><code class="code-link">${c}</code></a>`);
+          }
+          return hold(`<code>${c}</code>`);
+        })
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
         .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
         .replace(/\[image:((?:~[\\/]|\/|[A-Za-z]:[\\/])[^\]\r\n]+\.(?:png|jpe?g|gif|webp|svg|bmp))\]/gi, (_, p) => {

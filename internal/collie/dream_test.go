@@ -79,21 +79,45 @@ func TestDreamCatchUpBackoffAndOfflineDeferral(t *testing.T) {
 		t.Fatalf("expected 20m backoff after 2nd failure, got %v", b)
 	}
 
-	// 4. When journal file DOES exist on exit, finishDream marks ok=true and resets failure counter.
+	// 4. When journal file DOES exist on exit (with skill suggestions), finishDream marks ok=true,
+	//    resets failure counter, and attaches one-tap --opt choices to skill/fix messages.
 	os.MkdirAll(filepath.Join(sp.routerDir(), "dreams"), 0o700)
 	jPath := filepath.Join(sp.routerDir(), "dreams", journalName(dAt)+".md")
-	if err := os.WriteFile(jPath, []byte("精简了常驻指令并归档旧任务。\n"), 0o600); err != nil {
+	if err := os.WriteFile(jPath, []byte("精简了常驻指令并归档旧任务。\n可做成 skill：侧栏续派排查\n可改进 skill：collie-resume-sidebar（补充话题检查）\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sp.finishDream(context.Background(), &dreamRun{at: dAt, reason: "nightly"}, false, true)
 	sp.mu.Lock()
 	failsAfter := sp.dreamFailures
-	lastText := sp.st.Entries[len(sp.st.Entries)-1].Text
+	nEntries := len(sp.st.Entries)
+	wakeEntry := sp.st.Entries[nEntries-3]
+	skillEntry := sp.st.Entries[nEntries-2]
+	fixEntry := sp.st.Entries[nEntries-1]
 	sp.mu.Unlock()
 	if failsAfter != 0 {
 		t.Fatalf("expected dreamFailures reset to 0 after ok dream, got %d", failsAfter)
 	}
-	if lastText != "Collie 醒了。整理记忆：精简了常驻指令并归档旧任务。" {
-		t.Fatalf("unexpected wake entry: %q", lastText)
+	if wakeEntry.Text != "Collie 醒了。整理记忆：精简了常驻指令并归档旧任务。" {
+		t.Fatalf("unexpected wake entry: %q", wakeEntry.Text)
+	}
+	if len(skillEntry.Options) != 3 || skillEntry.Options[0] != "做成个人 skill" {
+		t.Fatalf("expected 3 quick-reply options on dream skill suggestion, got %+v", skillEntry.Options)
+	}
+	if len(fixEntry.Options) != 2 || fixEntry.Options[0] != "派人去修" {
+		t.Fatalf("expected 2 quick-reply options on dream skill fix, got %+v", fixEntry.Options)
+	}
+
+	// 5. Verify split upFrontSize vs messagesSize budget accounting.
+	os.MkdirAll(filepath.Join(sp.memDir(), "notes"), 0o700)
+	_ = os.WriteFile(filepath.Join(sp.memDir(), "instructions.md"), []byte("12345"), 0o600)
+	_ = os.WriteFile(filepath.Join(sp.memDir(), "messages.md"), []byte("1234567890"), 0o600)
+	if got := sp.upFrontSize(); got != 5 {
+		t.Fatalf("expected upFrontSize=5, got %d", got)
+	}
+	if got := sp.messagesSize(); got != 10 {
+		t.Fatalf("expected messagesSize=10, got %d", got)
+	}
+	if got := sp.loadedSize(); got != 15 {
+		t.Fatalf("expected loadedSize=15, got %d", got)
 	}
 }

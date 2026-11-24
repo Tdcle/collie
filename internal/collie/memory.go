@@ -87,8 +87,9 @@ func (sp *Super) openTasks() []string {
 	return out
 }
 
-// loadedSize is what a session reads up front, in bytes.
-func (sp *Super) loadedSize() int64 {
+// upFrontSize is what Collie writes and every session reads up front, in bytes:
+// instructions.md, notes/index.md, open tasks (and legacy memory.md until migrated).
+func (sp *Super) upFrontSize() int64 {
 	var n int64
 	add := func(p string) {
 		if fi, err := os.Stat(p); err == nil {
@@ -98,7 +99,6 @@ func (sp *Super) loadedSize() int64 {
 	dir := sp.memDir()
 	add(filepath.Join(dir, "instructions.md"))
 	add(filepath.Join(dir, "notes", "index.md"))
-	add(filepath.Join(dir, "messages.md"))
 	for _, t := range sp.openTasks() {
 		add(filepath.Join(dir, "tasks", t))
 	}
@@ -106,13 +106,17 @@ func (sp *Super) loadedSize() int64 {
 	return n
 }
 
-// upFrontSize is the part of loadedSize that Collie writes: all of it but messages.md.
-func (sp *Super) upFrontSize() int64 {
-	n := sp.loadedSize()
+// messagesSize is the size of memory/messages.md (written automatically by the hub).
+func (sp *Super) messagesSize() int64 {
 	if fi, err := os.Stat(filepath.Join(sp.memDir(), "messages.md")); err == nil {
-		n -= fi.Size()
+		return fi.Size()
 	}
-	return n
+	return 0
+}
+
+// loadedSize is everything a session reads up front (upFrontSize + messages.md), in bytes.
+func (sp *Super) loadedSize() int64 {
+	return sp.upFrontSize() + sp.messagesSize()
 }
 
 func (sp *Super) legacyMemory() bool {

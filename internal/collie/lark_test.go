@@ -82,7 +82,7 @@ func TestLarkNotify(t *testing.T) {
 		t.Fatal("nothing sent")
 	}
 	got := strings.ReplaceAll(string(b), "\r\n", "\n")
-	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "--msg-type\ninteractive", `"schema":"2.0"`, "报告：都好了", `"default_url":"http://hub:7788/#/collie"`} {
+	for _, want := range []string{"--as\nbot", "--user-id\nou_test", "--msg-type\ninteractive", `"schema":"2.0"`, "报告：都好了", `"default_url":"http://hub:7788/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/collie"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}
@@ -159,7 +159,7 @@ func TestFeishuBotWebhookAndTestNotifyEndpoint(t *testing.T) {
 		`"Win · 论文返修 · 已完成"`,
 		`"template":"green"`,
 		`"打开会话"`,
-		`"https://101.200.80.58/#/x/cx-01a20149%40wlc"`,
+		`"https://101.200.80.58/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/x/cx-01a20149%40wlc"`,
 		"`局部图`",
 		"`Visio 原稿`",
 		"↩ 你：修改右下角流程图",

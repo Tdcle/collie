@@ -223,6 +223,9 @@
       </div>
 
       <form class="composer" id="super-composer">
+        <button type="button" class="super-jump" id="super-jump" hidden aria-label="回到底部" title="回到底部">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/></svg>
+        </button>
         <div class="pending-wrap" id="pending-wrap" hidden>
           <div class="pending-list" id="pending-list" hidden></div>
           <div class="pending-bar" id="pending-bar"></div>
@@ -297,6 +300,9 @@
         <div class="working-row" id="x-working" hidden></div>
       </div>
       <form class="composer" id="x-composer">
+        <button type="button" class="super-jump" id="x-jump" hidden aria-label="回到底部" title="回到底部">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/></svg>
+        </button>
         <div class="cbox">
           <div class="files" hidden></div>
           <textarea id="x-input" rows="1" placeholder="输入消息继续这个对话…" enterkeyhint="send"></textarea>
@@ -337,6 +343,9 @@
       </div>
 
       <form class="composer" id="composer">
+        <button type="button" class="super-jump" id="d-jump" hidden aria-label="回到底部" title="回到底部">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v13M6.5 12.5L12 18l5.5-5.5"/></svg>
+        </button>
         <div class="cbox">
           <div class="files" hidden></div>
           <textarea id="input" rows="1" placeholder="继续对话…" enterkeyhint="send"></textarea>
@@ -355,13 +364,48 @@
         <input type="file" multiple hidden>
       </form>
     </section>
+
+    <!-- ── standalone wide-screen file reader (#/file?path=...&machine=...) ── -->
+    <section class="view reader-view" id="v-file" hidden>
+      <header class="rv-head">
+        <div class="rv-head-inner">
+          <div class="rv-title">
+            <div class="rv-name-row">
+              <h1 id="rv-name"></h1>
+              <span class="fv-lang" id="rv-lang" hidden></span>
+            </div>
+            <p class="muted mono rv-meta" id="rv-path"></p>
+          </div>
+          <div class="rv-actions">
+            <button type="button" class="icon-btn fv-dl-btn" id="rv-dl" hidden title="下载完整原件" aria-label="下载完整原件">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+            </button>
+            <span class="fv-copy" id="rv-copy-wrap" hidden>
+              <button type="button" class="icon-btn fv-copy-btn" id="rv-copy" title="复制全文" aria-label="复制全文">
+                <svg class="ic-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                <svg class="ic-ok" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              </button>
+              <span class="fv-copy-tip" role="status" aria-live="polite"></span>
+            </span>
+            <a class="btn small rv-home-btn" id="rv-home" href="#/collie" title="返回 Collie 主界面">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+              <span>返回主界面</span>
+            </a>
+          </div>
+          <div class="head-right" data-head-slot></div>
+        </div>
+      </header>
+      <div class="rv-scroller" id="rv-scroller" tabindex="-1">
+        <div class="rv-container" id="rv-body"></div>
+      </div>
+    </section>
   </main>
   <!-- a file a message mentions, read-only, beside the conversation -->
   <aside class="filepane" id="file-view" hidden>
     <div class="fv-grip" id="fv-grip" title="拖动调整宽度"></div>
     <div class="fv-inner">
     <header class="fv-head">
-      <button class="icon-btn fv-back" data-fv-close title="返回"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <button type="button" class="icon-btn fv-back" data-fv-close title="返回"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
       <h3 id="fv-name"></h3>
       <span class="fv-lang" id="fv-lang" hidden></span>
       <span class="fv-copy" id="fv-copy-wrap" hidden>
@@ -374,7 +418,10 @@
       <button type="button" class="icon-btn fv-dl-btn" id="fv-dl" hidden title="下载文件" aria-label="下载文件">
         <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
       </button>
-      <button class="icon-btn fv-x" data-fv-close title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <a class="icon-btn fv-dl-btn" id="fv-wide" href="#/file" target="_blank" rel="noopener" hidden title="新标签宽屏阅读" aria-label="新标签宽屏阅读">
+        <svg viewBox="0 0 24 24"><path d="M14 5h5v5M10 14L19 5M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
+      </a>
+      <button type="button" class="icon-btn fv-x" data-fv-close title="关闭"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
     <p class="muted mono" id="fv-path"></p>
     <div class="fv-body" id="fv-body"></div>
@@ -564,9 +611,12 @@
   <div class="ilb-bar">
     <div class="ilb-meta">
       <b id="ilb-name"></b>
+      <span class="ilb-count" id="ilb-count" hidden></span>
       <span class="muted mono" id="ilb-info"></span>
     </div>
     <div class="ilb-acts">
+      <button type="button" class="btn small ghost ilb-zoom-btn" id="ilb-zoom" title="切换原始尺寸 / 适应窗口">1x</button>
+      <a class="btn small ghost" id="ilb-open" href="#" target="_blank" rel="noopener" hidden title="在新标签页打开">新标签打开</a>
       <a class="btn small ghost" id="ilb-dl" href="#" download hidden>下载原图</a>
       <button type="button" class="icon-btn ilb-close" data-ilb-close title="关闭（Esc）">
         <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -575,8 +625,14 @@
   </div>
   <div class="ilb-stage" id="ilb-stage" data-ilb-backdrop>
     <p class="ilb-note" id="ilb-note" hidden></p>
-    <img id="ilb-img" alt="" hidden>
+    <img id="ilb-img" class="ilb-alpha" alt="" draggable="false" hidden>
   </div>
+  <button type="button" class="ilb-nav prev" id="ilb-prev" aria-label="上一张" title="上一张（←）" hidden>
+    <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+  </button>
+  <button type="button" class="ilb-nav next" id="ilb-next" aria-label="下一张" title="下一张（→）" hidden>
+    <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+  </button>
 </dialog>
 
 <div class="quota-pop" id="quota-pop" hidden></div>

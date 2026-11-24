@@ -233,7 +233,7 @@ func TestQuotaAwareDispatchAndRouterFailover(t *testing.T) {
 		hash:     "/#/x/cx-123%40win",
 		btnLabel: "前往处理提问",
 	}}, "https://101.200.80.58")
-	if !strings.Contains(cardJSON, "https://101.200.80.58/#/x/cx-123%40win") || !strings.Contains(cardJSON, "前往处理提问") {
+	if !strings.Contains(cardJSON, "https://101.200.80.58/?lk_mobile_jump_to_browser=true&lk_jump_to_browser=true#/x/cx-123%40win") || !strings.Contains(cardJSON, "前往处理提问") {
 		t.Fatalf("larkCard missing deep link or custom button label: %s", cardJSON)
 	}
 	_ = context.Background()

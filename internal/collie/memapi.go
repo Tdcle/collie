@@ -33,11 +33,13 @@ func (s *Server) superMemory(w http.ResponseWriter, r *http.Request) {
 	sp := s.sup
 	dir := sp.routerDir()
 	out := map[string]any{
-		"dir":        s.tilde(dir),
-		"files":      sp.memFiles(),
-		"loaded":     sp.loadedSize(),
-		"budget":     memoryBudget,
-		"dreaming":   sp.dreaming(),
+		"dir":           s.tilde(dir),
+		"files":         sp.memFiles(),
+		"loaded":        sp.loadedSize(),
+		"up_front":      sp.upFrontSize(),
+		"messages_size": sp.messagesSize(),
+		"budget":        memoryBudget,
+		"dreaming":      sp.dreaming(),
 		"next_dream": nil,
 		"last_dream": nil,
 	}

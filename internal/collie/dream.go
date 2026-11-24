@@ -472,11 +472,15 @@ func (sp *Super) finishDream(ctx context.Context, d *dreamRun, cleanIdle, checkJ
 		sp.addEntryLocked("event", mainThread, "Collie 醒了，记忆整理好了", "", "info")
 	}
 	if skills != "" {
-		// Yours to decide, so it is said to you, not left in the journal.
-		sp.addEntryLocked("collie", mainThread, "整理记忆时发现这几件事做熟了，可以做成 skill，以后哪个 agent 都能直接用："+skills+"。要做的话告诉我放在哪（你自己的 skills，还是某个项目的仓库）。", "", "")
+		// Yours to decide, so it is said to you with one-tap choices, not left in the journal.
+		sp.addEntryOptsLocked("collie", mainThread,
+			"整理记忆时发现这几件事做熟了，可以做成 skill，以后哪个 agent 都能直接用："+skills+"。要做的话选一下放在哪（放项目仓库的话再告诉我哪个仓库）：",
+			"", "", nil, []string{"做成个人 skill", "放到项目仓库", "先不用"})
 	}
 	if fixes != "" {
-		sp.addEntryLocked("collie", mainThread, "整理记忆时发现已有的 skill 有地方不好用："+fixes+"。要改的话说一声，我派人去改。", "", "")
+		sp.addEntryOptsLocked("collie", mainThread,
+			"整理记忆时发现已有的 skill 有地方不好用："+fixes+"。要不要派人去修？",
+			"", "", nil, []string{"派人去修", "先不用"})
 	}
 	sp.mu.Unlock()
 	sp.ensureRouter(ctx)
@@ -532,6 +536,9 @@ func dreamSummary(path string) string {
 }
 
 func (sp *Super) closeWorkspaces(ctx context.Context, label string) {
+	if sp.s == nil || sp.s.herdr == nil {
+		return
+	}
 	wss, err := sp.s.herdr.Workspaces(ctx)
 	if err != nil {
 		return
@@ -657,18 +664,18 @@ const dreamPrompt = `[collie] Dream. You are Collie's memory keeper, running whi
 - memory/: Collie's memory, laid out as ROUTER.md describes.
 - dream/input.md: what happened since the last dream: the chat with the human and Collie's own session logs.
 - dreams/: earlier dream journals, if any.
-Run ` + "`{{BIN}} list`" + ` to see which agents are actually still around.
+Run ` + "`{{BIN}} list`" + ` to see which agents and active timers are actually still around.
 {{MIGRATE}}
-Tidy memory/. Every session reads the up-front files (instructions.md, notes/index.md, open tasks) before anything else, so each line there has to earn its place: keep them under ~{{BUDGET}} KB together, and smaller is better.
+Tidy memory/. Every session reads the up-front files Collie writes (instructions.md, notes/index.md, open tasks; messages.md is written by the hub and counted separately) before anything else, so each line there has to earn its place: keep them under ~{{BUDGET}} KB together, and smaller is better.
 1. Replace stale entries: tasks that are finished, abandoned or whose agents are gone go to tasks/done/ with a last line on how they ended; facts the logs show have changed get fixed.
-2. Rewrite instructions.md line by line. Each line is one rule or preference, at most about 80 Chinese characters: what to do, not why, not the incidents behind it, not the steps. Move the steps, examples, dates and history into the note the line points to ("见 notes/x.md"). A routine a timer already runs keeps its how-to in the timer and its note, not here. Merge lines that say the same thing.
+2. Rewrite instructions.md line by line. Each line is one rule or preference, at most about 80 Chinese characters: what to do, not why, not the incidents behind it, not the steps. Move the steps, examples, dates and history into the note the line points to ("见 notes/x.md"). Recurring automation that already has an active timer and its workflow in notes/ can be removed directly from instructions.md (exempt from rule 6): its schedule lives in the timer and its how-to in its note, not duplicated here. Merge lines that say the same thing.
 3. Look for patterns that only show across sessions: requests the human repeats, corrections they keep making, preferences they never stated outright, mistakes Collie made more than once. Write the ones that should change how Collie behaves into instructions.md (or a note), marked "(inferred)", in the same short form. Each is backed by the logs and seen more than once.
 4. Finished work that taught something reusable (where data lives, the command or query that worked, a pitfall, where results are) belongs in notes/, filed by topic so the next similar job finds it; read the task files and the logs for it. Add what Collie missed; skip one-off details. Pointers (paths, thread ids, URLs), not copies; merge duplicates. Each note gets one line in notes/index.md. What the logs show about agents (which agent or model worked or failed on which computer, and at what) goes into notes/agents.md. Dated facts that are old enough to have changed: check them (` + "`{{BIN}} list`" + `, the files) and fix or drop them.
 5. Skills. Find the ones that exist (notes/skills.md says where they live; look there). A note whose how-to is now a skill shrinks to a pointer to it.
    - A how-to in notes/ that three or more jobs have used, whose steps stopped changing and that no skill covers yet, could become one. The human decides about skills: list these on a line starting "可做成 skill：", separated by 、 (each a few words a human recognises, e.g. "Dorado 只读查表").
    - An existing skill the logs show agents working around, failing with, or correcting by hand needs fixing: list it on a line starting "可改进 skill：" as "name（what to fix, a few words）", separated by 、.
    Both lines go right under the journal's first line; the human gets them as messages from Collie. Leave a line out when it has nothing; a skill that already exists belongs on the second line or nowhere.
-6. Keep every explicit instruction from the human unless a later one overrides it (shortening its wording is fine). memory/messages.md is the hub's to write; read it as input.
+6. Keep every explicit instruction from the human unless a later one overrides it, or unless it is a recurring routine already backed by an active timer and a notes/ file (rule 2; shortening wording is fine). memory/messages.md is the hub's to write; read it as input.
 
 Then write a new file dreams/{{DATE}}.md. Its first line: one sentence in Chinese saying what you changed; the human sees it. Then the skill lines, if any. Then, in under 30 lines: what you changed and why, and patterns you noticed but didn't act on.
 

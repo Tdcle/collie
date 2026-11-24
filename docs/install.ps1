@@ -313,8 +313,25 @@ function Check-Herdr([string]$Note = "") {
     }
   }
   if ($missing.Count -gt 0) {
-    Warn "这些 agent 还没装 herdr 集成：运行下面的命令让 herdr 能识别它们："
-    foreach ($t in $missing) { Say "      herdr integration install $t" }
+    if (-not $env:COLLIE_NO_HERDR -and -not $env:COLLIE_NO_INTEGRATION) {
+      Step ("安装 herdr 的 agent 集成：" + ($missing -join " ") + "（不想自动改 agent 配置可设 `$env:COLLIE_NO_INTEGRATION=1）")
+      $failed = @()
+      foreach ($t in $missing) {
+        try {
+          & $hb integration install $t 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) { $failed += $t }
+        } catch {
+          $failed += $t
+        }
+      }
+      if ($failed.Count -gt 0) {
+        Warn "以下 agent 的 herdr 集成没装上，可以稍后手动运行："
+        foreach ($t in $failed) { Say "      herdr integration install $t" }
+      }
+    } else {
+      Warn "这些 agent 还没装 herdr 集成：运行下面的命令让 herdr 能识别它们："
+      foreach ($t in $missing) { Say "      herdr integration install $t" }
+    }
   }
 }
 

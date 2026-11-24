@@ -1,7 +1,8 @@
 // Collie Cross-Machine Artifact Cards & Rich File Viewer Module (zero-build).
 // Detects non-image deliverables (.pdf, .docx, .xlsx, .pptx, .csv, .tsv, .tex,
 // .zip, .html, .ipynb, .md, etc.) mentioned in messages, renders compact
-// preview/download cards, and renders inline PDF / CSV-table / Office previews.
+// preview/download cards, and renders inline PDF / HTML / CSV-table / Office previews
+// in both the right-hand drawer (#file-view) and the wide-screen reader (#v-file).
 (() => {
   "use strict";
 
@@ -32,10 +33,13 @@
     bib: { badge: "BIB", tone: "is-code", canPreview: true },
     ipynb: { badge: "IPYNB", tone: "is-code", canPreview: true },
     html: { badge: "HTML", tone: "is-code", canPreview: true },
+    htm: { badge: "HTML", tone: "is-code", canPreview: true },
     json: { badge: "JSON", tone: "is-code", canPreview: true },
     md: { badge: "MD", tone: "is-doc", canPreview: true },
     markdown: { badge: "MD", tone: "is-doc", canPreview: true },
   };
+
+  const FILE_DL_MAX = 100 * (1 << 20);
 
   // Matches unlinked spaced paths (`C:\Users\26422\Documents\SFD-Net 2\summary.csv` or `<C:/path with spaces/report.pdf>`)
   // while skipping files already wrapped in clickable Markdown `[label](path)` links!
@@ -50,7 +54,6 @@
 
   function extractArtifacts(text, renderedHTML = "") {
     if (!text) return [];
-    // Strip fenced code blocks and all Markdown `[label](path)` links (which already render as Codex-style inline links!).
     const stripped = String(text)
       .replace(/```[\s\S]*?(```|$)/g, " ")
       .replace(/!?\[[^\]\n]*\]\(<[^>\r\n]+>\)/g, " ")
@@ -83,7 +86,7 @@
     return out;
   }
 
-  function parseDelimitedTable(text, sep = ",", maxRows = 150) {
+  function parseDelimitedTable(text, sep = ",", maxRows = 250) {
     const clean = String(text || "").replace(/^\uFEFF/, "");
     const rows = [];
     let cur = [], field = "", inQuotes = false;
@@ -121,7 +124,7 @@
   const NUM_CELL_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?%?$/;
 
   function initArtifacts(deps) {
-    const { $, esc, tilde, fmtSize, toast, routeReq, fileTries, machineName, getMachinesCount, mdRender, setFileHead } = deps;
+    const { $, esc, tilde, fmtSize, toast, routeReq, fileTries, machineName, getMachinesCount, mdRender, setFileHead, HL } = deps;
 
     function artifactsIn(text, renderedHTML = "") {
       const list = extractArtifacts(text, renderedHTML);
@@ -159,8 +162,8 @@
             let e = {}; try { e = await res.json(); } catch {}
             throw new Error(e.error || "下载失败");
           }
-          if (res.headers.get("X-File-Kind") === "binary" && (+res.headers.get("X-File-Size") || 0) > (50 << 20)) {
-            throw new Error("文件超过 50 MB 在线传输上限");
+          if (res.headers.get("X-File-Kind") === "binary" && (+res.headers.get("X-File-Size") || 0) > FILE_DL_MAX) {
+            throw new Error("文件超过 100 MB 在线传输上限");
           }
           blob = await res.blob();
           break;
@@ -182,19 +185,76 @@
       }
     }
 
-    async function renderRichFilePane(path, f, setObjectURL) {
-      const body = $("#fv-body");
+    async function renderRichFilePane(path, f, setObjectURL, targetOpts = null) {
+      const opts = targetOpts || {};
+      const body = opts.body || $("#fv-body");
+      const pathEl = opts.pathEl || $("#fv-path");
+      const headSetter = opts.setHead || setFileHead;
+      const codeId = opts.codeId || "fv-code-src";
+      const rowCap = opts.wide ? 300 : 120;
       const ext = extOf(path);
       const where = getMachinesCount() > 1 ? machineName(f.machine) + " · " : "";
-      $("#fv-path").textContent = where + f.path + (f.size ? " · " + fmtSize(f.size) : "");
+      if (pathEl) pathEl.textContent = where + f.path + (f.size ? " · " + fmtSize(f.size) : "");
 
-      const makeToolbar = (extra = "") => `<div class="fv-toolbar">
+      const makeToolbar = (extra = "", rightHTML = "") => `<div class="fv-toolbar">
         <span class="fv-kind-pill">${esc((BADGE_META[ext]?.badge) || ext.toUpperCase() || f.kind.toUpperCase())}</span>
         ${extra ? `<span class="fv-dim-meta">${extra}</span>` : `<span class="muted">${fmtSize(f.size)}</span>`}
+        ${rightHTML ? `<span class="spacer"></span>${rightHTML}` : ""}
       </div>`;
       const bindDl = () => {
-        $("#fv-dl-btn")?.addEventListener("click", (ev) => downloadArtifact(path, f.machine, ev.currentTarget));
+        body.querySelector("[data-fv-dl-btn]")?.addEventListener("click", (ev) => downloadArtifact(path, f.machine, ev.currentTarget));
       };
+
+      // 1. Sandboxed HTML Preview + Preview/Source Toggle
+      if (ext === "html" || ext === "htm" || f.kind === "html") {
+        let htmlText = "";
+        if (f.size <= (5 << 20)) {
+          const q = `/api/file?path=${encodeURIComponent(path)}${f.machine ? "&machine=" + encodeURIComponent(f.machine) : ""}&as=html`;
+          const r = routeReq(q);
+          try {
+            const res = await fetch(r.url, { headers: r.hub ? { Authorization: "Bearer " + r.hub.token } : {}, credentials: r.hub ? "omit" : "same-origin" });
+            if (res.ok) htmlText = await res.text();
+          } catch {}
+        }
+        if (!htmlText && f.blob) {
+          htmlText = await f.blob.text();
+        }
+        if (htmlText) {
+          if (headSetter) headSetter("HTML", htmlText, true);
+          body.classList.add("is-flush");
+          const renderHTMLMode = (mode) => {
+            const seg = `<div class="fv-seg" role="tablist" aria-label="HTML 查看方式">
+              <button type="button" class="fv-seg-btn ${mode === "preview" ? "active" : ""}" data-html-mode="preview">预览</button>
+              <button type="button" class="fv-seg-btn ${mode === "source" ? "active" : ""}" data-html-mode="source">源码</button>
+            </div>`;
+            if (mode === "source") {
+              const norm = htmlText.replace(/\r\n/g, "\n").replace(/\n$/, "");
+              const hl = HL || window.CollieHighlight;
+              let lines = 1;
+              for (let i = 0; i < norm.length && lines <= 5001; i++) if (norm.charCodeAt(i) === 10) lines++;
+              let srcHTML = "";
+              if (hl && norm.length <= hl.HL_MAX_BYTES && lines <= hl.HL_MAX_LINES) {
+                const nums = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+                srcHTML = `<div class="fv-code"><div class="fv-ln" aria-hidden="true">${nums}</div><pre class="fv-pre"><code id="${codeId}">${hl.highlightCode(norm, "html")}</code></pre></div>`;
+              } else {
+                srcHTML = `<pre class="fv-pre fv-large" id="${codeId}">${esc(norm)}</pre>`;
+              }
+              body.classList.add("is-code");
+              body.innerHTML = `${makeToolbar("HTML 源码 · " + fmtSize(f.size), seg)}${srcHTML}`;
+            } else {
+              body.classList.remove("is-code");
+              body.innerHTML = `${makeToolbar("沙箱网页预览 · " + fmtSize(f.size), seg)}<iframe class="fv-pdf fv-html" sandbox="allow-scripts allow-forms allow-popups allow-modals" referrerpolicy="no-referrer" title="${esc(path)}"></iframe>`;
+              const frame = body.querySelector("iframe.fv-html");
+              if (frame) frame.srcdoc = htmlText;
+            }
+            body.querySelectorAll("[data-html-mode]").forEach((btn) => {
+              btn.addEventListener("click", () => renderHTMLMode(btn.dataset.htmlMode));
+            });
+          };
+          renderHTMLMode("preview");
+          return true;
+        }
+      }
 
       if (f.kind === "pdf") {
         let pdfBlob = f.blob;
@@ -205,7 +265,7 @@
           if (res.ok) pdfBlob = await res.blob();
         }
         if (pdfBlob && pdfBlob.size > 0) {
-          if (setFileHead) setFileHead("PDF", "", false);
+          if (headSetter) headSetter("PDF", "", false);
           body.classList.add("is-flush");
           const url = setObjectURL(new Blob([pdfBlob], { type: "application/pdf" }));
           body.innerHTML = `${makeToolbar()}<iframe class="fv-pdf" src="${url}#toolbar=1&navpanes=0" title="${esc(path)}"></iframe>`;
@@ -216,13 +276,13 @@
 
       if (f.kind === "csv" || ext === "csv" || ext === "tsv") {
         const text = await f.blob.text();
-        const rows = parseDelimitedTable(text, ext === "tsv" ? "\t" : ",", 150);
+        const rows = parseDelimitedTable(text, ext === "tsv" ? "\t" : ",", rowCap + 20);
         if (rows.length >= 1) {
-          if (setFileHead) setFileHead(ext === "tsv" ? "TSV" : "CSV", text, true);
+          if (headSetter) headSetter(ext === "tsv" ? "TSV" : "CSV", text, true);
           body.classList.add("is-flush");
           const colCount = rows.reduce((m, r) => Math.max(m, r.length), rows[0].length);
           const head = Array.from({ length: colCount }, (_, i) => (rows[0][i] ?? "").trim() || `Col ${i + 1}`);
-          const dataRows = rows.slice(1, 121);
+          const dataRows = rows.slice(1, rowCap + 1);
           const isNumCol = head.map((_, ci) => {
             let nums = 0, nonEmpty = 0;
             for (const r of dataRows) {
@@ -233,9 +293,9 @@
             }
             return nonEmpty > 0 && nums / nonEmpty >= 0.8;
           });
-          const dimInfo = `${dataRows.length}${rows.length > 121 ? "+" : ""} 行 × ${colCount} 列 · ${fmtSize(f.size)}`;
-          const moreNote = rows.length > 121 ? `<p class="fv-note muted" style="padding:0 14px 16px">表格较大，在线展示前 120 行；完整数据可点击右上角「下载到本地」。</p>` : "";
-          body.innerHTML = `${makeToolbar(esc(dimInfo))}<div class="fv-csv-wrap"><table class="fv-csv" id="fv-code-src">
+          const dimInfo = `${dataRows.length}${rows.length > rowCap + 1 ? "+" : ""} 行 × ${colCount} 列 · ${fmtSize(f.size)}`;
+          const moreNote = rows.length > rowCap + 1 ? `<p class="fv-note muted" style="padding:0 14px 16px">表格较大，在线展示前 ${rowCap} 行；完整数据可点击右上角下载到本地。</p>` : "";
+          body.innerHTML = `${makeToolbar(esc(dimInfo))}<div class="fv-csv-wrap"><table class="fv-csv" id="${codeId}">
             <thead><tr><th class="idx">#</th>${head.map((c, ci) => `<th class="${isNumCol[ci] ? "num" : ""}" title="${esc(c)}">${esc(c)}</th>`).join("")}</tr></thead>
             <tbody>${dataRows.map((r, ri) => `<tr><td class="idx">${ri + 1}</td>${head.map((_, ci) => {
               const v = (r[ci] ?? "").trim();
@@ -248,14 +308,14 @@
       }
 
       if (f.kind === "office" || f.kind === "archive" || f.kind === "binary") {
-        if (setFileHead) setFileHead((BADGE_META[ext]?.badge) || "", "", false);
+        if (headSetter) headSetter((BADGE_META[ext]?.badge) || "", "", false);
         const typeDesc = f.kind === "office" ? "Office 文档（Word / Excel / PPT）" : f.kind === "archive" ? "压缩归档包" : "二进制文件";
-        const canDl = f.size > 0 && f.size <= (50 << 20);
+        const canDl = f.size > 0 && f.size <= FILE_DL_MAX;
         body.innerHTML = `<div class="fv-binary-card">
           <div class="fv-bin-badge">${esc((BADGE_META[ext]?.badge) || ext.toUpperCase() || "FILE")}</div>
           <h4>${esc(path.split(/[\\/]/).pop() || path)}</h4>
           <p class="muted">${typeDesc} · ${fmtSize(f.size)}${where ? " · 位于 " + esc(machineName(f.machine)) : ""}</p>
-          ${canDl ? `<button type="button" class="btn primary" id="fv-dl-btn">一键下载到本机打开</button>` : `<p class="muted">文件体积超过 50 MB 在线下载限制</p>`}
+          ${canDl ? `<button type="button" class="btn primary" data-fv-dl-btn>一键下载到本机打开</button>` : `<p class="muted">文件体积超过 100 MB 在线下载限制</p>`}
         </div>`;
         bindDl();
         return true;
@@ -263,15 +323,15 @@
 
       if (f.kind === "markdown" || /\.(md|markdown|mdx)$/i.test(path)) {
         const text = await f.blob.text();
-        if (setFileHead) setFileHead("Markdown", text, true);
+        if (headSetter) headSetter("Markdown", text, true);
         body.classList.add("is-flush");
         const cut = f.size > f.blob.size ? `<p class="fv-note muted" style="padding:0 20px 16px">文件共 ${fmtSize(f.size)}，当前预览前 1 MB。</p>` : "";
-        body.innerHTML = `${makeToolbar()}<div class="msg assistant fv-md" id="fv-code-src" style="padding:14px 20px 24px">${mdRender(text)}</div>${cut}`;
+        body.innerHTML = `${makeToolbar()}<div class="msg assistant fv-md ${opts.wide ? "rv-md" : ""}" id="${codeId}" style="padding:18px 24px 28px">${mdRender(text)}</div>${cut}`;
         bindDl();
         return true;
       }
 
-      // Let openFile render source code / plain text with sticky line numbers + offline syntax highlighting!
+      // Let openFile / openWideFile render source code / plain text with sticky line numbers + offline syntax highlighting!
       return false;
     }
 
@@ -304,7 +364,7 @@
       }
     });
 
-    return { artifactsIn, downloadArtifact, renderRichFilePane, extOf };
+    return { artifactsIn, downloadArtifact, renderRichFilePane, extOf, FILE_DL_MAX };
   }
 
   window.CollieArtifacts = { initArtifacts };

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -77,6 +78,40 @@ func larkLookup() (bin, openID, who, problem string) {
 	return bin, st.Identities.User.OpenID, st.Identities.User.UserName, ""
 }
 
+// larkJumpURL adds Feishu's official external-browser query parameters before
+// any #fragment so both mobile (iOS/Android) and desktop Feishu open Collie in
+// the system default browser (reusing the 1-year login cookie and avoiding
+// self-signed cert blocks in Feishu's ephemeral WebView).
+func larkJumpURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return raw
+	}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	q := u.Query()
+	var extra []string
+	if !q.Has("lk_mobile_jump_to_browser") {
+		extra = append(extra, "lk_mobile_jump_to_browser=true")
+	}
+	if !q.Has("lk_jump_to_browser") {
+		extra = append(extra, "lk_jump_to_browser=true")
+	}
+	if len(extra) > 0 {
+		if u.RawQuery != "" {
+			u.RawQuery += "&" + strings.Join(extra, "&")
+		} else {
+			u.RawQuery = strings.Join(extra, "&")
+		}
+	}
+	return u.String()
+}
+
 // larkSend writes to the logged-in user, as the bot (a message from yourself
 // would not ring): a card, or plain text if the card is turned down.
 func larkSend(ns []notice, base string) error {
@@ -100,7 +135,7 @@ func larkSend(ns []notice, base string) error {
 		return nil
 	}
 	text := noticesText(ns)
-	if link := noticeLink(ns, base); link != "" {
+	if link := larkJumpURL(noticeLink(ns, base)); link != "" {
 		text += "\n\n打开 Collie：" + link
 	}
 	if err2 := send("--text", text); err2 != nil {
@@ -207,6 +242,9 @@ func webhookSend(webhookURL string, ns []notice, base string) error {
 
 	text := noticesText(ns)
 	if link := noticeLink(ns, base); link != "" {
+		if isFeishuWebhook(webhookURL) {
+			link = larkJumpURL(link)
+		}
 		text += "\n\n打开 Collie：" + link
 	}
 	return postJSON(map[string]any{
@@ -255,7 +293,7 @@ func larkCard(ns []notice, base string) string {
 		}
 		els = append(els, map[string]any{"tag": "markdown", "content": t})
 	}
-	if link := noticeLink(ns, base); link != "" {
+	if link := larkJumpURL(noticeLink(ns, base)); link != "" {
 		btnText := "打开 Collie"
 		if len(ns) == 1 && ns[0].btnLabel != "" {
 			btnText = ns[0].btnLabel
@@ -266,13 +304,16 @@ func larkCard(ns []notice, base string) string {
 			"behaviors": []any{map[string]string{"type": "open_url", "default_url": link}},
 		})
 	}
-	b, _ := json.Marshal(map[string]any{
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.Encode(map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{"summary": map[string]string{"content": clip(cardSummary(ns), 60)}},
 		"header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}, "template": color},
 		"body":   map[string]any{"elements": els},
 	})
-	return string(b)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 var (
