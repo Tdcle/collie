@@ -60,7 +60,7 @@ func serve() {
 	token := flag.String("token", os.Getenv("COLLIE_TOKEN"), "access token (default: generated and stored in ~/.collie/token)")
 	publicURL := flag.String("url", os.Getenv("COLLIE_URL"), "address phones and computers should use, e.g. http://10.0.0.5:7788 (default: detected LAN addresses)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: collie [serve] [flags]          run the hub\n       collie node --hub <addr> --code <c>   join this computer to a hub\n       collie pair [--computer]              new pairing code\n       collie reply|say|spawn|send|report|subscribe|stop|show|list|timer|hook …\n\n")
+		fmt.Fprintf(os.Stderr, "usage: collie [serve] [flags]          run the hub\n       collie node --hub <addr> --code <c>   join this computer to a hub\n       collie pair [--computer]              new pairing code\n       collie reply|say|spawn|send|receipt|report|subscribe|stop|show|list|timer|hook …\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -85,6 +85,7 @@ func serve() {
 		log.Fatalf("open %s: %v", dir, err)
 	}
 	srv.sup = sup
+	srv.initReceipts(dir)
 	srv.auths = newAuth(sup.db, *token)
 	if hn := srv.auths.HubName(); hn != "" {
 		srv.herdr.RenameMachine("hub", hn)

@@ -712,6 +712,10 @@ func (h *Herdr) unlockCodexPane(ctx context.Context, pane string) error {
 // on a read-only lock banner, because herdr 0.9+ reports idle/interactive_ready
 // even when Codex TUI rejects keystrokes as read-only.
 func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
+	return h.prompt(ctx, target, text, true)
+}
+
+func (h *Herdr) prompt(ctx context.Context, target, text string, retryLocked bool) error {
 	pane := target
 	if !strings.Contains(pane, ":") {
 		pane = h.paneOfName(ctx, target)
@@ -727,6 +731,9 @@ func (h *Herdr) Prompt(ctx context.Context, target, text string) error {
 		if pane != "" {
 			time.Sleep(180 * time.Millisecond)
 			if vis, e := h.Read(ctx, pane, "visible", "text", 0); e == nil && codexScreenLocked(vis.Text) {
+				if !retryLocked {
+					return errors.New("提交后终端显示只读提示，无法确认会话是否收下消息")
+				}
 				if uerr := h.unlockCodexPane(ctx, pane); uerr != nil {
 					return uerr
 				}

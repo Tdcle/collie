@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,8 @@ type Server struct {
 	sup   *Super
 	auths *Auth // hub only: paired devices and computers
 	node  bool  // serving the node API inside a tunnel (no auth, no super)
+
+	receipts *sql.DB // durable claims on this hub or node
 
 	port       int      // hub only: listening port, for addresses
 	publicURLs []string // hub only: addresses given with -url, shown first
@@ -153,6 +156,8 @@ func (s *Server) machineRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) h
 func (s *Server) NodeRoutes() http.Handler {
 	mux := http.NewServeMux()
 	s.machineRoutes(mux, func(h http.HandlerFunc) http.Handler { return h })
+	mux.HandleFunc("PUT /api/sidebar/sends/{id}", s.sidebarReceipt)
+	mux.HandleFunc("GET /api/sidebar/sends/{id}", s.sidebarReceipt)
 	return mux
 }
 

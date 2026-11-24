@@ -200,7 +200,7 @@ func (sp *Super) describeSessionTarget(id string) (title, kind, machineName, ref
 		}
 		return nil
 	}
-	if strings.HasPrefix(id, "cx-") || strings.HasPrefix(id, "cl-") || strings.HasPrefix(id, "ag-") || strings.HasPrefix(id, "gm-") {
+	if externalTarget(id) {
 		_, mid := split(id)
 		mName := machineDisplay(mid)
 		if sp.s.herdr != nil {
@@ -296,18 +296,19 @@ func (sp *Super) subscribe() (chan struct{}, func()) {
 	return ch, func() { sp.mu.Lock(); delete(sp.subs, ch); sp.mu.Unlock() }
 }
 
-func (sp *Super) flush() {
+func (sp *Super) flush() error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	if !sp.dirty {
-		return
+		return nil
 	}
 	if err := saveState(sp.db, sp.st, sp.deletedTimers); err != nil {
 		log.Printf("save state: %v", err)
-		return
+		return err
 	}
 	sp.st.trim() // history beyond the working set stays in SQLite
 	sp.dirty, sp.deletedTimers = false, nil
+	return nil
 }
 
 func (sp *Super) addEntryLocked(role, thread, text, ref, tone string) *Entry {

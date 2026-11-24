@@ -29,6 +29,8 @@ func (s *Server) superRoutes(mux *http.ServeMux) {
 	api("POST /api/super/dismiss", s.superDismiss)
 	api("POST /api/super/spawn", s.superSpawn)
 	api("POST /api/super/send", s.superSend)
+	api("PUT /api/super/sends/{id}", s.sidebarReceipt)
+	api("GET /api/super/sends/{id}", s.sidebarReceipt)
 	api("POST /api/super/report", s.superReport)
 	api("POST /api/super/subscribe", s.superSubscribe)
 	api("POST /api/super/stop", s.superStop)
@@ -536,6 +538,20 @@ func (s *Server) superSpawn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, res)
 }
 
+// Worker names take precedence when a local sidebar ID is also a worker name.
+func (sp *Super) queueWorker(to, text, thread string) string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	wk := sp.st.Workers[to]
+	if wk == nil || wk.Ended {
+		return ""
+	}
+	if thread == "" {
+		thread = wk.Thread
+	}
+	return sp.ingestLocked("router", thread, routerName, text, "", to, "").ID
+}
+
 func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		To     string `json:"to"`
@@ -551,20 +567,10 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "target and text are required"})
 		return
 	}
-	sp := s.sup
-	sp.mu.Lock()
-	wk := sp.st.Workers[to]
-	if wk != nil && !wk.Ended {
-		th := body.Thread
-		if th == "" {
-			th = wk.Thread
-		}
-		t := sp.ingestLocked("router", th, routerName, body.Text, "", to, "")
-		sp.mu.Unlock()
-		writeJSON(w, 202, map[string]any{"trigger": t.ID, "note": "queued; delivered when the worker is free"})
+	if id := s.sup.queueWorker(to, body.Text, body.Thread); id != "" {
+		writeJSON(w, 202, map[string]any{"trigger": id, "note": "queued; delivered when the worker is free"})
 		return
 	}
-	sp.mu.Unlock()
 
 	// Allow Collie to also steer or dispatch into an existing sidebar session
 	// (either a live herdr pane like `w9:p1@wlc` or an external/Desktop session
@@ -584,7 +590,7 @@ func (s *Server) superSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "pane_id": to, "note": "delivered directly to existing pane session; run `collie show " + to + "` later to inspect its reply"})
 		return
 	}
-	if strings.HasPrefix(to, "cx-") || strings.HasPrefix(to, "cl-") || strings.HasPrefix(to, "ag-") || strings.HasPrefix(to, "gm-") {
+	if externalTarget(to) {
 		local, machine := split(to)
 		rawBody, _ := json.Marshal(map[string]string{"text": text})
 		if machine != "" {
@@ -795,7 +801,7 @@ func (s *Server) superShow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if strings.HasPrefix(id, "cx-") || strings.HasPrefix(id, "cl-") || strings.HasPrefix(id, "ag-") || strings.HasPrefix(id, "gm-") {
+	if externalTarget(id) {
 		cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		reply, userQ := s.sup.externalLastReply(cctx, id)
