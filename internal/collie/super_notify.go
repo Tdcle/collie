@@ -187,6 +187,9 @@ func (sp *Super) quoteLocked(id string) *Quote {
 	if q := entry(id); q != nil {
 		return q
 	}
+	if w := sp.st.Workers[id]; w != nil {
+		return &Quote{Worker: w.Name, Who: w.Name, Text: w.Task}
+	}
 	t := sp.st.trigger(id)
 	if t == nil {
 		return nil

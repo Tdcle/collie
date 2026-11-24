@@ -756,7 +756,7 @@
     else if (hPath.startsWith("#/x/")) { next = "ext"; id = decodeURIComponent(hPath.slice(4)); }
     else if (hPath.startsWith("#/h/")) { next = "ext"; id = "h:" + decodeURIComponent(hPath.slice(4)); }
     else if (hPath === "#/collie") next = "collie";
-    else if (hPath === "#/trace" || hPath.startsWith("#/trace/")) { next = "trace"; subTab = hPath.slice(8); if (subTab === "flow" || subTab === "events") { traceTab = subTab; store.set("traceTab", subTab); } }
+    else if (hPath === "#/trace" || hPath.startsWith("#/trace/")) { next = "trace"; }
     else if (hPath === "#/memory" || hPath.startsWith("#/memory/")) { next = "memory"; subTab = hPath.slice(9); if (["active", "notes", "archive"].includes(subTab)) { memTab = subTab; store.set("memTab", subTab); } }
     else if (hPath === "#/timers") next = "timers";
     else if (hPath === "#/hooks") next = "hooks";
@@ -1867,7 +1867,6 @@
   }, (draftText) => resolveSuperUploadMachine(draftText));
 
   // ───────────────────────────── panel views (执行轨迹 / 长期记忆 / 定时任务 / 外部触发 / 设置)
-  let traceTab = store.get("traceTab", "flow");     // "flow" | "events"
   let traceFilter = store.get("traceFilter", "all"); // "all" | "running" | "attn" | "done"
   let memTab = store.get("memTab", "active");       // "active" | "notes" | "archive"
   let settingsTab = store.get("settingsTab", "collie"); // "collie" | "local"
@@ -1878,9 +1877,7 @@
     trace: {
       name: "执行轨迹",
       sub: "还原每次派活从下发、跨机执行、回报到结束的完整任务流转链路",
-      tabs: () => [["flow", "任务流转"], ["events", "底层事件流水"]],
-      cur: () => traceTab,
-      set: (t) => { traceTab = t; store.set("traceTab", t); },
+      tabs: null,
     },
     memory: {
       name: "长期记忆",
@@ -1953,12 +1950,12 @@
         const r = await api("/api/super/triggers");
         if (view !== "trace") return;
         const triggers = r.triggers || [], threads = r.threads || [];
-        const sig = traceTab + "|" + traceFilter + "|" + [...expandedTraceCards].join(",") + "|"
+        const sig = traceFilter + "|" + [...expandedTraceCards].join(",") + "|"
           + JSON.stringify(sup.workers.map((w) => [w.name, workerStatus(w), w.ended, w.last_report, w.report_at]))
           + "|" + triggers.slice(0, 40).map((t) => t.id + ":" + t.status).join(",");
         if (sig !== body._traceSig) {
           body._traceSig = sig;
-          body.innerHTML = traceTab === "flow" ? traceFlowHTML(triggers, threads) : inboxHTML(triggers, threads);
+          body.innerHTML = traceFlowHTML(triggers, threads);
         }
       } else if (which === "memory") {
         const r = await api("/api/super/memory");
@@ -2277,26 +2274,6 @@
       ${legacy.length ? group("旧版记忆", "等下次做梦或换会话时拆进 memory/", legacy, { card: { open: true } }) : ""}
       ${group("长期指令", "你的长期习惯、偏好与自动化规则，每次新会话必读", ins, { card: { open: true, label: "instructions.md", sub: "", seedHint: "尚未配置偏好指令", seedDesc: "尚未写入长期偏好指令。点击右侧可写下你的常用习惯（如默认语言、代码规范、某类事件的处理原则），Collie 每次开启新会话都会自动遵守。" }, always: true, empty: "还没有长期指令" })}
       ${group("进行中的任务", "跨多轮跟进的在途事项，每次新会话必读", tasks, { card: { label: undefined, crew: true }, always: true, empty: "当前没有跨会话跟进中的在途任务", emptySub: "当你向 Collie 交代需要多步跟进或跨电脑协作的复杂事项时，它会自动在此建立任务跟踪卡。" })}`;
-  }
-
-  function inboxHTML(ts, ths = []) {
-    return `<div class="panel-banner">
-        <span class="pb-ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
-        <div class="pb-body">
-          <div class="pb-title">底层触发器事件总线</div>
-          <div class="pb-desc">按时间倒序记录聊天输入、子 Agent 回报、系统巡检与外部 Webhook 原始流水，用于诊断调度细节。</div>
-        </div>
-        <span class="pb-pill">${ts.length} 条记录</span>
-      </div>
-      <div class="card"><div class="card-h"><span class="card-h-main">最近触发事件</span><span class="card-h-sub">最新在前</span></div><ul class="rows">${ts.length ? ts.map((t) => `<li class="row">
-        <span class="badge ${esc(t.status === "queued" ? "queued" : t.status === "ignored" ? "ignored" : t.action === "candidate" ? "candidate" : "")}">${esc({ queued: "排队", delivered: "已投递", ignored: "已忽略" }[t.status] || t.status)}</span>
-        <div><div class="meta"><b>#${esc(t.id)}</b><span>${esc(SOURCE_LABEL[t.source] || t.source)}</span><span>${esc(t.thread)}</span>${t.from ? `<span>来自 ${esc(t.from === ROUTER ? "Collie" : t.from)}</span>` : ""}${t.targets?.length ? `<span>→ ${esc(t.targets.map((x) => x === ROUTER ? "Collie" : x).join(", "))}</span>` : ""}${t.action === "candidate" ? "<span>按需判断</span>" : ""}</div>
-        <div class="text">${esc(t.text)}</div></div>
-        <span class="right">${when(t.at)}</span></li>`).join("") : `<li class="empty-row">暂无事件记录</li>`}</ul></div>
-      ${ths.length > 1 ? `<div class="card"><div class="card-h">会话路由通道（Threads）</div><ul class="rows">${ths.map((th) => `<li class="row">
-        <span class="badge">${th.triggers?.length || 0} 条</span>
-        <div><div class="meta"><b>${esc(th.id)}</b>${th.subscribers?.length ? `<span>直连订阅：${esc(th.subscribers.join(", "))}</span>` : "<span>默认交由 Collie 处理</span>"}</div></div>
-        <span class="right">${when(th.last_at)}</span></li>`).join("")}</ul></div>` : ""}`;
   }
 
   // ───────────────────────────── timers: picked, not typed
@@ -6831,7 +6808,7 @@
         ico: osGlyph(m.os), title: `在 ${m.name} 上新建会话`, sub: `${m.os || "本地"} · ${tilde(m.home || "~")}`, meta: "电脑",
         run: () => openLauncher(m.id),
       })),
-      { ico: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>', title: "执行轨迹", sub: "查看每次派活从下发、跨机执行到汇报的完整任务流转链路", meta: "导航", run: () => { traceTab = "flow"; store.set("traceTab", "flow"); location.hash = "#/trace"; if (view === "trace") openPanel("trace"); } },
+      { ico: '<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><path d="M8.2 6h4.3a3.5 3.5 0 0 1 3.5 3.5v.3M15.8 13.8v.7a3.5 3.5 0 0 1-3.5 3.5H8.2"/></svg>', title: "执行轨迹", sub: "查看每次派活从下发、跨机执行到汇报的完整任务流转链路", meta: "导航", run: () => { location.hash = "#/trace"; if (view === "trace") openPanel("trace"); } },
       { ico: '<svg viewBox="0 0 24 24"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v18H7.5A2.5 2.5 0 0 0 5 22.5z"/><path d="M9 7h6M9 11h6"/></svg>', title: "长期记忆", sub: "按分栏查看或编辑 Collie 的长期指令、经验笔记与归档", meta: "导航", run: () => { location.hash = "#/memory"; } },
       { ico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4.2l2.8 1.8M9.5 2h5"/></svg>', title: "定时任务", sub: "创建或管理每日巡检与延后提醒", meta: "导航", run: () => { location.hash = "#/timers"; } },
       { ico: '<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L10.7 5.2"/><path d="M14 11a5 5 0 0 0-7.07 0L4.8 13.1a5 5 0 0 0 7.07 7.07l1.41-1.41"/></svg>', title: "外部触发（Webhook 与过滤）", sub: "管理 GitHub / 飞书 Webhook 与免唤醒过滤规则", meta: "导航", run: () => { location.hash = "#/hooks"; } },

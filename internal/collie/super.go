@@ -846,17 +846,21 @@ func (sp *Super) deliver(ctx context.Context, target string, list []*Trigger) {
 			fmt.Fprintf(&b, "[collie] %d new events (batched)\n", len(list))
 		}
 		for _, t := range list {
-			fmt.Fprintf(&b, "\n#%s · %s · %s", t.ID, t.Thread, t.Source)
+			fmt.Fprintf(&b, "\n[%s · %s · %s", t.At.Format("15:04"), t.Thread, t.Source)
 			if t.From != "" {
 				fmt.Fprintf(&b, " · from %s", t.From)
 			}
 			if t.Action == "candidate" {
 				b.WriteString(" · candidate (act only if a rule or memory says so; otherwise stay silent)")
 			}
-			fmt.Fprintf(&b, " · %s\n", t.At.Format("15:04"))
+			b.WriteString("]\n")
 			text := strings.TrimSpace(t.Text)
-			if len([]rune(text)) > 1600 {
-				text = string([]rune(text)[:1600]) + fmt.Sprintf(" … [spilled; run `collie show %s`]", t.ID)
+			if len([]rune(text)) > 8000 {
+				spillTarget := t.Thread
+				if t.From != "" && t.From != "you" && t.From != routerName {
+					spillTarget = t.From
+				}
+				text = string([]rune(text)[:8000]) + fmt.Sprintf(" … [truncated; run `collie show %s`]", spillTarget)
 			}
 			b.WriteString(indent(text, "  "))
 			b.WriteString("\n")
@@ -1167,7 +1171,7 @@ func (sp *Super) Show(id string) (string, bool) {
 		}
 		for _, tid := range ids {
 			if t := sp.st.trigger(tid); t != nil {
-				fmt.Fprintf(&b, "  #%s %s %s: %s\n", t.ID, t.At.Format("01-02 15:04"), t.Source, clip(firstLine(t.Text), 90))
+				fmt.Fprintf(&b, "  %s %s: %s\n", t.At.Format("01-02 15:04"), t.Source, clip(firstLine(t.Text), 100))
 			}
 		}
 		return b.String(), true
