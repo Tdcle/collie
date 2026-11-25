@@ -586,6 +586,8 @@
     return SHOW_SIDE_DOT.has(st) ? `<span class="dot ${esc(st)}" title="${esc(labelMap[st] || st)}"></span>` : "";
   }
   const PIN_ICO = `<svg viewBox="0 0 24 24"><path d="M15 4.5l4.5 4.5-3.2 3.2.7 4.3-4.8-4.8-5.2 5.2M12.2 11.7L7.5 7l4.3.7L15 4.5z"/></svg>`;
+  const COLLIE_MARK_ICO = `<svg viewBox="6 7 52 51" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 31.5c6.5-1.4 12-3.2 17-6.2 2.6-3 5.2-5 8.4-5.9L38.4 10l6.4 10.4c4.6 3.2 7.2 8.4 7.4 14.6.2 3.6 1.4 6 2.8 8.2-1.6 1.4-2.4 3.4-2.4 5.8 0 2.2-.6 4-1.6 5.6"/><path d="M38.4 10l-3.6 3.2"/><path d="M9.5 31.5c1.2 2.6 4.6 4 10 4 3.4 0 6.4 1 8.8 3"/><path d="M28.3 38.5c-.4 2.8.6 4.6 2.6 5.8-.8 2.2-.2 4.2 1.8 5.6-.2 1.8.4 3.2 1.6 4.4"/><path d="M37 37c2 2.4 2.6 5.2 2 8.4M44 35c2.2 2.6 3 5.6 2.4 9"/></g><circle cx="30.6" cy="26.2" r="2.2" fill="currentColor" stroke="none"/><circle cx="10" cy="31.6" r="2.5" fill="currentColor" stroke="none"/></svg>`;
+  const collieMarkHTML = () => `<span class="by-collie" title="Collie 派出" aria-label="Collie 派出">${COLLIE_MARK_ICO}</span>`;
   function pinMarkHTML(smenuKey, pinned) {
     return pinned ? `<span class="pin-mark" data-spin="${esc(smenuKey)}" role="button" tabindex="0" title="已置顶（点击取消置顶）">${PIN_ICO}</span>` : "";
   }
@@ -600,7 +602,7 @@
     const quiet = !SHOW_SIDE_DOT.has(v.status);
     const rawTitle = v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     const nameInner = isByC && v.name !== ROUTER
-      ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>${pinMarkHTML(smenuKey, pinned)}`
+      ? `<span class="nm">${esc(title(v))}</span>${collieMarkHTML()}${pinMarkHTML(smenuKey, pinned)}`
       : `${esc(rawTitle)}${pinMarkHTML(smenuKey, pinned)}`;
     return `<li class="s-li${pinned ? " is-pinned" : ""}"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
       <span class="glyph">${glyph(v)}</span>
@@ -3873,11 +3875,12 @@
     const on = !!(h && histOnline(h));
     const meta = h ? getSessMeta(h.kind, h.machine, h.session, "h:" + h.id) : null;
     const byCollie = h ? isSessionByCollie(workerLookup(), { kind: h.kind, machine: h.machine, session: h.session, name: h.name, fallbackKey: "h:" + h.id, meta, flag: h.collie_worker }) : false;
-    const headTag = [byCollie ? "Collie 派出" : "", meta?.archived ? "已归档" : ""].filter(Boolean).join(" · ");
     $("#x-name").textContent = h ? histName(h) : "已结束的会话";
     $("#x-kind").textContent = h ? KIND_LABEL[h.kind] || h.kind : "";
-    $("#x-tag").hidden = !headTag;
-    $("#x-tag").textContent = headTag;
+    const xTag = $("#x-tag");
+    xTag.className = byCollie && !meta?.archived ? "head-collie-wrap" : "tag";
+    xTag.hidden = !byCollie && !meta?.archived;
+    xTag.innerHTML = `${byCollie ? collieMarkHTML() : ""}${meta?.archived ? "已归档" : ""}`;
     $("#x-status").className = "status ended";
     $("#x-status").textContent = h ? "上次对话 " + ago(h.ended) : "";
     $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
@@ -4051,7 +4054,7 @@
       const attnCls = e.live && e.status === "blocked" ? "attn-row" : "";
       const smenuKey = "x:" + e.id;
       const pMark = !inProj ? pinMarkHTML(smenuKey, pinned) : "";
-      const nameHTML = byCollie ? `<span class="nm">${esc(extName(e))}</span><span class="by-collie">Collie 派出</span>${pMark}` : `${esc(extName(e))}${pMark}`;
+      const nameHTML = byCollie ? `<span class="nm">${esc(extName(e))}</span>${collieMarkHTML()}${pMark}` : `${esc(extName(e))}${pMark}`;
       return `<li class="s-li ${attnCls}${!inProj && pinned ? " is-pinned" : ""}"><a class="item ${showDot ? "" : "ended"} ${view === "ext" && extCur === e.id ? "active" : ""}" href="#/x/${encodeURIComponent(e.id)}">
         <span class="glyph">${GLYPHS[e.kind] || GLYPHS.agent}</span>
         <span class="body"><div class="name">${nameHTML}</div><div class="sub">${esc(where)}</div></span>${dot}</a>
@@ -4063,7 +4066,7 @@
       const pMark = !inProj ? pinMarkHTML(smenuKey, pinned) : "";
       return `<li class="s-li${!inProj && pinned ? " is-pinned" : ""}"><a class="item ended ${view === "ext" && extCur === "h:" + h.id ? "active" : ""}" href="#/h/${encodeURIComponent(h.id)}">
         <span class="glyph">${GLYPHS[h.kind] || GLYPHS.agent}</span>
-        <span class="body"><div class="name">${byCollie ? `<span class="nm">${esc(histName(h))}</span><span class="by-collie">Collie 派出</span>${pMark}` : `${esc(histName(h))}${pMark}`}</div><div class="sub">${esc(sub)}</div></span></a>
+        <span class="body"><div class="name">${byCollie ? `<span class="nm">${esc(histName(h))}</span>${collieMarkHTML()}${pMark}` : `${esc(histName(h))}${pMark}`}</div><div class="sub">${esc(sub)}</div></span></a>
         <button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button></li>`;
     };
     const paneRow = (a, inProj = false, lastT = 0, pinned = false, byCollie = false) => {
@@ -4079,7 +4082,7 @@
       const attnCls = a.status === "blocked" ? "attn-row" : "";
       return `<li class="s-li ${attnCls}"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && a.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(a.pane_id)}">
         <span class="glyph">${glyph(a)}</span>
-        <span class="body"><div class="name">${byCollie ? `<span class="nm">${esc(title(a))}</span><span class="by-collie">Collie 派出</span>` : esc(title(a))}</div><div class="sub">${esc(sub)}</div></span>
+        <span class="body"><div class="name">${byCollie ? `<span class="nm">${esc(title(a))}</span>${collieMarkHTML()}` : esc(title(a))}</div><div class="sub">${esc(sub)}</div></span>
         ${sideDotHTML(a.status)}</a>${more}</li>`;
     };
 
@@ -4139,7 +4142,7 @@
         active: false,
         html: `<li class="s-li"><a class="item" href="#/trace" title="${esc(w.task || "")}">
           <span class="glyph">${GLYPHS[w.kind] || GLYPHS.agent}</span>
-          <span class="body"><div class="name"><span class="nm">${esc(w.name)}</span><span class="by-collie">Collie 派出</span></div><div class="sub">${esc(where)}</div></span>
+          <span class="body"><div class="name"><span class="nm">${esc(w.name)}</span>${collieMarkHTML()}</div><div class="sub">${esc(where)}</div></span>
           ${sideDotHTML("starting")}</a></li>`,
       });
     }
@@ -4349,12 +4352,13 @@
     markExtSeen(e);
     const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
     const byCollie = isSessionByCollie(workerLookup(), { kind: e.kind, machine: e.machine, session: e.session, name: "", fallbackKey: "x:" + e.id, meta });
-    const headTag = [byCollie ? "Collie 派出" : "", meta?.archived ? "已归档" : ""].filter(Boolean).join(" · ");
     const on = extOnline(e);
     $("#x-name").textContent = extName(e);
     $("#x-kind").textContent = KIND_LABEL[e.kind] || e.kind;
-    $("#x-tag").hidden = !headTag;
-    $("#x-tag").textContent = headTag;
+    const xTag = $("#x-tag");
+    xTag.className = byCollie && !meta?.archived ? "head-collie-wrap" : "tag";
+    xTag.hidden = !byCollie && !meta?.archived;
+    xTag.innerHTML = `${byCollie ? collieMarkHTML() : ""}${meta?.archived ? "已归档" : ""}`;
     $("#x-cwd").textContent = (e.machine ? machineName(e.machine) + " · " : "") + tilde(e.cwd);
 
     if (e.live && !gone) {
@@ -4882,9 +4886,11 @@
     $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `会话代号：${v.name}` : "";
     $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";
     const dMeta = getSessMeta(v.kind, v.machine, v.session, "p:" + v.pane_id);
-    const role = isSessionByCollie(workerLookup(), { kind: v.kind, machine: v.machine, session: v.session, name: v.name, fallbackKey: "p:" + v.pane_id, meta: dMeta }) ? "Collie 派出" : "";
-    $("#d-worker").hidden = !role;
-    $("#d-worker").textContent = role;
+    const byCollie = isSessionByCollie(workerLookup(), { kind: v.kind, machine: v.machine, session: v.session, name: v.name, fallbackKey: "p:" + v.pane_id, meta: dMeta });
+    const dWorker = $("#d-worker");
+    dWorker.className = "head-collie-wrap";
+    dWorker.hidden = !byCollie;
+    dWorker.innerHTML = byCollie ? collieMarkHTML() : "";
     const st = $("#d-status");
     st.className = "status " + v.status;
     st.innerHTML = `<span class="dot ${esc(v.status)}"></span>${esc(STATUS_LABEL[v.status] || v.status)}`;

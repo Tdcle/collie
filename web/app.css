@@ -2710,14 +2710,32 @@ svg.mem-flow-svg text {
 .needs .ask-head a { font-size: 12px; color: var(--signal); text-decoration: none; font-weight: 500; }
 .needs .ask-head a:hover { text-decoration: underline; }
 
-/* sidebar: Collie's agents among yours */
-.item .name:has(.by-collie) { display: flex; align-items: center; }
-.item .name .nm { min-width: 0; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; }
-.item .name .by-collie {
-  flex: none; margin-left: auto; padding: 1px 6px;
-  background: var(--signal-soft); border: 1px solid color-mix(in srgb, var(--signal) 25%, transparent);
-  border-radius: 5px; font: 550 10px/15px var(--sans); color: var(--signal); white-space: nowrap;
+/* sidebar & header: pure line-stroke Collie mark (no background box/pill) */
+.item .name:has(.by-collie) { display: flex; align-items: center; gap: 5px; }
+.item .name .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.by-collie {
+  display: inline-grid; place-items: center; flex: none;
+  width: 15.5px; height: 15.5px; padding: 0; border: 0; background: none;
+  color: var(--fg-3); opacity: .88;
+  transition: color .14s, opacity .14s;
 }
+.item .name .by-collie { margin-left: auto; }
+.item:hover .name .by-collie,
+.item.active .name .by-collie { color: var(--fg); opacity: 1; }
+.by-collie svg {
+  width: 15.5px; height: 15.5px; display: block;
+  fill: none; stroke: none;
+}
+.by-collie svg g { stroke: currentColor; stroke-width: 3.6; }
+.by-collie svg circle { fill: currentColor; stroke: none; }
+.head-collie-wrap {
+  display: inline-flex; align-items: center; flex: none; margin-left: 2px;
+}
+.head-collie-wrap[hidden] { display: none; }
+.head-collie-wrap .by-collie { width: 17px; height: 17px; color: var(--fg-2); opacity: .92; }
+.head-collie-wrap .by-collie svg { width: 17px; height: 17px; }
+.tag .by-collie { width: 13.5px; height: 13.5px; margin-right: 4px; color: currentColor; vertical-align: -2px; }
+.tag .by-collie svg { width: 13.5px; height: 13.5px; }
 .list .empty-hint { list-style: none; padding: 4px 0; }
 .fold-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 10px; background: none; color: var(--fg-3); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
 .fold-row:hover { background: var(--bg-3); color: var(--fg-2); }
