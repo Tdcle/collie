@@ -147,6 +147,10 @@ function runScenario(authed, initHash = "#/collie?quotas=1") {
                 options: ["继续启动", "先不跑"],
                 at: now,
               },
+              { id: "e2-stop", role: "event", tone: "info", ref: "sfd-eval", text: "sfd-eval 已停止", at: now },
+              { id: "e2-supp", role: "collie", text: "**补充说明：** 刚才额外核对了第 4 组边界样本，结果一致。", at: now },
+              { id: "e-dream-1", role: "event", tone: "info", ref: "h:dream01", text: "Collie 睡一会儿，回顾最近的对话、整理记忆（做梦）", at: now },
+              { id: "e-dream-2", role: "event", tone: "info", text: "Collie 醒了。整理记忆：补齐了实验记录。", at: now },
             ],
             pending: [
               { id: "e2", at: now, summary: "是否继续启动评估？", options: ["继续启动", "先不跑"] },
@@ -163,6 +167,7 @@ function runScenario(authed, initHash = "#/collie?quotas=1") {
           json: async () => ({ sessions: [
             { id: "cx-newer@mac", kind: "codex", machine: "mac", session: "s-newer", title: "普通较新会话", cwd: "/tmp/a", updated: "2026-11-24T10:00:00Z" },
             { id: "cx-worker@mac", kind: "codex", machine: "mac", session: "s-worker", title: "子任务评估会话", cwd: "/tmp/w", updated: "2026-11-24T10:05:00Z" },
+            { id: "cx-yesterday-worker@mac", kind: "codex", machine: "mac", session: "s-yesterday-worker", title: "昨日派出历史会话", cwd: "/tmp/yw", updated: "2026-11-23T22:00:00Z" },
             { id: "cx-older-pinned@mac", kind: "codex", machine: "mac", session: "s-pinned", title: "置顶核心会话", cwd: "/tmp/b", updated: "2026-11-20T08:00:00Z" },
           ] }),
         };
@@ -173,7 +178,10 @@ function runScenario(authed, initHash = "#/collie?quotas=1") {
           ok: true,
           machines: [{ id: "mac", name: "Mac", os: "darwin/arm64", online: true, agents: ["codex"] }],
           agents: [], shells: [], projects: [], sessions: [], hubs: [], results: [],
-          session_meta: { "s:codex:mac:s-pinned": { pinned: true, pinned_at: 1795488000000 } },
+          session_meta: {
+            "s:codex:mac:s-pinned": { pinned: true, pinned_at: 1795488000000 },
+            "s:codex:mac:s-yesterday-worker": { collie_worker: true },
+          },
         }),
       };
     },
@@ -223,15 +231,15 @@ const sideListHTML = auth.getEl("#session-list").innerHTML;
 if (!sideListHTML.includes("is-pinned") || !sideListHTML.includes("pin-mark") || sideListHTML.indexOf("置顶核心会话") > sideListHTML.indexOf("普通较新会话")) {
   throw new Error("Expected pinned standalone session to render with .pin-mark and sort above newer unpinned sessions");
 }
-if (!sideListHTML.includes("子任务评估会话") || !sideListHTML.includes("by-collie") || !auth.getEl("#sf-hide-collie")) {
-  throw new Error("Expected Collie-dispatched worker session badge (.by-collie) and #sf-hide-collie filter button");
+if (!sideListHTML.includes("子任务评估会话") || !sideListHTML.includes("昨日派出历史会话") || (sideListHTML.match(/by-collie/g) || []).length < 2 || !auth.getEl("#sf-hide-collie")) {
+  throw new Error("Expected both today and yesterday Collie-dispatched worker sessions to carry .by-collie badge");
 }
 for (const fn of (auth.listeners.get("#session-filter:click") || [])) {
   fn({ target: { closest: (s) => s === "[data-hide-collie]" ? {} : null } });
 }
 const filteredSideHTML = auth.getEl("#session-list").innerHTML;
-if (filteredSideHTML.includes("子任务评估会话") || !filteredSideHTML.includes("普通较新会话") || !filteredSideHTML.includes("置顶核心会话")) {
-  throw new Error("Expected clicking #sf-hide-collie to hide Collie-dispatched worker sessions while keeping user sessions");
+if (filteredSideHTML.includes("子任务评估会话") || filteredSideHTML.includes("昨日派出历史会话") || !filteredSideHTML.includes("普通较新会话") || !filteredSideHTML.includes("置顶核心会话")) {
+  throw new Error("Expected clicking #sf-hide-collie to hide both today and yesterday Collie-dispatched worker sessions while keeping user sessions");
 }
 if (threadHTML.includes("art-badge sheet")) {
   throw new Error("Regression: 'art-badge sheet' collides with dialog.sheet!");
@@ -256,6 +264,13 @@ if (!threadHTML.includes('class="math-block"') || !threadHTML.includes('class="m
 }
 if (!threadHTML.includes("collie-proc") || !threadHTML.includes("1 条中间进展 · 2 条调度轨迹") || !threadHTML.includes("md-table")) {
   throw new Error("Expected settled Collie turn to fold interim replies & events into .collie-proc and render GFM md-table in final summary");
+}
+const procCloseIdx = threadHTML.indexOf("</details>");
+const mainAnswerIdx = threadHTML.indexOf("结论：共 3 项核心更新");
+const suppAnswerIdx = threadHTML.indexOf("刚才额外核对了第 4 组边界样本");
+const dreamWakeIdx = threadHTML.indexOf("Collie 醒了。整理记忆");
+if (procCloseIdx < 0 || mainAnswerIdx < procCloseIdx || suppAnswerIdx < procCloseIdx || dreamWakeIdx < procCloseIdx) {
+  throw new Error("Regression: main conclusion, supplementary non-interim reply, and dream summary MUST stay outside .collie-proc!");
 }
 if (!threadHTML.includes('class="fpath code-fpath"') || !threadHTML.includes('data-path="~/reports/eval.html"') || !threadHTML.includes('data-path="C:\\Users\\26422\\SFD-Net 2\\fig1.png"') || !threadHTML.includes('class="url code-url"')) {
   throw new Error("Expected inline-code Unix & Windows paths (`~/reports/eval.html`, `C:\\Users\\26422\\SFD-Net 2\\fig1.png`) and URLs to render as clickable .code-fpath / .code-url links");

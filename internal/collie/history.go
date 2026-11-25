@@ -17,14 +17,15 @@ import (
 // so they can be read and continued later.
 
 type Ended struct {
-	ID      string    `json:"id"`
-	Kind    string    `json:"kind"` // claude | codex | agy
-	Machine string    `json:"machine,omitempty"`
-	Cwd     string    `json:"cwd"`
-	Title   string    `json:"title,omitempty"`
-	Name    string    `json:"name,omitempty"`
-	Session string    `json:"session"`
-	Ended   time.Time `json:"ended"`
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"` // claude | codex | agy
+	Machine      string    `json:"machine,omitempty"`
+	Cwd          string    `json:"cwd"`
+	Title        string    `json:"title,omitempty"`
+	Name         string    `json:"name,omitempty"`
+	Session      string    `json:"session"`
+	CollieWorker bool      `json:"collie_worker,omitempty"`
+	Ended        time.Time `json:"ended"`
 }
 
 const maxEnded = 40
@@ -134,7 +135,18 @@ func (s *Server) watchEndings(ctx context.Context) {
 			if kind == "antigravity" {
 				kind = "agy"
 			}
-			prev[a.PaneID] = &seen{Ended: Ended{Kind: kind, Machine: a.Machine, Cwd: a.Cwd, Title: a.Topic, Name: a.Name, Session: a.Session}}
+			byCollie := s.isCollieWorkerSession(kind, a.Machine, a.Session, "p:"+a.PaneID)
+			if !byCollie && s.sup != nil && a.Name != "" {
+				s.sup.mu.Lock()
+				if w := s.sup.st.Workers[a.Name]; w != nil && (w.SpawnedFresh || w.Session == a.Session || w.PaneID == a.PaneID) {
+					byCollie = true
+				}
+				s.sup.mu.Unlock()
+			}
+			if byCollie && a.Session != "" {
+				s.markCollieWorkerSession(kind, a.Machine, a.Session, "")
+			}
+			prev[a.PaneID] = &seen{Ended: Ended{Kind: kind, Machine: a.Machine, Cwd: a.Cwd, Title: a.Topic, Name: a.Name, Session: a.Session, CollieWorker: byCollie}}
 			s.forgetSession(kind, a.Machine, a.Session)
 		}
 		for id, p := range prev {

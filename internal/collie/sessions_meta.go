@@ -15,13 +15,14 @@ import (
 // deleted tombstone) for any session across live herdr panes, external CLI/App
 // sessions, and ended history entries.
 type SessionMeta struct {
-	Title     string    `json:"title,omitempty"`
-	ProjectID string    `json:"project_id,omitempty"`
-	Pinned    bool      `json:"pinned,omitempty"`
-	PinnedAt  int64     `json:"pinned_at,omitempty"`
-	Archived  bool      `json:"archived,omitempty"`
-	Deleted   bool      `json:"deleted,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Title        string    `json:"title,omitempty"`
+	ProjectID    string    `json:"project_id,omitempty"`
+	Pinned       bool      `json:"pinned,omitempty"`
+	PinnedAt     int64     `json:"pinned_at,omitempty"`
+	CollieWorker bool      `json:"collie_worker,omitempty"`
+	Archived     bool      `json:"archived,omitempty"`
+	Deleted      bool      `json:"deleted,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 var sessionMetaStore = struct {
@@ -86,7 +87,7 @@ func (s *Server) sessionMetaSnapshot() map[string]*SessionMeta {
 	}
 	out := make(map[string]*SessionMeta, len(sessionMetaStore.byKey))
 	for k, v := range sessionMetaStore.byKey {
-		if v == nil || (v.Title == "" && v.ProjectID == "" && !v.Pinned && !v.Archived && !v.Deleted) {
+		if v == nil || (v.Title == "" && v.ProjectID == "" && !v.Pinned && !v.CollieWorker && !v.Archived && !v.Deleted) {
 			continue
 		}
 		cp := *v
@@ -143,9 +144,160 @@ func upsertMetaKey(key string, fn func(m *SessionMeta)) {
 	}
 	fn(m)
 	m.UpdatedAt = time.Now()
-	if m.Title == "" && m.ProjectID == "" && !m.Pinned && !m.Archived && !m.Deleted {
+	if m.Title == "" && m.ProjectID == "" && !m.Pinned && !m.CollieWorker && !m.Archived && !m.Deleted {
 		delete(sessionMetaStore.byKey, key)
 	}
+}
+
+func (s *Server) isCollieWorkerSession(kind, machine, session, fallbackKey string) bool {
+	if s == nil || s.node {
+		return false
+	}
+	ckey := canonicalSessionKey(kind, machine, session)
+	fkey := strings.TrimSpace(fallbackKey)
+	if ckey == "" && fkey == "" {
+		return false
+	}
+	sessionMetaStore.Lock()
+	defer sessionMetaStore.Unlock()
+	s.loadSessionMetaLocked()
+	if ckey != "" {
+		if m := sessionMetaStore.byKey[ckey]; m != nil && m.CollieWorker {
+			return true
+		}
+	}
+	if fkey != "" {
+		if m := sessionMetaStore.byKey[fkey]; m != nil && m.CollieWorker {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) markCollieWorkerSession(kind, machine, session, fallbackKey string) {
+	if s == nil || s.node {
+		return
+	}
+	ckey := canonicalSessionKey(kind, machine, session)
+	fkey := strings.TrimSpace(fallbackKey)
+	if ckey == "" && fkey == "" {
+		return
+	}
+	sessionMetaStore.Lock()
+	s.loadSessionMetaLocked()
+	changed := false
+	for _, k := range []string{ckey, fkey} {
+		if k == "" {
+			continue
+		}
+		if existing := sessionMetaStore.byKey[k]; existing != nil && existing.CollieWorker {
+			continue
+		}
+		upsertMetaKey(k, func(m *SessionMeta) {
+			m.CollieWorker = true
+		})
+		changed = true
+	}
+	if changed {
+		s.saveSessionMetaLocked()
+	}
+	sessionMetaStore.Unlock()
+}
+
+// backfillCollieWorkers permanently stamps CollieWorker metadata for historical
+// Collie-spawned workers in SQLite and ended_sessions so "Collie 派出" badges
+// and sidebar filters never expire with worker runtime TTLs.
+func (s *Server) backfillCollieWorkers() {
+	if s == nil || s.node || s.sup == nil {
+		return
+	}
+	type workerSeed struct {
+		kind, machine, session, pane string
+	}
+	knownNames := map[string]bool{}
+	var seeds []workerSeed
+
+	s.sup.mu.Lock()
+	for name, w := range s.sup.st.Workers {
+		if w == nil || name == routerName || name == dreamName {
+			continue
+		}
+		knownNames[name] = true
+		if w.Session != "" || w.PaneID != "" {
+			seeds = append(seeds, workerSeed{
+				kind:    w.Kind,
+				machine: w.Machine,
+				session: w.Session,
+				pane:    prefixKey("p:", w.PaneID),
+			})
+		}
+	}
+	for _, e := range s.sup.st.Entries {
+		if e != nil && e.Role == "event" && e.Tone == "spawn" && e.Ref != "" && !strings.Contains(e.Ref, ":") && e.Ref != routerName && e.Ref != dreamName {
+			knownNames[e.Ref] = true
+		}
+	}
+	s.sup.mu.Unlock()
+
+	if s.sup.db != nil {
+		_ = loadRows(s.sup.db, `SELECT data FROM entries WHERE data LIKE '%"tone":"spawn"%'`, func(e *Entry) {
+			if e != nil && e.Role == "event" && e.Tone == "spawn" && e.Ref != "" && !strings.Contains(e.Ref, ":") && e.Ref != routerName && e.Ref != dreamName {
+				knownNames[e.Ref] = true
+			}
+		})
+	}
+
+	history.Lock()
+	s.loadHistory()
+	histChanged := false
+	for _, h := range history.list {
+		if h == nil || h.Name == routerName || h.Name == dreamName {
+			continue
+		}
+		if h.CollieWorker || (h.Name != "" && knownNames[h.Name]) {
+			if !h.CollieWorker {
+				h.CollieWorker = true
+				histChanged = true
+			}
+			if h.Session != "" {
+				seeds = append(seeds, workerSeed{
+					kind:    h.Kind,
+					machine: h.Machine,
+					session: h.Session,
+					pane:    prefixKey("h:", h.ID),
+				})
+			}
+		}
+	}
+	if histChanged {
+		s.saveHistory()
+	}
+	history.Unlock()
+
+	if len(seeds) == 0 {
+		return
+	}
+	sessionMetaStore.Lock()
+	s.loadSessionMetaLocked()
+	metaChanged := false
+	for _, sd := range seeds {
+		for _, k := range []string{canonicalSessionKey(sd.kind, sd.machine, sd.session), sd.pane} {
+			if k == "" {
+				continue
+			}
+			if m := sessionMetaStore.byKey[k]; m != nil && m.CollieWorker {
+				continue
+			}
+			upsertMetaKey(k, func(m *SessionMeta) {
+				m.CollieWorker = true
+			})
+			metaChanged = true
+		}
+	}
+	if metaChanged {
+		s.saveSessionMetaLocked()
+	}
+	sessionMetaStore.Unlock()
 }
 
 // pinSession pins or unpins a standalone session at the top of the sidebar.

@@ -56,6 +56,10 @@ type Worker struct {
 	LastReport string     `json:"last_report,omitempty"`
 	ReportAt   time.Time  `json:"report_at,omitempty"`
 	Ended      bool       `json:"ended,omitempty"`
+	// SpawnedFresh is true when Collie spawned this worker session itself (or
+	// resumed an earlier Collie-spawned worker session), rather than attaching to
+	// a user-created session.
+	SpawnedFresh bool `json:"spawned_fresh,omitempty"`
 	// Session is its agent's conversation id, kept after it stops so a later
 	// `spawn --resume` can carry on where it left off.
 	Session string `json:"session,omitempty"`

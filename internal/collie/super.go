@@ -642,6 +642,10 @@ func (sp *Super) tick(parent context.Context) {
 		if a.Session != "" && a.Session != w.Session {
 			w.Session = a.Session
 			sp.dirty = true
+			if sp.s != nil && (w.SpawnedFresh || w.CreatedBy == "" || w.CreatedBy == routerName || w.CreatedBy == "collie") {
+				wKind, wMach, wSess, wPane := w.Kind, w.Machine, a.Session, w.PaneID
+				go sp.s.markCollieWorkerSession(wKind, wMach, wSess, prefixKey("p:", wPane))
+			}
 		}
 		// A new pane can alternate between working and done while drawing its
 		// welcome screen. Keep delivery on raw readiness, but publish completion

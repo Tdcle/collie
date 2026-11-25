@@ -691,3 +691,105 @@ func TestRepairMachineDeduplicationAndDeleteCascade(t *testing.T) {
 	}
 }
 
+func TestCollieWorkerPersistenceAndBackfill(t *testing.T) {
+	dir := t.TempDir()
+	sessionMetaStore.Lock()
+	sessionMetaStore.loaded = false
+	sessionMetaStore.byKey = nil
+	sessionMetaStore.Unlock()
+	history.Lock()
+	history.loaded = false
+	history.list = nil
+	history.Unlock()
+
+	srv := &Server{
+		herdr: newHerdr("", "hub", dir),
+		token: "tok",
+		home:  dir,
+	}
+	sup, err := newSuper(srv, dir)
+	if err != nil {
+		t.Fatalf("newSuper: %v", err)
+	}
+	srv.sup = sup
+	defer srv.sup.db.Close()
+
+	// Simulate yesterday's worker (>12h old, ended) and an ended history session spawned earlier.
+	yesterday := time.Now().Add(-36 * time.Hour)
+	srv.sup.mu.Lock()
+	srv.sup.st.Workers["vivim-input"] = &Worker{
+		Name:      "vivim-input",
+		Kind:      "codex",
+		Machine:   "mac",
+		Session:   "sess-yesterday",
+		CreatedAt: yesterday,
+		Ended:     true,
+		Status:    "gone",
+	}
+	srv.sup.st.Entries = append(srv.sup.st.Entries, &Entry{
+		ID:   "e-old-spawn",
+		Role: "event",
+		Tone: "spawn",
+		Ref:  "legacy-worker",
+		Text: "派出 legacy-worker",
+		At:   yesterday,
+	})
+	srv.sup.mu.Unlock()
+
+	srv.remember(&Ended{
+		Kind:    "codex",
+		Machine: "mac",
+		Cwd:     "/Users/test",
+		Name:    "legacy-worker",
+		Title:   "历史子任务",
+		Session: "sess-legacy",
+		Ended:   yesterday,
+	})
+
+	srv.backfillCollieWorkers()
+
+	// 1. session_meta snapshot must retain collie_worker=true even after clearing title/pin!
+	meta := srv.sessionMetaSnapshot()
+	if m := meta["s:codex:mac:sess-yesterday"]; m == nil || !m.CollieWorker {
+		t.Fatalf("expected s:codex:mac:sess-yesterday marked CollieWorker, got %+v", m)
+	}
+	if m := meta["s:codex:mac:sess-legacy"]; m == nil || !m.CollieWorker {
+		t.Fatalf("expected s:codex:mac:sess-legacy backfilled from spawn entry + history, got %+v", m)
+	}
+
+	sessionMetaStore.Lock()
+	upsertMetaKey("s:codex:mac:sess-yesterday", func(m *SessionMeta) {
+		m.Title = ""
+		m.Pinned = false
+	})
+	sessionMetaStore.Unlock()
+	if m := srv.sessionMetaSnapshot()["s:codex:mac:sess-yesterday"]; m == nil || !m.CollieWorker {
+		t.Fatalf("expected CollieWorker flag to survive upsertMetaKey empty-field cleanup, got %+v", m)
+	}
+
+	// 2. Ended history row must also carry CollieWorker=true, and superState must still include 36h-old worker.
+	history.Lock()
+	var foundLegacy bool
+	for _, h := range history.list {
+		if h.Session == "sess-legacy" && h.CollieWorker {
+			foundLegacy = true
+		}
+	}
+	history.Unlock()
+	if !foundLegacy {
+		t.Fatal("expected history entry sess-legacy to be marked CollieWorker=true")
+	}
+
+	stView := srv.superState(t.Context())
+	var foundVivim bool
+	for _, w := range stView.Workers {
+		if w.Name == "vivim-input" {
+			foundVivim = true
+		}
+	}
+	if !foundVivim {
+		t.Fatalf("expected 36h-old ended worker vivim-input retained in superState.Workers")
+	}
+}
+
+

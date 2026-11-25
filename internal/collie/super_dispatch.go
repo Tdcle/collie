@@ -287,7 +287,8 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		sp.mu.Unlock()
 		return nil, nil, fmt.Errorf("directory not found: %s", dir)
 	}
-	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "waiting", FirstTurn: "queued", Session: resume}
+	spawnedFresh := resume == "" || (sp.s != nil && sp.s.isCollieWorkerSession(kind, m.ID, resume, ""))
+	w := &Worker{Name: name, Kind: kind, Model: model, Effort: effort, Machine: m.ID, Cwd: dir, Task: task, Thread: thread, CreatedBy: by, CreatedAt: time.Now(), Status: "waiting", FirstTurn: "queued", SpawnedFresh: spawnedFresh, Session: resume}
 	sp.st.Workers[name] = w
 	sp.st.recordWorkerStart(w, "starting", "")
 	if subscribe {
@@ -349,6 +350,9 @@ func (sp *Super) Spawn(kind, cwd, task, thread, name, by, machine, model, effort
 		pane, ws, err := sp.s.startAgent(ctx, m.ID, kinds[kind], name, dir, name, args)
 		if pane != "" {
 			sp.s.herdr.RememberRun(pane, model, effort)
+			if spawnedFresh {
+				sp.s.markCollieWorkerSession(kind, m.ID, resume, "p:"+pane)
+			}
 		}
 		sp.mu.Lock()
 		w.PaneID, w.WorkspaceID = pane, ws

@@ -589,16 +589,17 @@
   function pinMarkHTML(smenuKey, pinned) {
     return pinned ? `<span class="pin-mark" data-spin="${esc(smenuKey)}" role="button" tabindex="0" title="已置顶（点击取消置顶）">${PIN_ICO}</span>` : "";
   }
-  function itemHTML(v, pinned = false) {
+  function itemHTML(v, pinned = false, byCollie = null) {
+    const isByC = byCollie !== null ? byCollie : (isCollieOwned(v) && v.name !== ROUTER);
     const where = (state.machines || []).length > 1 ? machineName(v.machine) + " · " : "";
-    const named = v.is_agent && v.name !== ROUTER && !isWorker(v.name) && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
+    const named = v.is_agent && v.name !== ROUTER && !isByC && v.name && !autoName(v.name) && v.topic && v.topic !== v.name ? v.name + " · " : "";
     const sub = v.name === ROUTER ? "Collie 停在一个对话框上"
       : v.is_agent ? `${named}${KIND_LABEL[v.kind] || v.kind} · ${where}${base(tilde(v.cwd))}` : where + tilde(v.cwd);
     const smenuKey = "p:" + v.pane_id;
     const more = v.name !== ROUTER ? `<button type="button" class="item-more" data-smenu="${esc(smenuKey)}" title="置顶 / 重命名 / 归属项目 / 归档 / 删除">${MORE_ICO}</button>` : "";
     const quiet = !SHOW_SIDE_DOT.has(v.status);
     const rawTitle = v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
-    const nameInner = isCollieOwned(v) && v.name !== ROUTER
+    const nameInner = isByC && v.name !== ROUTER
       ? `<span class="nm">${esc(title(v))}</span><span class="by-collie">Collie 派出</span>${pinMarkHTML(smenuKey, pinned)}`
       : `${esc(rawTitle)}${pinMarkHTML(smenuKey, pinned)}`;
     return `<li class="s-li${pinned ? " is-pinned" : ""}"><a class="item ${quiet ? "ended" : ""} ${view === "pane" && v.pane_id === current ? "active" : ""}" href="#/p/${encodeURIComponent(v.pane_id)}">
@@ -618,22 +619,56 @@
     const names = new Set();
     const sessKeys = new Set();
     const rawSess = new Set();
+    const fallbackKeys = new Set();
     for (const w of (sup.workers || [])) {
-      if (w.name) names.add(w.name);
+      if (w.name && w.name !== ROUTER && w.name !== "collie-dream") names.add(w.name);
+      if (w.pane_id) fallbackKeys.add("p:" + w.pane_id);
       if (w.session) {
         rawSess.add(w.session);
         const ck = canonSessKey(w.kind, w.machine, w.session);
         if (ck) sessKeys.add(ck);
       }
     }
-    for (const h of (hist || [])) {
-      if (h.name && names.has(h.name) && h.session) {
-        rawSess.add(h.session);
-        const ck = canonSessKey(h.kind, h.machine, h.session);
-        if (ck) sessKeys.add(ck);
+    for (const e of (sup.entries || [])) {
+      if (e.role === "event" && e.tone === "spawn" && e.ref && !e.ref.includes(":") && e.ref !== ROUTER && e.ref !== "collie-dream") {
+        names.add(e.ref);
       }
     }
-    return { names, sessKeys, rawSess };
+    for (const [k, m] of Object.entries(state.session_meta || {})) {
+      if (!m?.collie_worker) continue;
+      if (k.startsWith("s:")) {
+        sessKeys.add(k);
+        const sessId = k.split(":").slice(3).join(":");
+        if (sessId) rawSess.add(sessId);
+      } else {
+        fallbackKeys.add(k);
+      }
+    }
+    for (const h of (hist || [])) {
+      if (h.name === ROUTER || h.name === "collie-dream") continue;
+      if (h.collie_worker || (h.name && names.has(h.name))) {
+        if (h.name) names.add(h.name);
+        if (h.id) fallbackKeys.add("h:" + h.id);
+        if (h.session) {
+          rawSess.add(h.session);
+          const ck = canonSessKey(h.kind, h.machine, h.session);
+          if (ck) sessKeys.add(ck);
+        }
+      }
+    }
+    return { names, sessKeys, rawSess, fallbackKeys };
+  }
+  function isSessionByCollie(wl, { kind, machine, session, name, fallbackKey, meta, flag }) {
+    if (name === ROUTER || name === "collie-dream") return false;
+    if (flag || meta?.collie_worker) return true;
+    if (fallbackKey && wl.fallbackKeys.has(fallbackKey)) return true;
+    if (name && wl.names.has(name)) return true;
+    if (session) {
+      if (wl.rawSess.has(session)) return true;
+      const ck = canonSessKey(kind, machine, session);
+      if (ck && wl.sessKeys.has(ck)) return true;
+    }
+    return false;
   }
   const isInternalRouterCwd = (cwd) => /[\\/]\.collie[\\/](?:router|dream)(?:[\\/]|$)/i.test(cleanPath(cwd || ""));
 
@@ -1396,106 +1431,153 @@
         return sep;
       };
 
-      // Partition visible entries into user-initiated turns so settled intermediate
-      // progress updates and dispatch events fold cleanly above each turn's final conclusion!
+      // Fold ONLY explicit `--interim` progress updates and worker/dispatch events above the
+      // formal (`!e.interim`) Collie conclusion they led up to. NEVER fold any non-interim
+      // Collie message (main answer, supplementary follow-up, or option/check prompt) or
+      // session/dream lifecycle milestones!
+      const isStuckBlkEvent = (e) => e.role === "event" && e.ref && sup.workers.some((x) => x.name === e.ref && !x.ended && x.status === "blocked");
+      const isLifecycleDivider = (e) => e.role === "event" && (
+        Boolean(e.ref?.startsWith("h:"))
+        || /换了一个新会话|睡一会儿.*做梦|Collie 醒了|整理记忆没/.test(e.text || "")
+        || isStuckBlkEvent(e)
+      );
+      const isFormalCollie = (e) => e.role === "collie" && !e.interim;
+      const isCleanupStopEvent = (e) => e.role === "event" && e.tone === "info" && /(?:已停止|已退出)$/.test(String(e.text || "").trim());
+
+      const emitRawItem = ({ e, ei }) => {
+        html += maybeTimeSep(e);
+        const cont = e.role === "collie" && prev === "collie";
+        prev = prevRole = e.role;
+        html += e.role === "collie" ? renderCollieSay(e, ei, cont) : renderEventItem(e);
+      };
+
+      const emitProcDrawer = (procItems, anchorItem) => {
+        if (!procItems.length) return;
+        if (!prefs.fold()) {
+          for (const it of procItems) emitRawItem(it);
+          return;
+        }
+        if (anchorItem) html += maybeTimeSep(anchorItem.e);
+        else html += maybeTimeSep(procItems[0].e);
+        const procKey = "sp-" + (procItems[0].e.id || anchorItem?.e?.id || procItems[0].ei);
+        const interimN = procItems.filter((x) => x.e.role === "collie").length;
+        const evList = procItems.filter((x) => x.e.role === "event").map((x) => x.e);
+        const errN = evList.filter((e) => e.tone === "error").length;
+        const workerNames = [...new Set(evList.map((e) => {
+          const rName = e.ref || "";
+          if (!rName || rName === ROUTER || rName.startsWith("h:")) return "";
+          if (rName.startsWith("x:") || rName.startsWith("p:")) {
+            const tm = (e.text || "").match(/「([^」]{1,28})」/);
+            return tm ? tm[1] : "";
+          }
+          return rName;
+        }).filter(Boolean))].slice(0, 3);
+        const sumParts = [];
+        if (interimN) sumParts.push(`${interimN} 条中间进展`);
+        if (evList.length) sumParts.push(`${evList.length} 条调度轨迹${workerNames.length ? "（" + workerNames.join("、") + "）" : ""}`);
+        let procInner = "", procPrev = "";
+        for (const { e, ei } of procItems) {
+          const cont = e.role === "collie" && procPrev === "collie";
+          procPrev = e.role;
+          procInner += e.role === "collie" ? renderCollieSay(e, ei, cont, true) : renderEventItem(e);
+        }
+        html += `<details class="turn-proc collie-proc" data-proc-id="${esc(procKey)}" ${openSuperProcs.has(procKey) ? "open" : ""}>`
+          + `<summary><svg class="tp-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="tp-title">调度与执行过程</span>`
+          + `<span class="tp-sub">${esc(sumParts.join(" · "))}${errN ? ` · <b class="errs">${errN} 次异常</b>` : ""}</span>`
+          + `</summary><div class="turn-proc-body collie-proc-body">${procInner}</div></details>`;
+        prev = "event";
+      };
+
+      const flushUnanchoredProc = (procBuf, isLiveTail) => {
+        if (!procBuf.length) return;
+        if (isLiveTail || !prefs.fold()) {
+          for (const it of procBuf) emitRawItem(it);
+          procBuf.length = 0;
+          return;
+        }
+        // Historical unanchored span (e.g. context handover warning or interrupted turn before a
+        // formal answer arrived): fold pure events, but never hide any Collie text that had no
+        // formal conclusion after it!
+        const hasCollieText = procBuf.some((x) => x.e.role === "collie");
+        if (!hasCollieText) {
+          emitProcDrawer(procBuf, null);
+        } else {
+          let evBuf = [];
+          for (const it of procBuf) {
+            if (it.e.role === "event") {
+              evBuf.push(it);
+            } else {
+              if (evBuf.length) { emitProcDrawer(evBuf, it); evBuf = []; }
+              emitRawItem(it);
+            }
+          }
+          if (evBuf.length) emitProcDrawer(evBuf, null);
+        }
+        procBuf.length = 0;
+      };
+
+      const procBuf = [];
       let vi = 0;
       while (vi < visible.length) {
-        // 1. Emit any consecutive user messages starting this turn
-        let turnId = visible[vi].e.id || ("t" + vi);
-        while (vi < visible.length && visible[vi].e.role === "user") {
-          const { e, ei } = visible[vi];
+        const cur = visible[vi];
+        const { e } = cur;
+        if (e.role === "user") {
+          flushUnanchoredProc(procBuf, false);
           html += maybeTimeSep(e);
           const at = +new Date(e.at) || 0;
           prev = prevRole = "user";
           html += `<div class="mine"><div class="msg user" data-id="${esc(e.id)}"${at ? ` title="${esc(fullTime(at))}"` : ""}>${quote(e)}${userText(e.text, "s:" + (e.id || vi))}</div>${mineActs(e, at)}</div>`;
           lastUser = e.id; sinceUser = 0; lastEvent = ""; sinceCollie++; lastQuoted = "";
-          turnId = e.id || turnId;
           vi++;
-        }
-        // 2. Collect all non-user entries (`collie` & `event`) belonging to this turn
-        const turnStart = vi;
-        while (vi < visible.length && visible[vi].e.role !== "user") vi++;
-        const turnItems = visible.slice(turnStart, vi);
-        if (!turnItems.length) continue;
-
-        const isLastTurn = vi === visible.length;
-        // Find the last `collie` conclusion message in this turn
-        let finalColliePos = -1;
-        for (let k = turnItems.length - 1; k >= 0; k--) {
-          if (turnItems[k].e.role === "collie") { finalColliePos = k; break; }
-        }
-        const hasLiveSpawnWorker = isLastTurn && turnItems.some(({ e }) => {
-          if (e.role !== "event" || e.tone !== "spawn") return false;
-          const w = sup.workers.find((x) => x.name === e.ref);
-          return Boolean(w && workerBusy(w));
-        });
-        const latestIsInterim = isLastTurn && finalColliePos >= 0 && Boolean(turnItems[finalColliePos].e.interim);
-        const turnInFlight = isLastTurn && (routerWorkingNow || hasLiveSpawnWorker || latestIsInterim);
-
-        const canFoldTurn = !turnInFlight && finalColliePos >= 0 && prefs.fold();
-        if (!canFoldTurn) {
-          for (const { e, ei } of turnItems) {
-            html += maybeTimeSep(e);
-            const cont = e.role === "collie" && prev === "collie";
-            prev = prevRole = e.role;
-            html += e.role === "collie" ? renderCollieSay(e, ei, cont) : renderEventItem(e);
-          }
           continue;
         }
-
-        // Separate foldable process items (events + superseded interim collie messages) from
-        // pinned items (any unanswered --opt/--check message, live blocked event, and the final conclusion).
-        const procItems = [];
-        const mainItems = [];
-        for (let k = 0; k < turnItems.length; k++) {
-          const item = turnItems[k];
-          const { e, ei } = item;
-          const isStuckBlk = e.role === "event" && e.ref && sup.workers.some((x) => x.name === e.ref && !x.ended && x.status === "blocked");
-          const isPendingCollie = e.role === "collie" && ((Array.isArray(e.options) && e.options.length && entryPending(ei, e.id)) || (e.check && entryPending(ei, e.id)));
-          if (k === finalColliePos || isPendingCollie || isStuckBlk) {
-            mainItems.push(item);
-          } else {
-            procItems.push(item);
-          }
+        if (isLifecycleDivider(e)) {
+          flushUnanchoredProc(procBuf, false);
+          emitRawItem(cur);
+          vi++;
+          continue;
         }
-
-        if (procItems.length > 0) {
-          const procKey = "sp-" + turnId;
-          const interimN = procItems.filter((x) => x.e.role === "collie").length;
-          const evList = procItems.filter((x) => x.e.role === "event").map((x) => x.e);
-          const errN = evList.filter((e) => e.tone === "error").length;
-          const workerNames = [...new Set(evList.map((e) => {
-            const rName = e.ref || "";
-            if (!rName || rName === ROUTER || rName.startsWith("h:")) return "";
-            if (rName.startsWith("x:") || rName.startsWith("p:")) {
-              const tm = (e.text || "").match(/「([^」]{1,28})」/);
-              return tm ? tm[1] : "";
+        if (isFormalCollie(e)) {
+          // Collect this formal conclusion plus any consecutive formal supplements (e.g. a postscript
+          // sent right after stopping the worker) and absorb immediate worker-stop cleanup events
+          // into the process drawer above the conclusion!
+          const formalItems = [cur];
+          const cleanupEvents = [];
+          const baseAt = +new Date(e.at) || 0;
+          let look = vi + 1;
+          while (look < visible.length) {
+            const nxt = visible[look];
+            const nxtAt = +new Date(nxt.e.at) || 0;
+            const closeInTime = !baseAt || !nxtAt || (nxtAt - baseAt) <= 5 * 60e3;
+            if (isFormalCollie(nxt.e) && closeInTime) {
+              formalItems.push(nxt);
+              look++;
+              continue;
             }
-            return rName;
-          }).filter(Boolean))].slice(0, 3);
-          const sumParts = [];
-          if (interimN) sumParts.push(`${interimN} 条中间进展`);
-          if (evList.length) sumParts.push(`${evList.length} 条调度轨迹${workerNames.length ? "（" + workerNames.join("、") + "）" : ""}`);
-          let procInner = "", procPrev = "";
-          for (const { e, ei } of procItems) {
-            const cont = e.role === "collie" && procPrev === "collie";
-            procPrev = e.role;
-            procInner += e.role === "collie" ? renderCollieSay(e, ei, cont, true) : renderEventItem(e);
+            if (isCleanupStopEvent(nxt.e) && closeInTime) {
+              cleanupEvents.push(nxt);
+              look++;
+              continue;
+            }
+            break;
           }
-          html += `<details class="turn-proc collie-proc" data-proc-id="${esc(procKey)}" ${openSuperProcs.has(procKey) ? "open" : ""}>`
-            + `<summary><svg class="tp-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="tp-title">调度与执行过程</span>`
-            + `<span class="tp-sub">${esc(sumParts.join(" · "))}${errN ? ` · <b class="errs">${errN} 次异常</b>` : ""}</span>`
-            + `</summary><div class="turn-proc-body collie-proc-body">${procInner}</div></details>`;
-          prev = "event";
+          const combinedProc = procBuf.concat(cleanupEvents);
+          procBuf.length = 0;
+          if (combinedProc.length) {
+            emitProcDrawer(combinedProc, formalItems[0]);
+          }
+          for (const fm of formalItems) {
+            emitRawItem(fm);
+          }
+          vi = look;
+          continue;
         }
-
-        for (const { e, ei } of mainItems) {
-          html += maybeTimeSep(e);
-          const cont = e.role === "collie" && prev === "collie";
-          prev = prevRole = e.role;
-          html += e.role === "collie" ? renderCollieSay(e, ei, cont) : renderEventItem(e);
-        }
+        // Foldable process item (`e.interim` Collie ack or worker/dispatch `event`)
+        procBuf.push(cur);
+        vi++;
       }
+      // Any trailing process items after the last formal conclusion are still in flight: keep visible!
+      flushUnanchoredProc(procBuf, true);
       if (routerWorkingNow) {
         const stepTxt = (r.activity || "").trim();
         const liveLabel = r.status === "starting"
@@ -3790,10 +3872,12 @@
     const h = hist.find((x) => x.id === hid);
     const on = !!(h && histOnline(h));
     const meta = h ? getSessMeta(h.kind, h.machine, h.session, "h:" + h.id) : null;
+    const byCollie = h ? isSessionByCollie(workerLookup(), { kind: h.kind, machine: h.machine, session: h.session, name: h.name, fallbackKey: "h:" + h.id, meta, flag: h.collie_worker }) : false;
+    const headTag = [byCollie ? "Collie 派出" : "", meta?.archived ? "已归档" : ""].filter(Boolean).join(" · ");
     $("#x-name").textContent = h ? histName(h) : "已结束的会话";
     $("#x-kind").textContent = h ? KIND_LABEL[h.kind] || h.kind : "";
-    $("#x-tag").hidden = !meta?.archived;
-    $("#x-tag").textContent = meta?.archived ? "已归档" : "";
+    $("#x-tag").hidden = !headTag;
+    $("#x-tag").textContent = headTag;
     $("#x-status").className = "status ended";
     $("#x-status").textContent = h ? "上次对话 " + ago(h.ended) : "";
     $("#x-cwd").textContent = h ? (h.machine ? machineName(h.machine) + " · " : "") + tilde(h.cwd) : "";
@@ -3984,7 +4068,7 @@
     };
     const paneRow = (a, inProj = false, lastT = 0, pinned = false, byCollie = false) => {
       if (!inProj) {
-        const html = itemHTML(a, pinned);
+        const html = itemHTML(a, pinned, byCollie);
         return a.status === "blocked" ? html.replace('<li class="s-li', '<li class="s-li attn-row') : html;
       }
       const named = a.is_agent && a.name !== ROUTER && !byCollie && a.name && !autoName(a.name) && a.topic && a.topic !== a.name ? a.name + " · " : "";
@@ -4021,7 +4105,7 @@
       const isRunning = isActivelyRunning(a.status);
       const groupRank = isBlocked ? 0 : isRunning ? 1 : a.status === "failed" ? 2 : 3;
       const wLive = sup.workers.find((w) => w.name === a.name && !w.ended);
-      const byCollie = a.name !== ROUTER && (wl.names.has(a.name) || Boolean(a.session && (wl.rawSess.has(a.session) || (ck && wl.sessKeys.has(ck)))));
+      const byCollie = isSessionByCollie(wl, { kind: a.kind, machine: a.machine, session: a.session, name: a.name, fallbackKey: "p:" + a.pane_id, meta });
       const t = (ck && extTimeMap.get(ck)) || +new Date(wLive?.created_at || 0) || +new Date(meta?.updated_at || 0) || 0;
       const proj = projectOfSession(a.kind, a.machine, a.session, a.cwd, "p:" + a.pane_id);
       const pinned = !proj && !!meta?.pinned;
@@ -4072,7 +4156,7 @@
       const groupRank = isBlocked ? 0 : isRunning ? 1 : 3;
       const proj = projectOfSession(e.kind, e.machine, e.session, e.cwd, "x:" + e.id);
       const pinned = !proj && !!meta?.pinned;
-      const byCollie = Boolean(e.session && (wl.rawSess.has(e.session) || (ck && wl.sessKeys.has(ck))));
+      const byCollie = isSessionByCollie(wl, { kind: e.kind, machine: e.machine, session: e.session, name: "", fallbackKey: "x:" + e.id, meta });
       pool.push({
         key: e.id,
         proj,
@@ -4096,7 +4180,7 @@
       if (ck) seenKeys.add(ck);
       const proj = projectOfSession(h.kind, h.machine, h.session, h.cwd, "h:" + h.id);
       const pinned = !proj && !!meta?.pinned;
-      const byCollie = wl.names.has(h.name) || Boolean(h.session && (wl.rawSess.has(h.session) || (ck && wl.sessKeys.has(ck))));
+      const byCollie = isSessionByCollie(wl, { kind: h.kind, machine: h.machine, session: h.session, name: h.name, fallbackKey: "h:" + h.id, meta, flag: h.collie_worker });
       pool.push({
         key: "h:" + h.id,
         proj,
@@ -4264,11 +4348,13 @@
     }
     markExtSeen(e);
     const meta = getSessMeta(e.kind, e.machine, e.session, "x:" + e.id);
+    const byCollie = isSessionByCollie(workerLookup(), { kind: e.kind, machine: e.machine, session: e.session, name: "", fallbackKey: "x:" + e.id, meta });
+    const headTag = [byCollie ? "Collie 派出" : "", meta?.archived ? "已归档" : ""].filter(Boolean).join(" · ");
     const on = extOnline(e);
     $("#x-name").textContent = extName(e);
     $("#x-kind").textContent = KIND_LABEL[e.kind] || e.kind;
-    $("#x-tag").hidden = !meta?.archived;
-    $("#x-tag").textContent = meta?.archived ? "已归档" : "";
+    $("#x-tag").hidden = !headTag;
+    $("#x-tag").textContent = headTag;
     $("#x-cwd").textContent = (e.machine ? machineName(e.machine) + " · " : "") + tilde(e.cwd);
 
     if (e.live && !gone) {
@@ -4795,7 +4881,8 @@
     $("#d-name").textContent = v.name === ROUTER ? "Collie" : v.is_agent ? title(v) : v.workspace_label || base(tilde(v.cwd));
     $("#d-name").title = v.is_agent && v.name && v.name !== ROUTER ? `会话代号：${v.name}` : "";
     $("#d-kind").textContent = v.is_agent ? (KIND_LABEL[v.kind] || v.kind) : "";
-    const role = isWorker(v.name) ? "Collie 派出" : "";
+    const dMeta = getSessMeta(v.kind, v.machine, v.session, "p:" + v.pane_id);
+    const role = isSessionByCollie(workerLookup(), { kind: v.kind, machine: v.machine, session: v.session, name: v.name, fallbackKey: "p:" + v.pane_id, meta: dMeta }) ? "Collie 派出" : "";
     $("#d-worker").hidden = !role;
     $("#d-worker").textContent = role;
     const st = $("#d-status");
@@ -5313,14 +5400,25 @@
           emitAsk(mk, k);
           continue;
         }
-        // Keep any actively streaming non-reasoning bubble in the main thread so it never jumps
-        // out of `.msg-note` mid-paragraph when `\n\n` arrives!
-        const isFinal = k === finalIdx || (mk.kind === "assistant" && ((mk.phase === "final_answer" && !mk.streaming) || (mk.streaming && mk.phase !== "reasoning")));
+        // Keep any actively streaming non-reasoning bubble AND any non-commentary assistant
+        // message that has no subsequent tool/reasoning/commentary step after it in the main thread!
+        const hasStepAfter = (idx) => {
+          for (let j = idx + 1; j < segEnd; j++) {
+            const mj = msgs[j];
+            if (mj.kind === "tool" || mj.phase === "commentary" || mj.phase === "reasoning") return true;
+          }
+          return false;
+        };
+        const isFinal = k === finalIdx || (mk.kind === "assistant" && (
+          (mk.phase === "final_answer" && !mk.streaming)
+          || (mk.streaming && mk.phase !== "reasoning")
+          || (!segWorking && mk.phase !== "commentary" && mk.phase !== "reasoning" && !hasStepAfter(k))
+        ));
         const isProc = !isFinal && (
           mk.kind === "tool"
           || mk.phase === "commentary"
           || mk.phase === "reasoning"
-          || (mk.kind === "assistant" && (segWorking || finalIdx > k))
+          || (mk.kind === "assistant" && (segWorking || (finalIdx > k && hasStepAfter(k))))
         );
         if (isProc) {
           if (!procBuf.length) procStart = k;

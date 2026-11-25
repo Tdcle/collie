@@ -174,12 +174,21 @@ func (s *Server) superState(ctx context.Context) superView {
 		v.Pending = []PendingItem{}
 	}
 	v.Workers = []*Worker{}
+	var endedWorkers []*Worker
 	for _, w := range sp.st.Workers {
-		if !w.Ended || time.Since(w.CreatedAt) < 12*time.Hour {
+		if !w.Ended {
 			cp := *w
 			v.Workers = append(v.Workers, &cp)
+		} else if time.Since(w.CreatedAt) < 14*24*time.Hour {
+			cp := *w
+			endedWorkers = append(endedWorkers, &cp)
 		}
 	}
+	sort.Slice(endedWorkers, func(i, j int) bool { return endedWorkers[i].CreatedAt.After(endedWorkers[j].CreatedAt) })
+	if len(endedWorkers) > 80 {
+		endedWorkers = endedWorkers[:80]
+	}
+	v.Workers = append(v.Workers, endedWorkers...)
 	sort.Slice(v.Workers, func(i, j int) bool { return v.Workers[i].CreatedAt.After(v.Workers[j].CreatedAt) })
 	v.Follow = sp.followLocked()
 	for _, t := range sp.st.Triggers {

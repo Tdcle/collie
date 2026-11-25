@@ -94,6 +94,7 @@ func serve() {
 	loadAgentNames(sup.db, srv.herdr)
 	loadAgentRuns(sup.db, srv.herdr)
 	srv.pruneOrphanMachineState()
+	srv.backfillCollieWorkers()
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
